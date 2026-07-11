@@ -16,11 +16,11 @@ Use \code{\link[=seor_packages]{seor_packages()}} to see the member packages and
 inspect function-name collisions on the search path.
 }
 \author{
-\strong{Maintainer}: Bart Turczynski \email{b.turczynski@tidio.net}
+\strong{Maintainer}: Bart Turczynski \email{bartek@turczynski.pl}
 
 Authors:
 \itemize{
-  \item Bart Turczynski \email{b.turczynski@tidio.net}
+  \item Bart Turczynski \email{bartek@turczynski.pl}
 }
 
 }

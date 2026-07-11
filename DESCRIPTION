@@ -3,7 +3,7 @@ Type: Package
 Title: Easily Install and Load the 'seor' SEO and Developer Tools
 Version: 0.0.0.9000
 Authors@R:
-    person("Bart", "Turczynski", , "b.turczynski@tidio.net", role = c("aut", "cre"))
+    person("Bart", "Turczynski", , "bartek@turczynski.pl", role = c("aut", "cre"))
 Description: The 'seor' suite bundles a set of focused R packages for search
     engine optimization and web-developer workflows: URL parsing, punycode and
     internationalized-domain conversion, public suffix list lookups, XML
