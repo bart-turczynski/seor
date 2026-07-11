@@ -7,11 +7,12 @@
 if (requireNamespace("cucumber", quietly = TRUE)) {
   library(cucumber)
 
-  when("I check the scaffold", function(context) {
-    context$ready <- scaffold_ready()
+  when("I ask for the seor packages", function(context) {
+    context$packages <- seor_packages()
   })
 
-  then("it reports ready", function(context) {
-    expect_true(context$ready)
+  then("the core members are listed", function(context) {
+    core_members <- c("rurl", "punycoder", "pslr", "sitemapr", "pagerankr")
+    expect_true(all(core_members %in% context$packages))
   })
 }

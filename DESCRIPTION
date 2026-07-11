@@ -1,22 +1,37 @@
 Package: seor
 Type: Package
-Title: One Line Description in Title Case
+Title: Easily Install and Load the 'seor' SEO and Developer Tools
 Version: 0.0.0.9000
 Authors@R:
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: A single paragraph describing what the package does and why it is
-    useful. End the description with a full stop. Replace this placeholder text
-    before submitting to CRAN.
+    person("Bart", "Turczynski", , "b.turczynski@tidio.net", role = c("aut", "cre"))
+Description: The 'seor' suite bundles a set of focused R packages for search
+    engine optimization and web-developer workflows: URL parsing, punycode and
+    internationalized-domain conversion, public suffix list lookups, XML
+    sitemap parsing and PageRank estimation. Loading 'seor' with a single call
+    to library() installs and attaches all of the member packages at once, in
+    the style of the 'tidyverse' metapackage.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
 Depends:
     R (>= 4.0.0)
+Imports:
+    pagerankr,
+    pslr,
+    punycoder,
+    rurl,
+    sitemapr,
+    utils
 Suggests:
     cucumber (>= 2.0.0),
     knitr,
     rmarkdown,
+    robotstxtr,
     testthat (>= 3.0.0)
+Remotes:
+    bart-turczynski/pagerankr,
+    bart-turczynski/robotstxtr,
+    bart-turczynski/sitemapr
 Config/testthat/edition: 3
 VignetteBuilder: knitr
+Config/roxygen2/version: 8.0.0

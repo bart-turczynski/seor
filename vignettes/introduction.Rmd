@@ -14,13 +14,34 @@ knitr::opts_chunk$set(
 )
 ```
 
+`seor` is a *metapackage*: it bundles a suite of focused SEO and web-developer
+packages so you can install and load them in one step, the same way the
+`tidyverse` package works.
+
 ```{r setup}
 library(seor)
 ```
 
-Replace this vignette with a real introduction to your package: what it does,
-the problem it solves, and a worked example or two.
+Attaching `seor` puts every member package on the search path. The members are:
 
 ```{r}
-scaffold_ready()
+seor_packages()
+```
+
+| Package     | Purpose                                        |
+|-------------|------------------------------------------------|
+| `rurl`      | URL parsing and manipulation                   |
+| `punycoder` | Punycode / internationalized-domain conversion |
+| `pslr`      | Public Suffix List lookups                     |
+| `sitemapr`  | XML sitemap parsing                            |
+| `pagerankr` | PageRank estimation                            |
+
+`robotstxtr` is a planned member; once it is installed, `library(seor)` attaches
+it automatically alongside the core packages.
+
+If two attached packages export the same name, `seor_conflicts()` reports which
+package wins on the search path:
+
+```{r}
+seor_conflicts()
 ```
