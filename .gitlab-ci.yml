@@ -1,0 +1,362 @@
+# CI for seor, an R package.
+#
+# This replaces eight GitHub Actions workflows. The differences are not
+# cosmetic, because GitLab has no action ecosystem and therefore no
+# `r-lib/actions`: setup-r, setup-pandoc, setup-tinytex and
+# setup-r-dependencies all have to be done by hand here. What that costs, and
+# what genuinely did not survive the move, is written up in docs/notes-r.md
+# ("CI on GitLab") in the generator repo — read it before reshaping this file.
+#
+# The one structural change worth knowing up front: GitHub split lint, README
+# sync, check and coverage into four jobs because `setup-r-dependencies` cached
+# the package library across them almost for free. Here every job that needs R
+# packages pays for its own `pak` resolution, and on a runner with no binary
+# package server that means compiling from source. So the fast gate is **one**
+# job running the same chain the pre-push hook runs, and the jobs that are
+# genuinely separate concerns are the ones that stayed separate.
+
+stages:
+  - verify
+  - check
+  - pages
+  - maintenance
+
+default:
+  interruptible: true
+
+# --------------------------------------------------------------------------
+# Shared R setup
+#
+# rocker/verse would carry R, pandoc and TeX in a single image, but it is
+# published amd64-only — on an arm64 runner that means every R compile runs
+# under QEMU. rocker/r-ver is multi-arch, so take that and add the toolchain by
+# hand.
+# --------------------------------------------------------------------------
+
+.r:
+  image: rocker/r-ver:4.5.1
+  variables:
+    # The image sets LANG, but CI runners hand jobs a controlled environment
+    # that drops it, so R falls back to the C locale. Any UTF-8 byte in a file
+    # R reads then comes back with "bytes" encoding, and lintr dies parsing its
+    # own .lintr ("translating strings with bytes encoding is not allowed") on
+    # nothing worse than an em-dash in a comment. GitHub's runners set
+    # LANG=C.UTF-8 themselves, which is why this never surfaced there.
+    LANG: C.UTF-8
+    LC_ALL: C.UTF-8
+    # R CMD check builds a PDF manual, and Rd2pdf defaults to
+    # R_RD4PDF="times,inconsolata,hyper". On Debian inconsolata.sty ships in
+    # texlive-fonts-extra (~1 GB, not installed below), so the manual step
+    # fails with "LaTeX Error: File `inconsolata.sty' not found" — and the
+    # verify chain runs rcmdcheck with error_on = "warning", so that one
+    # warning fails the job. GitHub used r-lib/actions/setup-tinytex, which
+    # fetches missing LaTeX packages on demand. Dropping inconsolata changes
+    # only the manual's code font.
+    R_RD4PDF: "times,hyper"
+    # GitLab only caches paths under $CI_PROJECT_DIR, and R's user library
+    # lives under $HOME — so move it here, then cache it. Without this every
+    # job recompiles the full dependency closure from source.
+    R_LIBS_USER: "$CI_PROJECT_DIR/.r-lib"
+    PKG_CACHE_DIR: "$CI_PROJECT_DIR/.pak-cache"
+  cache:
+    # Keyed on DESCRIPTION: the dependency declaration. An R package has no
+    # lockfile, so this is the closest thing to one.
+    key:
+      files:
+        - DESCRIPTION
+    paths:
+      - .r-lib
+      - .pak-cache
+  before_script:
+    - mkdir -p "$R_LIBS_USER" "$PKG_CACHE_DIR"
+    - apt-get update -qq
+    # rocker/r-ver is a lean image. git is needed because pak and covr shell
+    # out to it; the LaTeX set and qpdf are what `R CMD check --as-cran` needs
+    # to build and size-check the PDF manual; the -dev headers are the price of
+    # source-compiling on a runner Posit Package Manager serves no binaries
+    # for. On an amd64 runner most of the headers go unused, but installing
+    # them is harmless and keeps one config for both architectures.
+    - >
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends
+      curl ca-certificates git
+      pandoc texlive-latex-base texlive-fonts-recommended texlive-latex-recommended qpdf
+      libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev zlib1g-dev
+      libfontconfig1-dev libfreetype6-dev libharfbuzz-dev libfribidi-dev
+      libpng-dev libtiff5-dev libjpeg-dev
+    - Rscript -e 'if (!requireNamespace("pak", quietly = TRUE)) install.packages("pak", repos = "https://cloud.r-project.org")'
+
+.on-mr-and-main:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    # Without these, triggering a pipeline by hand on a feature branch — from
+    # the UI or the API — resolves to no jobs at all and GitLab rejects it as
+    # "the resulting pipeline would have been empty".
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "api"
+
+.scheduled-or-manual:
+  rules:
+    # A scheduled run is BLOCKING. These jobs are drift and vulnerability
+    # detectors; `allow_failure: true` here made a scheduled pipeline report
+    # success even when the detector fired, which is the one outcome that makes
+    # them worthless. They are independent jobs, so a red leg neither stops its
+    # siblings nor hides their results.
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    # Under `rules`, `when: manual` defaults to `allow_failure: false` (unlike a
+    # job-level `when: manual`), which would leave a hand-triggered pipeline
+    # sitting *blocked* on a job nobody meant to gate on. This line is
+    # load-bearing, not a leftover of the one dropped above.
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: true
+
+# --------------------------------------------------------------------------
+# verify — the fast gate, on every merge request and every push to main
+# --------------------------------------------------------------------------
+
+# lintr::lint_package() plus `R CMD check --as-cran`, which is the same chain
+# `.pre-commit-config.yaml` runs on push and the same one TEMPLATE_CONFIGS
+# declares — the verify placeholder below is substituted from it, so CI and the
+# local gate cannot drift apart.
+#
+# The dev-tooling line is NOT redundant with the install step below it. That
+# one installs only the package's own DESCRIPTION dependencies; lintr,
+# rcmdcheck and styler are deliberately not declared there, because they are
+# development tooling rather than package dependencies. Without the extra line
+# the job reaches the verify chain with no linter installed and dies on
+# "there is no package called 'lintr'".
+verify:
+  extends:
+    - .r
+    - .on-mr-and-main
+  stage: verify
+  script:
+    - Rscript -e 'pak::pak(c("any::lintr", "any::rcmdcheck", "any::styler"))'
+    - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
+    - Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning")'
+
+# Lightweight guard against NEWS/DESCRIPTION version drift: the top NEWS.md
+# heading must be either "(development version)" or exactly the DESCRIPTION
+# Version, which catches a stale heading left in at release. Pure shell, so it
+# does not need the R image and runs in seconds.
+news-version:
+  extends: .on-mr-and-main
+  stage: verify
+  image: alpine:3
+  before_script:
+    - apk add --no-cache grep sed
+  script:
+    - |
+      set -eu
+      version="$(grep -E '^Version:' DESCRIPTION | head -n1 | sed -E 's/^Version:[[:space:]]*//')"
+      # First top-level NEWS heading, e.g. "# seor 1.0.0" or
+      # "# seor (development version)". Strip the name prefix.
+      heading="$(grep -m1 -E '^# ' NEWS.md | sed -E 's/^#[[:space:]]+(seor[[:space:]]+)?//')"
+      echo "DESCRIPTION Version : '$version'"
+      echo "Top NEWS heading    : '$heading'"
+      if [ "$heading" = "(development version)" ] || [ "$heading" = "$version" ]; then
+        echo "OK: NEWS heading and version are consistent."
+      else
+        echo "Top NEWS.md heading ('$heading') is neither '(development version)' nor the DESCRIPTION Version ('$version'). Update NEWS.md before release."
+        exit 1
+      fi
+
+# README.md is knit from README.Rmd, so a hand-edit to the markdown is silently
+# lost on the next render. devtools::build_readme() installs the package and
+# re-renders; any diff means the committed README is stale.
+readme:
+  extends:
+    - .r
+    - .on-mr-and-main
+  stage: verify
+  script:
+    - Rscript -e 'pak::pak(c("any::devtools", "local::."))'
+    - Rscript -e 'devtools::build_readme()'
+    - |
+      if ! git diff --exit-code -- README.md; then
+        echo "README.md is out of sync with README.Rmd. Run devtools::build_readme() and commit the result."
+        exit 1
+      fi
+
+# --------------------------------------------------------------------------
+# check — the slower passes
+# --------------------------------------------------------------------------
+
+# Coverage, reported through GitLab natively rather than through Codecov: the
+# `coverage:` regex drives the badge and the MR widget, and the cobertura
+# artifact drives per-line annotations in the diff. Neither needs an account or
+# a token, which is what the GitHub-era codecov-action job needed before it
+# stopped no-opping. See design/badges.md if you want Codecov as well.
+coverage:
+  extends:
+    - .r
+    - .on-mr-and-main
+  stage: check
+  script:
+    - Rscript -e 'pak::pak(c("any::covr", "any::xml2"))'
+    - Rscript -e 'cov <- covr::package_coverage(quiet = FALSE); print(cov); covr::to_cobertura(cov)'
+  coverage: '/Coverage:\s*(\d+\.\d+)%/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: cobertura.xml
+
+# The cross-platform matrix, reduced to what GitLab.com actually offers for
+# free. GitHub ran macOS, Windows and Ubuntu on R devel/release/oldrel-1;
+# GitLab.com's macOS and Windows runners are paid tiers, and there is no
+# `r-version: devel` equivalent to point an image at. So this keeps the R
+# version axis on Linux and the rest moves to R-hub before a CRAN submission —
+# `rhub::rc_submit()` runs on R-hub's own infrastructure and needs no forge
+# account at all. docs/notes-r.md records that trade.
+full-check:
+  extends:
+    - .r
+    - .scheduled-or-manual
+  stage: check
+  image: rocker/r-ver:$R_VERSION
+  parallel:
+    matrix:
+      - R_VERSION: ["4.5.1", "4.4.3"]
+  script:
+    - Rscript -e 'pak::pak(c("any::lintr", "any::rcmdcheck", "any::styler"))'
+    - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
+    - Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning")'
+
+# --------------------------------------------------------------------------
+# pages — the pkgdown site
+#
+# GitHub deployed through actions/upload-pages-artifact + deploy-pages. GitLab
+# Pages is convention over configuration instead: a job named exactly `pages`
+# that leaves its output in `public/` is published, and nothing else is. The
+# site URL is https://bart-turczynski.gitlab.io/seor/ for a user or
+# top-level group; a project inside a subgroup gets the subgroup path appended.
+# Keep that URL in step with `url:` in _pkgdown.yml.
+#
+# _pkgdown.yml builds into site/, not public/, because docs/ holds durable
+# project documentation and must not be replaced by generated HTML — so the
+# job renames at the end rather than reconfiguring pkgdown.
+# --------------------------------------------------------------------------
+
+pages:
+  extends: .r
+  stage: pages
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+  script:
+    - Rscript -e 'pak::pak(c("any::pkgdown", "local::."))'
+    - Rscript -e 'pkgdown::build_site(new_process = FALSE, install = FALSE)'
+    - rm -rf public && mv site public
+  artifacts:
+    paths:
+      - public
+
+# --------------------------------------------------------------------------
+# maintenance — audits and metadata, scheduled or on demand
+#
+# GitLab keeps pipeline schedules in project settings (CI/CD > Schedules), not
+# in this file, so the weekly cadence the GitHub workflows declared with `cron:`
+# is gone until you add a schedule there. Nothing below runs on a merge
+# request, and nothing below can turn one red.
+# --------------------------------------------------------------------------
+
+# Dependency vulnerability audit against the OSV database (https://osv.dev) via
+# {rosv}. Needs no account, token or CI/CD variable, and has first-class CRAN
+# coverage. Runs tests/testthat/test-osv.R against the package's runtime
+# dependency closure at installed versions.
+osv-audit:
+  extends:
+    - .r
+    - .scheduled-or-manual
+  stage: maintenance
+  variables:
+    # testthat::test_local() does not set NOT_CRAN, so set it here or
+    # skip_on_cran() in test-osv.R would skip the audit silently.
+    NOT_CRAN: "true"
+  script:
+    - Rscript -e 'pak::pak(c("any::rosv", "any::testthat", "local::."))'
+    - Rscript -e 'testthat::test_local(filter = "osv", stop_on_failure = TRUE)'
+
+# Dependency vulnerability audit against the Sonatype OSS Index via {oysteR}.
+# OSS Index requires authentication (anonymous requests get HTTP 401), so this
+# job needs two masked CI/CD variables. Until they exist the test skips
+# cleanly, so the job stays green rather than failing confusingly:
+#   OSSINDEX_USER   - OSS Index account email (https://ossindex.sonatype.org)
+#   OSSINDEX_TOKEN  - OSS Index API token
+security-audit:
+  extends:
+    - .r
+    - .scheduled-or-manual
+  stage: maintenance
+  variables:
+    NOT_CRAN: "true"
+  script:
+    - Rscript -e 'pak::pak(c("any::oysteR", "any::testthat", "local::."))'
+    - Rscript -e 'testthat::test_local(filter = "security", stop_on_failure = TRUE)'
+
+# Regenerates codemeta.json (the CodeMeta / schema.org description of the
+# package) from DESCRIPTION + inst/CITATION and commits it back, so the
+# committed file stays a faithful mirror without manual upkeep.
+#
+# The push is the hard part. GitHub handed the workflow a GITHUB_TOKEN that
+# could write to the repo; CI_JOB_TOKEN cannot push. This needs a project
+# access token with `write_repository` scope exposed as a masked CI/CD variable
+# named CODEMETA_TOKEN, which is why the job is manual/scheduled and
+# non-blocking rather than running on every DESCRIPTION change.
+codemeta:
+  extends:
+    - .r
+    - .scheduled-or-manual
+  stage: maintenance
+  script:
+    - Rscript -e 'pak::pak("any::codemetar")'
+    - Rscript -e 'codemetar::write_codemeta(".")'
+    - |
+      if [ -z "$(git status --porcelain codemeta.json)" ]; then
+        echo "codemeta.json unchanged."
+        exit 0
+      fi
+      if [ -z "${CODEMETA_TOKEN:-}" ]; then
+        echo "codemeta.json changed but CODEMETA_TOKEN is not set; not pushing."
+        git --no-pager diff -- codemeta.json
+        exit 1
+      fi
+      git config user.name "gitlab-ci"
+      git config user.email "gitlab-ci@$CI_SERVER_HOST"
+      git add codemeta.json
+      git commit -m "chore: refresh codemeta.json [skip ci]"
+      git push "https://codemeta:${CODEMETA_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "HEAD:${CI_DEFAULT_BRANCH}"
+
+# renovate — replaces Dependabot, which is GitHub-only. Needs a RENOVATE_TOKEN
+# CI/CD variable (a project access token with `api` and `write_repository`
+# scope). What it bumps is configured in renovate.json — for an R package that
+# is the CI images and nothing else, since CRAN dependencies are declared as
+# version floors in DESCRIPTION and resolved against current CRAN at install
+# time, so there is no pin to bump.
+renovate:
+  extends: .scheduled-or-manual
+  stage: maintenance
+  image: renovate/renovate:41
+  variables:
+    RENOVATE_PLATFORM: gitlab
+    RENOVATE_ENDPOINT: $CI_API_V4_URL
+    RENOVATE_AUTODISCOVER: "false"
+    RENOVATE_REPOSITORIES: $CI_PROJECT_PATH
+    LOG_LEVEL: info
+  script:
+    # Skip loudly rather than fail when the token is missing: a fresh project has
+    # no RENOVATE_TOKEN by construction, and a red scheduled pipeline for a setup
+    # step nobody has done yet is noise. Every *other* renovate failure — bad
+    # config, API error, auth rejected — now fails the pipeline, which is the
+    # point of dropping `allow_failure` above.
+    - |
+      if [ -z "$RENOVATE_TOKEN" ]; then
+        echo "RENOVATE_TOKEN is not set - skipping renovate."
+        echo "Add it under Settings > CI/CD > Variables: a project access token"
+        echo "with 'api' and 'write_repository' scope."
+        exit 0
+      fi
+    - renovate

@@ -1,0 +1,65 @@
+---
+output: github_document
+---
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.path = "man/figures/README-",
+  out.width = "100%"
+)
+```
+
+# seor
+
+<!-- badges: start -->
+<!-- Replace bart-turczynski with your GitLab user or group (for a project in a
+     subgroup, the full path: group/subgroup). A fresh package is pre-CRAN, so
+     the lifecycle starts at "experimental" — bump it to "stable" once the API
+     settles and the package is on CRAN, and add a CRAN downloads badge then.
+     Coverage comes from GitLab's own badge, so it needs no account or token;
+     the coverage job populates it on the first pipeline. Setup for OpenSSF
+     Best Practices: design/badges.md. Snyk and FOSSA are omitted here —
+     neither covers the CRAN/R ecosystem. -->
+[![Pipeline](https://gitlab.com/bart-turczynski/seor/badges/main/pipeline.svg)](https://gitlab.com/bart-turczynski/seor/-/pipelines)
+[![CRAN status](https://www.r-pkg.org/badges/version/seor)](https://CRAN.R-project.org/package=seor)
+[![Coverage](https://gitlab.com/bart-turczynski/seor/badges/main/coverage.svg)](https://gitlab.com/bart-turczynski/seor/-/pipelines)
+[![Lifecycle: experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+<!-- Register at https://www.bestpractices.dev/projects/new, replace PROJECT_ID,
+     then uncomment the badge below.
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/PROJECT_ID/badge)](https://www.bestpractices.dev/projects/PROJECT_ID)
+-->
+<!-- badges: end -->
+
+One-sentence package purpose goes here.
+
+## Setup
+
+Install package dependencies (from `DESCRIPTION`) plus the dev tooling used by
+the checks:
+
+```sh
+Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
+```
+
+## Verification
+
+```sh
+Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning")'
+```
+
+`R CMD check` runs the testthat and cucumber specs, so the behaviour specs are
+verified as part of the check.
+
+## Project Layout
+
+- `R/` contains the package source.
+- `man/` contains generated help pages (regenerate with `devtools::document()`).
+- `NAMESPACE` and `man/` are roxygen2-generated — edit the roxygen comments in `R/`, not these.
+- `tests/testthat/` contains testthat tests and the cucumber feature specs.
+- `vignettes/` contains long-form documentation.
+- `_pkgdown.yml` configures the generated package website in `site/`.
+- `DESCRIPTION` declares package metadata and dependencies.

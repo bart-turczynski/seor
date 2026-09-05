@@ -1,0 +1,24 @@
+url: https://bart-turczynski.gitlab.io/seor/
+destination: site
+
+template:
+  bootstrap: 5
+
+home:
+  title: "seor"
+
+navbar:
+  structure:
+    left: [intro, reference, articles, news, acknowledgments]
+    right: [search, gitlab]
+  components:
+    acknowledgments:
+      text: Acknowledgments
+      href: https://gitlab.com/bart-turczynski/seor/-/blob/main/ACKNOWLEDGMENTS.md
+    # pkgdown ships a built-in `github` component but none for GitLab, so this
+    # is a plain custom component using the Font Awesome brand icon pkgdown
+    # already bundles.
+    gitlab:
+      icon: fab fa-gitlab
+      href: https://gitlab.com/bart-turczynski/seor
+      aria-label: GitLab
