@@ -76,11 +76,18 @@ Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
 ## Verification
 
 ``` sh
-Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning")'
+Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false"))'
 ```
 
 `R CMD check` runs the testthat and cucumber specs, so the behaviour
 specs are verified as part of the check.
+
+The `env =` argument disables only the CRAN incoming-feasibility step.
+seor is a metapackage with members that are not yet on CRAN, so that
+step always reports an ERROR (non-mainstream dependencies, the
+`Remotes:` field, the archived `seoR` name clash) — a permanent, known
+state rather than a regression. Every other `--as-cran` check still
+runs. Re-enable it for the first CRAN submission.
 
 ## Project Layout
 

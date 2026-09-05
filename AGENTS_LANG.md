@@ -16,8 +16,13 @@ package dependencies, so they are not in `DESCRIPTION`.
 
   ```sh
   Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' \
-    && Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning")'
+    && Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false"))'
   ```
+
+  The `env =` argument disables only the CRAN incoming-feasibility step, which
+  always ERRORs for this metapackage while its members are off CRAN. Every
+  other `--as-cran` check still runs. Do not drop it to "fix" a red gate — see
+  the comment in `.pre-commit-config.yaml`.
 
 - When no R REPL is available, run snippets with `Rscript -e "..."`.
 
