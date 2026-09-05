@@ -20,7 +20,8 @@ the freed name (CRAN treats `seor` and `seoR` as the same name).
 ## Test environments
 
 * local: macOS, R 4.6.0
-* GitHub Actions: macOS, Windows, Ubuntu (R devel, release, oldrel-1)
+* GitLab CI: Ubuntu (R release, oldrel-1)
+* R-hub (rhub::rc_submit()): macOS, Windows, Linux (R devel)
 
 ## Downstream dependencies
 

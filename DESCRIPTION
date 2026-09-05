@@ -10,8 +10,11 @@ Description: The 'seor' suite bundles a set of focused R packages for search
     sitemap parsing and PageRank estimation. Loading 'seor' with a single call
     to library() installs and attaches all of the member packages at once, in
     the style of the 'tidyverse' metapackage.
+URL: https://bart-turczynski.gitlab.io/seor/,
+    https://gitlab.com/bart-turczynski/seor
 License: MIT + file LICENSE
 Encoding: UTF-8
+Language: en-US
 Roxygen: list(markdown = TRUE)
 Depends:
     R (>= 4.0.0)
@@ -25,8 +28,10 @@ Imports:
 Suggests:
     cucumber (>= 2.0.0),
     knitr,
+    oysteR,
     rmarkdown,
     robotstxtr,
+    rosv,
     testthat (>= 3.0.0)
 Remotes:
     bart-turczynski/pagerankr,
