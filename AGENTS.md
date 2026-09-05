@@ -74,4 +74,3 @@ If this project uses fp for issue tracking, keep it **decoupled from git** — i
 ## Language-specific conventions
 
 @AGENTS_LANG.md
-

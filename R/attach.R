@@ -5,11 +5,11 @@
 # CRAN) and is only attached opportunistically once it is installed, so the
 # suite does not fail to load without it.
 core <- c(
-  "rurl",      # URL parsing and manipulation
+  "rurl", # URL parsing and manipulation
   "punycoder", # punycode / internationalized-domain conversion
-  "pslr",      # public suffix list lookups
-  "sitemapr",  # XML sitemap parsing
-  "pagerankr"  # PageRank estimation
+  "pslr", # public suffix list lookups
+  "sitemapr", # XML sitemap parsing
+  "pagerankr" # PageRank estimation
 )
 
 optional <- "robotstxtr"
