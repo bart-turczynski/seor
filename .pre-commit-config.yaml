@@ -14,8 +14,23 @@ repos:
       - id: check-yaml
       - id: mixed-line-ending
       - id: check-case-conflict
+  # Air (https://posit-dev.github.io/air/) formats R sources on commit. The
+  # hook bootstraps its own R-free binary, so no global install is needed.
+  # Air owns layout; the local `verify` lintr gate below owns logic lints.
+  # Only Air >= 0.8.2 can be pinned as a pre-commit rev.
+  - repo: https://github.com/posit-dev/air-pre-commit
+    rev: 0.8.2
+    hooks:
+      - id: air-format
   - repo: local
     hooks:
+      - id: check-design
+        name: design-doc hygiene
+        entry: python3 scripts/check-design.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       - id: verify
         name: verify (mirrors CI)
         entry: Rscript -e
