@@ -9,6 +9,9 @@
       "Bash(git merge:*)",
       "Bash(git pull:*)",
       "Bash(git push:*)",
+      "Bash(glab mr create:*)",
+      "Bash(glab mr merge:*)",
+      "Bash(glab mr view:*)",
       "Bash(gh pr create:*)",
       "Bash(gh pr merge:*)",
       "Bash(gh pr view:*)"
