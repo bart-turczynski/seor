@@ -58,6 +58,17 @@ default:
     # job recompiles the full dependency closure from source.
     R_LIBS_USER: "$CI_PROJECT_DIR/.r-lib"
     PKG_CACHE_DIR: "$CI_PROJECT_DIR/.pak-cache"
+    # rocker/r-ver bakes a *frozen* p3m snapshot into Rprofile.site at image
+    # build time: 4.5.1 pins 2025-10-30, 4.4.3 pins 2025-04-10. Three of
+    # seor's members reached CRAN after both dates — rurl on 2026-06-19, pslr
+    # and punycoder on 2026-07-19 — so pak resolves the package's own Imports
+    # against a repository that cannot see them and dies with "Can't find
+    # package called pslr, punycoder, rurl". Overriding the image's CRAN
+    # environment variable does not help: rocker's setup_R.sh wrote the URL
+    # into Rprofile.site as a literal, so it has to be replaced at run time
+    # (see before_script). Pinned rather than "latest" so a rebuild of an old
+    # commit resolves the same versions; bump it when a member publishes.
+    P3M_SNAPSHOT: "2026-09-01"
   cache:
     # Keyed on DESCRIPTION: the dependency declaration. An R package has no
     # lockfile, so this is the closest thing to one.
@@ -69,6 +80,20 @@ default:
       - .pak-cache
   before_script:
     - mkdir -p "$R_LIBS_USER" "$PKG_CACHE_DIR"
+    # Point R at a snapshot new enough to carry the members (see
+    # P3M_SNAPSHOT). Appended rather than rewritten, so the HTTPUserAgent line
+    # rocker sets — the one that makes p3m serve binaries instead of source —
+    # survives, and the later options() call wins. p3m's binary path is
+    # per-distribution and amd64-only, so on arm64 fall back to the source
+    # repository, exactly as rocker's own build does.
+    - |
+      . /etc/os-release
+      repo="https://p3m.dev/cran/__linux__/${UBUNTU_CODENAME}/${P3M_SNAPSHOT}"
+      if [ "$(uname -m)" = "aarch64" ]; then
+        repo="https://p3m.dev/cran/${P3M_SNAPSHOT}"
+      fi
+      echo "options(repos = c(CRAN = '${repo}'))" >> "${R_HOME}/etc/Rprofile.site"
+      Rscript -e 'cat("CRAN repo:", getOption("repos")[["CRAN"]], "\n")'
     - apt-get update -qq
     # rocker/r-ver is a lean image. git is needed because pak and covr shell
     # out to it; the LaTeX set and qpdf are what `R CMD check --as-cran` needs
