@@ -34,9 +34,9 @@ Suggests:
     rosv,
     testthat (>= 3.0.0)
 Remotes:
-    bart-turczynski/pagerankr,
-    bart-turczynski/robotstxtr,
-    bart-turczynski/sitemapr
+    gitlab::bart-turczynski/pagerankr,
+    gitlab::bart-turczynski/robotstxtr,
+    gitlab::bart-turczynski/sitemapr
 Config/testthat/edition: 3
 VignetteBuilder: knitr
 Config/roxygen2/version: 8.0.0
