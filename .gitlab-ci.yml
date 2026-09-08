@@ -101,6 +101,12 @@ default:
     # source-compiling on a runner Posit Package Manager serves no binaries
     # for. On an amd64 runner most of the headers go unused, but installing
     # them is harmless and keeps one config for both architectures.
+    #
+    # The last line is devtools' own closure rather than seor's: igraph needs
+    # libglpk-dev, fs needs cmake and libuv1-dev, clipr needs libx11-dev. pak
+    # flagged all four as unsatisfied system requirements in the `readme` job
+    # (SEOR-htoikrfd). Only that job installs devtools, but the apt list is
+    # shared, so they go here.
     - >
       DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends
       curl ca-certificates git
@@ -108,6 +114,7 @@ default:
       libcurl4-openssl-dev libssl-dev libxml2-dev libgit2-dev zlib1g-dev
       libfontconfig1-dev libfreetype6-dev libharfbuzz-dev libfribidi-dev
       libpng-dev libtiff5-dev libjpeg-dev
+      cmake libuv1-dev libglpk-dev libx11-dev
     - Rscript -e 'if (!requireNamespace("pak", quietly = TRUE)) install.packages("pak", repos = "https://cloud.r-project.org")'
 
 .on-mr-and-main:
@@ -204,7 +211,21 @@ readme:
     - .on-mr-and-main
   stage: verify
   script:
-    - Rscript -e 'pak::pak(c("any::devtools", "local::."))'
+    # Deliberately NOT `pak::pak(c("any::devtools", "local::."))`. Handing
+    # `local::.` to pak makes it build seor's source tarball as part of solving
+    # the plan, and pak builds every source package before installing any of
+    # them -- so the tarball build runs while the members are still absent from
+    # the job library. seor declares `VignetteBuilder: knitr` and its vignette
+    # attaches the package, so vignette evaluation fails and takes the build
+    # with it. pak reports that as `Failed to download seor` with no underlying
+    # reason, because "download" is its term for producing a local package's
+    # tarball (SEOR-htoikrfd).
+    #
+    # So mirror the shape that already works in `verify`: resolve the
+    # package's own dependencies first, add devtools separately, and let
+    # build_readme() handle installing seor itself.
+    - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
+    - Rscript -e 'pak::pak("any::devtools")'
     - Rscript -e 'devtools::build_readme()'
     - |
       if ! git diff --exit-code -- README.md; then
