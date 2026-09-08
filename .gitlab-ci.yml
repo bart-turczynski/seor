@@ -248,6 +248,13 @@ coverage:
     - .on-mr-and-main
   stage: check
   script:
+    # covr::package_coverage() installs the package to measure it, so seor's
+    # own Imports have to be present first -- five of them (pagerankr, pslr,
+    # punycoder, rurl, sitemapr), three of which resolve through `Remotes:`
+    # rather than CRAN. Installing only covr and xml2 left the job dying on
+    # "dependencies are not available for package 'seor'". Same omission the
+    # readme job had, in a different shape (SEOR-htoikrfd).
+    - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
     - Rscript -e 'pak::pak(c("any::covr", "any::xml2"))'
     - Rscript -e 'cov <- covr::package_coverage(quiet = FALSE); print(cov); covr::to_cobertura(cov)'
   coverage: '/Coverage:\s*(\d+\.\d+)%/'
