@@ -1,0 +1,94 @@
+header:
+  schema-version: 2.2.0
+  last-updated: '2026-01-01'
+  last-reviewed: '2026-01-01'
+  url: https://gitlab.com/bart-turczynski/seor/-/raw/main/SECURITY-INSIGHTS.yml
+  comment: |
+    OpenSSF Security Insights self-report. Maintained alongside SECURITY.md
+    (human-readable policy) and .bestpractices.json (OpenSSF Best Practices
+    badge self-assessment). Replace bart-turczynski, the maintainer identity, and the
+    dates before publishing.
+
+project:
+  name: seor
+  homepage: https://bart-turczynski.gitlab.io/seor/
+  administrators:
+    - name: Bart Turczynski
+      email: bartek@turczynski.pl
+      primary: true
+  documentation:
+    quickstart-guide: https://bart-turczynski.gitlab.io/seor/
+    detailed-guide: https://bart-turczynski.gitlab.io/seor/reference/index.html
+    release-process: https://gitlab.com/bart-turczynski/seor/-/blob/main/CONTRIBUTING.md
+  repositories:
+    - name: seor
+      url: https://gitlab.com/bart-turczynski/seor
+      comment: |
+        Sole repository for the seor package.
+  vulnerability-reporting:
+    reports-accepted: true
+    bug-bounty-available: false
+    contact:
+      name: Bart Turczynski
+      email: bartek@turczynski.pl
+      primary: true
+    policy: https://gitlab.com/bart-turczynski/seor/-/blob/main/SECURITY.md
+    comment: |
+      Please do not report vulnerabilities through public GitLab issues. Open
+      a **confidential** issue instead (tick "This issue is confidential" when
+      creating it), or email the maintainer. GitLab Free has no equivalent to
+      GitHub private vulnerability reporting; a confidential issue is the
+      closest supported channel.
+
+repository:
+  url: https://gitlab.com/bart-turczynski/seor
+  status: active
+  bug-fixes-only: false
+  accepts-change-request: true
+  accepts-automated-change-request: false
+  no-third-party-packages: false
+  core-team:
+    - name: Bart Turczynski
+      email: bartek@turczynski.pl
+      primary: true
+  documentation:
+    contributing-guide: https://gitlab.com/bart-turczynski/seor/-/blob/main/CONTRIBUTING.md
+    security-policy: https://gitlab.com/bart-turczynski/seor/-/blob/main/SECURITY.md
+  license:
+    url: https://gitlab.com/bart-turczynski/seor/-/blob/main/LICENSE
+    expression: MIT
+  release:
+    changelog: https://gitlab.com/bart-turczynski/seor/-/blob/main/NEWS.md
+    automated-pipeline: false
+    distribution-points:
+      - uri: https://CRAN.R-project.org/package=seor
+        comment: Canonical release channel (CRAN).
+      - uri: https://gitlab.com/bart-turczynski/seor/-/releases
+        comment: Tagged GitLab Releases mirroring each CRAN version.
+  security:
+    tools:
+      - name: rosv (OSV)
+        type: SCA
+        rulesets:
+          - default
+        integration:
+          adhoc: true
+          ci: true
+          release: false
+        results: {}
+        comment: |
+          Weekly and on-push audit of the runtime dependency closure against the
+          OSV database (osv.dev). No account or secrets required. See
+          the osv-audit job in .gitlab-ci.yml.
+      - name: oysteR (Sonatype OSS Index)
+        type: SCA
+        rulesets:
+          - default
+        integration:
+          adhoc: true
+          ci: true
+          release: false
+        results: {}
+        comment: |
+          Weekly and on-push audit of declared dependencies against the Sonatype
+          OSS Index. See the security-audit job in .gitlab-ci.yml.

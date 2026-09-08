@@ -1,4 +1,10 @@
 # R build/dev artifacts
+# LICENSE.md ships the full MIT text so the forge license detector Licensee -
+# used by both GitHub and GitLab - sees it, but the CRAN tarball only needs the
+# short two-field LICENSE stub, so keep the rendered copy out of the build.
+# NB: each line here is a Perl regex, not a comment, so keep prose plain.
+# See docs/notes-r.md "License detection".
+^LICENSE\.md$
 ^.*\.Rproj$
 ^\.Rproj\.user$
 ^\.Rhistory$
@@ -7,27 +13,59 @@
 ^.*\.Rcheck$
 ^.*\.tar\.gz$
 ^\.lintr$
+^air\.toml$
+^_pkgdown\.yml$
+^site$
+^public$
+^\.r-lib$
+^\.pak-cache$
+^\.bestpractices\.json$
 ^cran-comments\.md$
 ^CRAN-SUBMISSION$
 ^doc$
 ^Meta$
+# Publication and citation metadata: developed and served from the repository,
+# not part of the installable package. The tarball-facing CITATION file under
+# the inst directory is deliberately NOT listed here so it still ships. README
+# markdown is generated from README.Rmd and ships; the README.Rmd source does not.
+# NB: each line here is a Perl regex, so prose must avoid bare regex characters.
+^README\.Rmd$
+^codemeta\.json$
+^CITATION\.cff$
+^\.zenodo\.json$
+^SECURITY-INSIGHTS\.yml$
+# Rendered vignette outputs; the sources under vignettes still ship. Mirror of the
+# gitignore vignette html and pdf entries in generator.py ignored_paths. Keep the
+# two lists in sync per the CLAUDE.md gotcha so a stray local render never ships.
+# NB: each line here is a Perl regex (not a true comment), so keep prose plain.
+^vignettes/.*\.(html|pdf)$
 # Shared scaffold layer: everything below is dev tooling, not package content,
 # and would otherwise trip "non-standard files/directories" in R CMD check.
-^\.github$
+^\.gitlab$
+^\.gitlab-ci\.yml$
+^renovate\.json$
 ^\.editorconfig$
 ^\.env$
 ^\.env\.example$
 ^\.gitattributes$
 ^\.gitignore$
 ^\.pre-commit-config\.yaml$
+^\.claude$
 ^\.fp$
 ^FP_CLAUDE\.md$
 ^FP_AGENTS\.md$
 ^_scratch$
+^tmp$
 ^docs$
+^design$
+^scripts$
+^ARCHITECTURE\.md$
 ^CLAUDE\.md$
 ^AGENTS\.md$
+^AGENTS_LANG\.md$
 ^CONTRIBUTING\.md$
+^CODE_OF_CONDUCT\.md$
+^ACKNOWLEDGMENTS\.md$
 ^SECURITY\.md$
 ^CHANGELOG\.md$
 ^\.DS_Store$

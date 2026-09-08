@@ -7,6 +7,15 @@
 .fp/
 _scratch/
 
+# Machine output: logs, build junk, agent working files. Deletable at any
+# instant — `sh scripts/clean-tmp.sh` empties it.
+tmp/
+
+# .claude/ is commonly ignored by a global gitignore; re-include the shared
+# .claude/settings.json (committed, team-shared) but never personal overrides.
+!.claude/
+.claude/settings.local.json
+
 # Heavy artifacts — never commit (a big blob bloats .git history even after deletion).
 *.db
 *.db-shm
@@ -30,7 +39,10 @@ src/*.so
 src/*.dll
 vignettes/*.html
 vignettes/*.pdf
+site/
+public/
+.r-lib/
+.pak-cache/
 doc/
 Meta/
 tests/testthat/_snaps/
-

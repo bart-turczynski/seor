@@ -1,0 +1,27 @@
+{
+  "upload_type": "software",
+  "title": "seor: Easily Install and Load the 'seor' SEO and Developer Tools",
+  "version": "0.0.0.9000",
+  "language": "eng",
+  "access_right": "open",
+  "license": "MIT",
+  "description": "<p>The 'seor' suite bundles a set of focused R packages for search engine optimization and web-developer workflows: URL parsing, punycode and internationalized-domain conversion, public suffix list lookups, XML sitemap parsing and PageRank estimation. Loading 'seor' with a single call to library() installs and attaches all of the member packages at once, in the style of the 'tidyverse' metapackage.</p>",
+  "creators": [
+    {
+      "name": "Turczynski, Bart"
+    }
+  ],
+  "keywords": [
+    "R",
+    "rstats",
+    "CRAN"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://bart-turczynski.gitlab.io/seor/",
+      "relation": "isDocumentedBy",
+      "resource_type": "publication-softwaredocumentation",
+      "scheme": "url"
+    }
+  ]
+}

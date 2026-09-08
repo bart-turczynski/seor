@@ -1,0 +1,20 @@
+citHeader("To cite the seor package in publications, use:")
+
+# meta is the parsed DESCRIPTION of the installed package. A fresh scaffold has
+# no Date field, so fall back to the current year rather than emit "NA".
+year <- sub("-.*", "", meta$Date)
+if (!length(year) || is.na(year) || !nzchar(year)) {
+  year <- format(Sys.Date(), "%Y")
+}
+note <- sprintf("R package version %s", meta$Version)
+
+# After the package has a Zenodo DOI, add a
+# `doi = "10.5281/zenodo.XXXXXXXX"` argument to the bibentry below.
+bibentry(
+  bibtype = "Manual",
+  title   = "{seor}: Easily Install and Load the 'seor' SEO and Developer Tools",
+  author  = person("Bart", "Turczynski"),
+  year    = year,
+  note    = note,
+  url     = "https://gitlab.com/bart-turczynski/seor"
+)

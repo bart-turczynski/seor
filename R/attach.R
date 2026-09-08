@@ -5,11 +5,11 @@
 # CRAN) and is only attached opportunistically once it is installed, so the
 # suite does not fail to load without it.
 core <- c(
-  "rurl",      # URL parsing and manipulation
+  "rurl", # URL parsing and manipulation
   "punycoder", # punycode / internationalized-domain conversion
-  "pslr",      # public suffix list lookups
-  "sitemapr",  # XML sitemap parsing
-  "pagerankr"  # PageRank estimation
+  "pslr", # public suffix list lookups
+  "sitemapr", # XML sitemap parsing
+  "pagerankr" # PageRank estimation
 )
 
 optional <- "robotstxtr"
@@ -39,9 +39,16 @@ seor_packages <- function(include_optional = FALSE) {
 
   packageStartupMessage(seor_attach_message(attach_now))
 
+  # package_hooks_linter forbids altering the search path from .onAttach(),
+  # which is sound for an ordinary package and is the one thing a metapackage
+  # exists to do. tidyverse attaches its members the same way. The exception is
+  # scoped to this call rather than switched off in .lintr, so the rule keeps
+  # applying everywhere else.
+  # nolint start: package_hooks_linter.
   suppressPackageStartupMessages(
     lapply(needed, library, character.only = TRUE, warn.conflicts = FALSE)
   )
+  # nolint end
   invisible()
 }
 
