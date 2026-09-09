@@ -67,7 +67,10 @@ default:
     # environment variable does not help: rocker's setup_R.sh wrote the URL
     # into Rprofile.site as a literal, so it has to be replaced at run time
     # (see before_script). Pinned rather than "latest" so a rebuild of an old
-    # commit resolves the same versions; bump it when a member publishes.
+    # commit resolves the same versions. Bumping it when a member publishes is
+    # now an optimisation, not a fix: p3m lags CRAN at every coordinate, so the
+    # CRAN fallback appended in before_script is what actually resolves a
+    # freshly published member.
     P3M_SNAPSHOT: "2026-09-01"
   cache:
     # Keyed on DESCRIPTION: the dependency declaration. An R package has no
@@ -81,19 +84,43 @@ default:
   before_script:
     - mkdir -p "$R_LIBS_USER" "$PKG_CACHE_DIR"
     # Point R at a snapshot new enough to carry the members (see
-    # P3M_SNAPSHOT). Appended rather than rewritten, so the HTTPUserAgent line
-    # rocker sets — the one that makes p3m serve binaries instead of source —
-    # survives, and the later options() call wins. p3m's binary path is
-    # per-distribution and amd64-only, so on arm64 fall back to the source
-    # repository, exactly as rocker's own build does.
+    # P3M_SNAPSHOT), then append CRAN itself BEHIND it.
+    #
+    # p3m stays FIRST so packages still arrive as prebuilt binaries — a cold
+    # `check` otherwise compiles the whole Suggests set from source. CRAN is a
+    # source-only fallback for the handful of packages p3m has not synced yet;
+    # `available.packages()` unions the two and takes the highest version, so
+    # on any day p3m is current this changes nothing.
+    #
+    # The fallback is not optional, and no value of P3M_SNAPSHOT substitutes
+    # for it: p3m lags CRAN by more than a day for a new release, at *every*
+    # coordinate. Measured 2026-09-10, ~38 h after rurl 3.0.1 was published:
+    #
+    #     p3m 2026-09-01                  rurl 1.2.0
+    #     p3m __linux__/noble/2026-09-01  rurl 1.2.0   <- the path built below
+    #     p3m latest                      rurl 1.2.0
+    #     cloud.r-project.org             rurl 3.0.1
+    #
+    # seor resolves pagerankr from GitLab main (see Remotes: in DESCRIPTION),
+    # and pagerankr now requires rurl (>= 3.0.1), so a p3m-only repo set cannot
+    # solve seor's own dependency closure at all — every job here would die on
+    # "Can't install dependency rurl (>= 3.0.1)" (SEOR-arofvftg). pagerankr hit
+    # this first and fixed it the same way (cfdef3c).
+    #
+    # Appended rather than rewritten, so the HTTPUserAgent line rocker sets —
+    # the one that makes p3m serve binaries instead of source — survives, and
+    # the later options() call wins. p3m's binary path is per-distribution and
+    # amd64-only, so on arm64 fall back to the source repository, exactly as
+    # rocker's own build does.
     - |
       . /etc/os-release
       repo="https://p3m.dev/cran/__linux__/${UBUNTU_CODENAME}/${P3M_SNAPSHOT}"
       if [ "$(uname -m)" = "aarch64" ]; then
         repo="https://p3m.dev/cran/${P3M_SNAPSHOT}"
       fi
-      echo "options(repos = c(CRAN = '${repo}'))" >> "${R_HOME}/etc/Rprofile.site"
-      Rscript -e 'cat("CRAN repo:", getOption("repos")[["CRAN"]], "\n")'
+      echo "options(repos = c(P3M = '${repo}', CRAN = 'https://cloud.r-project.org'))" \
+        >> "${R_HOME}/etc/Rprofile.site"
+      Rscript -e 'cat("Effective repos:\n"); print(getOption("repos"))'
     - apt-get update -qq
     # rocker/r-ver is a lean image. git is needed because pak and covr shell
     # out to it; the LaTeX set and qpdf are what `R CMD check --as-cran` needs
