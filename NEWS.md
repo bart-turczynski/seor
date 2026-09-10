@@ -11,3 +11,6 @@
 * CI now appends CRAN behind the pinned Posit Package Manager snapshot, so a
   dependency published to CRAN too recently for p3m to have synced still
   resolves (SEOR-arofvftg).
+* The `pages`, `osv-audit` and `security-audit` CI jobs no longer hand
+  `local::.` to pak, the pattern that made pak build seor's tarball before
+  its members were installed (SEOR-fijlyqch).

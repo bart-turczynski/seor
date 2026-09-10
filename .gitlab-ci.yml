@@ -335,7 +335,26 @@ pages:
     - if: $CI_PIPELINE_SOURCE == "web"
       when: manual
   script:
-    - Rscript -e 'pak::pak(c("any::pkgdown", "local::."))'
+    # Not `pak::pak(c("any::pkgdown", "local::."))`. Handing `local::.` to pak
+    # makes it build seor's source tarball while solving, which runs
+    # `R CMD build` — and that re-renders vignettes/introduction.Rmd, whose
+    # first chunk is `library(seor)`. The members are not installed yet at that
+    # point, so the render dies and pak reports it as "Failed to download seor".
+    # This repo has fixed the same pattern twice already: `readme`
+    # (SEOR-htoikrfd) and `coverage` (e903ba1). SEOR-fijlyqch.
+    #
+    # `pages` cannot simply drop the package the way those two did, though:
+    # build_site(install = FALSE) does NOT load the source tree, it expects the
+    # package to be installed already, and the article build attaches it. So
+    # install the dependency closure first, then install seor itself with
+    # `R CMD INSTALL`, which does NOT run `R CMD build`. Measured on this
+    # package: it logs "installing vignettes" but renders nothing and leaves no
+    # doc/ behind, so `library(seor)` is never evaluated during the install and
+    # the ordering problem pak hit cannot arise. pkgdown re-renders the article
+    # from vignettes/ itself, afterwards, with the package already loadable.
+    - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
+    - Rscript -e 'pak::pak("any::pkgdown")'
+    - R CMD INSTALL --no-multiarch --with-keep.source .
     - Rscript -e 'pkgdown::build_site(new_process = FALSE, install = FALSE)'
     - rm -rf public && mv site public
   artifacts:
@@ -365,7 +384,12 @@ osv-audit:
     # skip_on_cran() in test-osv.R would skip the audit silently.
     NOT_CRAN: "true"
   script:
-    - Rscript -e 'pak::pak(c("any::rosv", "any::testthat", "local::."))'
+    # `local::.` removed for the reason in the `pages` job above
+    # (SEOR-fijlyqch). testthat::test_local() loads the package with pkgload,
+    # so seor itself never needs installing here — only its closure, which is
+    # what the audit measures.
+    - Rscript -e 'pak::pak(c("any::rosv", "any::testthat"))'
+    - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
     - Rscript -e 'testthat::test_local(filter = "osv", stop_on_failure = TRUE)'
 
 # Dependency vulnerability audit against the Sonatype OSS Index via {oysteR}.
@@ -382,7 +406,9 @@ security-audit:
   variables:
     NOT_CRAN: "true"
   script:
-    - Rscript -e 'pak::pak(c("any::oysteR", "any::testthat", "local::."))'
+    # Same swap as osv-audit; see the `pages` job for why (SEOR-fijlyqch).
+    - Rscript -e 'pak::pak(c("any::oysteR", "any::testthat"))'
+    - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
     - Rscript -e 'testthat::test_local(filter = "security", stop_on_failure = TRUE)'
 
 # Regenerates codemeta.json (the CodeMeta / schema.org description of the
