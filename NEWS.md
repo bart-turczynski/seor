@@ -8,6 +8,15 @@
 
 ## Internal
 
+* The documentation URL in `DESCRIPTION` and `_pkgdown.yml` names the host
+  that actually serves the site. GitLab has unique-domain Pages enabled on this
+  project, so its canonical address is `https://seor-272402.gitlab.io`, not the
+  namespace-path form `https://bart-turczynski.gitlab.io/seor/` — that address
+  belongs to no project here and returned 403 to every client. `R CMD check
+  --as-cran` fetches declared URLs, so this was a latent submission blocker as
+  well as a wrong address. Measured 2026-09-10 after the Pages access level was
+  set to `enabled`: the unique domain returns 200 (SEOR-cmoyxzky).
+
 * The OSS Index dependency audit in `tests/testthat/test-security.R` scopes to
   hard dependencies (`Depends` + `Imports`) instead of the `Suggests` tree.
   `oysteR::expect_secure()` audits `Suggests` too, which pulled in oysteR's own

@@ -10,7 +10,7 @@ Description: The 'seor' suite bundles a set of focused R packages for search
     sitemap parsing and PageRank estimation. Loading 'seor' with a single call
     to library() installs and attaches all of the member packages at once, in
     the style of the 'tidyverse' metapackage.
-URL: https://bart-turczynski.gitlab.io/seor/,
+URL: https://seor-272402.gitlab.io,
     https://gitlab.com/bart-turczynski/seor
 License: MIT + file LICENSE
 Encoding: UTF-8
