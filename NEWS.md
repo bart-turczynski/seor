@@ -8,6 +8,13 @@
 
 ## Internal
 
+* The OSS Index dependency audit in `tests/testthat/test-security.R` scopes to
+  hard dependencies (`Depends` + `Imports`) instead of the `Suggests` tree.
+  `oysteR::expect_secure()` audits `Suggests` too, which pulled in oysteR's own
+  recursive dependencies -- `curl` among them -- and failed the pre-push gate on
+  a vulnerability in the auditor rather than in anything seor ships. Scoped to
+  hard dependencies the audit covers 12 packages and is clean; the old scope
+  covered 87 (SEOR-sxvcbuia).
 * CI now appends CRAN behind the pinned Posit Package Manager snapshot, so a
   dependency published to CRAN too recently for p3m to have synced still
   resolves (SEOR-arofvftg).
