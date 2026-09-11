@@ -38,6 +38,15 @@ dependencies and (2) attach them all on `library(seor)`.
 - `design/`, `ARCHITECTURE.md` — durable project context. Kept out of the CRAN
   tarball via `.Rbuildignore`.
 - `scripts/` — repository hygiene checks that run from the pre-push hook.
+  `check-design.py` owns design-doc hygiene; `check-citation.py` owns the
+  agreement between `CITATION.cff`, `.zenodo.json` and `DESCRIPTION`. Both are
+  offline and stdlib-only, so they also run as cheap CI jobs.
+- `CITATION.cff`, `.zenodo.json` — publication metadata, kept out of the CRAN
+  tarball via `.Rbuildignore`. The version they carry is governed by
+  [ADR 0001](design/adr/0001-citation-metadata-names-the-release.md): they name
+  the release the `DESCRIPTION` version names, except before a package's first
+  release, when they mirror the development version and claim no release date
+  and no DOI.
 
 ## Invariants
 

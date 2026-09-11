@@ -18,7 +18,7 @@
   ],
   "related_identifiers": [
     {
-      "identifier": "https://bart-turczynski.gitlab.io/seor/",
+      "identifier": "https://seor-272402.gitlab.io",
       "relation": "isDocumentedBy",
       "resource_type": "publication-softwaredocumentation",
       "scheme": "url"

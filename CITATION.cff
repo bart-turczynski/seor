@@ -17,7 +17,7 @@ authors:
     given-names: Bart
     email: bartek@turczynski.pl
 repository-code: "https://gitlab.com/bart-turczynski/seor"
-url: "https://bart-turczynski.gitlab.io/seor/"
+url: "https://seor-272402.gitlab.io"
 license: MIT
 keywords:
   - R
