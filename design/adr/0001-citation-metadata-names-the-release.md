@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded-by: 0002-citation-urls-are-the-ones-about-this-package
 date: 2026-09-11
 tracking: SEOR-lreejxat
 ---

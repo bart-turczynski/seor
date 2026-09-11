@@ -43,10 +43,13 @@ dependencies and (2) attach them all on `library(seor)`.
   offline and stdlib-only, so they also run as cheap CI jobs.
 - `CITATION.cff`, `.zenodo.json` — publication metadata, kept out of the CRAN
   tarball via `.Rbuildignore`. The version they carry is governed by
-  [ADR 0001](design/adr/0001-citation-metadata-names-the-release.md): they name
-  the release the `DESCRIPTION` version names, except before a package's first
-  release, when they mirror the development version and claim no release date
-  and no DOI.
+  [ADR 0002](design/adr/0002-citation-urls-are-the-ones-about-this-package.md),
+  which supersedes ADR 0001: they name the release the `DESCRIPTION` version
+  names, except before a package's first release, when they mirror the
+  development version and claim no release date and no DOI. The URLs they
+  declare *about this package* must appear in `DESCRIPTION`'s `URL:`; a
+  `.zenodo.json` related identifier pointing at a dependency or an upstream
+  source is not one of those and is not cross-checked.
 
 ## Invariants
 
