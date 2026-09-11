@@ -31,6 +31,17 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # CITATION.cff and .zenodo.json duplicate the version and the project
+      # URLs out of DESCRIPTION, and nothing asserted either copy. Offline,
+      # stdlib-only and instant. The rule it enforces is
+      # design/adr/0001-citation-metadata-names-the-release.md.
+      - id: check-citation
+        name: citation metadata vs DESCRIPTION
+        entry: python3 scripts/check-citation.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       # seor is a metapackage whose members `pagerankr`, `sitemapr` and `robotstxtr`
       # are not yet on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always
       # reports an ERROR: non-mainstream strong dependencies, the `Remotes:` field, and

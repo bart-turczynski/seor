@@ -17,6 +17,15 @@
   well as a wrong address. Measured 2026-09-10 after the Pages access level was
   set to `enabled`: the unique domain returns 200 (SEOR-cmoyxzky).
 
+* `CITATION.cff` and `.zenodo.json` now name that same host; both still pointed
+  at the namespace-path address that returns 403, because the earlier fix
+  touched `DESCRIPTION` and `_pkgdown.yml` and nothing looked at these two.
+  `scripts/check-citation.py` is the check that would have caught it: it runs
+  from the pre-push hook and from CI, and asserts that both files agree with
+  `DESCRIPTION` on the version — under the rule in
+  `design/adr/0001-citation-metadata-names-the-release.md` — and on the project
+  URLs (SEOR-lreejxat).
+
 * The OSS Index dependency audit in `tests/testthat/test-security.R` scopes to
   hard dependencies (`Depends` + `Imports`) instead of the `Suggests` tree.
   `oysteR::expect_secure()` audits `Suggests` too, which pulled in oysteR's own
