@@ -380,8 +380,13 @@ osv-audit:
     - .scheduled-or-manual
   stage: maintenance
   variables:
-    # testthat::test_local() does not set NOT_CRAN, so set it here or
-    # skip_on_cran() in test-osv.R would skip the audit silently.
+    # Belt and braces so skip_on_cran() in test-osv.R cannot skip the audit
+    # silently. Measured 2026-09-11 on testthat 3.3.2, `test_local()` does set
+    # NOT_CRAN=true itself -- the older comment here claimed it does not, which
+    # is wrong and mattered, because the same claim is what makes the pre-push
+    # rcmdcheck run look like it audits when it does not (see the header of
+    # tests/testthat/test-security.R). Kept explicit anyway: it costs nothing
+    # and does not depend on a testthat implementation detail.
     NOT_CRAN: "true"
   script:
     # `local::.` removed for the reason in the `pages` job above
@@ -394,10 +399,35 @@ osv-audit:
 
 # Dependency vulnerability audit against the Sonatype OSS Index via {oysteR}.
 # OSS Index requires authentication (anonymous requests get HTTP 401), so this
-# job needs two masked CI/CD variables. Until they exist the test skips
-# cleanly, so the job stays green rather than failing confusingly:
+# job needs two CI/CD variables:
 #   OSSINDEX_USER   - OSS Index account email (https://ossindex.sonatype.org)
 #   OSSINDEX_TOKEN  - OSS Index API token
+#
+# THIS JOB FAILS WHEN THEY ARE ABSENT, ON PURPOSE. It used to skip cleanly and
+# stay green, which is the failure `PUNY-rsxtbbln` records in punycoder and
+# `SEOR-fkvlzltx` names as defect 3: measured 2026-09-11, this project carries
+# zero CI/CD variables, so every run of this job reported success having
+# audited nothing. A job that answers "no vulnerabilities" when it never asked
+# is worse than no job. OSSINDEX_AUDIT_REQUIRED turns each missing
+# precondition in tests/testthat/test-security.R into a loud failure instead of
+# a skip; it is set here and nowhere else, so local runs, the pre-push gate and
+# `R CMD check` still skip.
+#
+# OWNER GATE -- the variables cannot be set from a merge request. Run, once:
+#
+#   glab variable set OSSINDEX_TOKEN '<api token>' \
+#     --masked --repo bart-turczynski/seor
+#   glab variable set OSSINDEX_USER '<account email>' \
+#     --repo bart-turczynski/seor
+#
+# OSSINDEX_USER is deliberately not `--masked`: GitLab rejects masking for a
+# value containing `@`, and the account email is not the secret. Until both
+# exist, a scheduled run of this job is red and says exactly why.
+#
+# Also outstanding, and also an owner gate: this project has no pipeline
+# schedules at all (measured 2026-09-11, `pipeline_schedules` returns `[]`), so
+# neither this job nor `osv-audit` has ever run unattended. Add one under
+# Settings > CI/CD > Schedules.
 security-audit:
   extends:
     - .r
@@ -405,6 +435,7 @@ security-audit:
   stage: maintenance
   variables:
     NOT_CRAN: "true"
+    OSSINDEX_AUDIT_REQUIRED: "true"
   script:
     # Same swap as osv-audit; see the `pages` job for why (SEOR-fijlyqch).
     - Rscript -e 'pak::pak(c("any::oysteR", "any::testthat"))'

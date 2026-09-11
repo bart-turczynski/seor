@@ -30,3 +30,11 @@
 * The `pages`, `osv-audit` and `security-audit` CI jobs no longer hand
   `local::.` to pak, the pattern that made pak build seor's tarball before
   its members were installed (SEOR-fijlyqch).
+* The OSS Index audit now asserts that every reported advisory has an explicit
+  disposition rather than that the scan reports nothing, and the `security-audit`
+  CI job fails when it cannot authenticate instead of skipping green. The
+  allow-list in `tests/testthat/helper-security.R` is empty: measured 2026-09-11
+  the hard dependency closure is 12 packages with zero advisories, and rule B
+  fails a row that is not currently reported, so sitemapr's `curl` rows are not
+  copied in ahead of the CRAN publication that would make them apply
+  (SEOR-fkvlzltx, SEOR-sxvcbuia).
