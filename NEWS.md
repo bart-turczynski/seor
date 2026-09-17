@@ -47,3 +47,12 @@
   fails a row that is not currently reported, so sitemapr's `curl` rows are not
   copied in ahead of the CRAN publication that would make them apply
   (SEOR-fkvlzltx, SEOR-sxvcbuia).
+* `Remotes:` now lists every non-CRAN hard dependency. It named `pagerankr`,
+  `robotstxtr` and `sitemapr` but not `pslr`, `punycoder` or `rurl`, so
+  `remotes::install_gitlab("bart-turczynski/seor")` into a clean library failed
+  on the three it omitted -- none of the members are on CRAN, so nothing else
+  could resolve them. Installing from the r-universe repository was unaffected,
+  because a universe resolves its own members and ignores `Remotes:`, which is
+  why the gap stayed invisible. `robotstxtr` stays listed although it is only a
+  `Suggests:`; it is the sole non-CRAN entry there, so every non-CRAN
+  dependency is now declared by the same rule (SEOR-yaqhqkov).
