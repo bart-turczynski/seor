@@ -56,3 +56,12 @@
   why the gap stayed invisible. `robotstxtr` stays listed although it is only a
   `Suggests:`; it is the sole non-CRAN entry there, so every non-CRAN
   dependency is now declared by the same rule (SEOR-yaqhqkov).
+* `Remotes:` no longer pins `rurl`, `pslr` and `punycoder` to their GitLab
+  sources. All three are on CRAN (`rurl` 3.0.1, `pslr` 1.2.1, `punycoder`
+  1.2.1, re-verified 2026-09-22), and `Remotes:` takes precedence over CRAN, so
+  `remotes::install_gitlab("bart-turczynski/seor")` was resolving them to
+  development builds instead of the released versions -- the side of the
+  `punycoder` profile mismatch that made `pslr`'s `psl_diff()` example 213x
+  slower. `pagerankr`, `sitemapr` and `robotstxtr` stay listed because they are
+  still off CRAN, so the rule that every non-CRAN dependency is declared in
+  `Remotes:` is unchanged (SEOR-hqvzcfnc).

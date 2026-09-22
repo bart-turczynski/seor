@@ -19,8 +19,10 @@ functions of its own. Its job is to (1) install the member packages as
 dependencies and (2) attach them all on `library(seor)`.
 
 - `Imports:` in `DESCRIPTION` is what makes the member packages get *installed*
-  with `seor`. `Remotes:` supplies GitLab/GitHub sources for members not yet on
-  CRAN.
+  with `seor`. `Remotes:` supplies a GitLab source for exactly those members
+  that are not on CRAN yet — no more and no fewer. A missing entry breaks the
+  direct-from-GitLab install; a stale entry for a member that has since been
+  published silently overrides CRAN and hands every user a development build.
 - `.onAttach()` in `R/attach.R` is what makes them get *attached* (put on the
   search path). It calls `library()` on each member and prints a banner.
 
@@ -70,19 +72,23 @@ dependencies and (2) attach them all on `library(seor)`.
 
 ## Membership and CRAN status
 
-| Package     | Role            | On CRAN | Declared in       |
-|-------------|-----------------|:-------:|-------------------|
-| `rurl`      | core            |   yes   | Imports           |
-| `punycoder` | core            |   yes   | Imports           |
-| `pslr`      | core            |   yes   | Imports           |
-| `sitemapr`  | core            |   no    | Imports + Remotes |
-| `pagerankr` | core            |   no    | Imports + Remotes |
-| `robotstxtr`| planned/optional|   no    | Suggests + Remotes|
+The `On CRAN` column governs the `Declared in` column: a member on CRAN is
+declared in `Imports:`/`Suggests:` only, and a member off CRAN is additionally
+declared in `Remotes:`. When a member is published, its `Remotes:` line goes.
+
+| Package     | Role            | On CRAN | Declared in        |
+|-------------|-----------------|:-------:|--------------------|
+| `rurl`      | core            |   yes   | Imports            |
+| `punycoder` | core            |   yes   | Imports            |
+| `pslr`      | core            |   yes   | Imports            |
+| `sitemapr`  | core            |   no    | Imports + Remotes  |
+| `pagerankr` | core            |   no    | Imports + Remotes  |
+| `robotstxtr`| planned/optional|   no    | Suggests + Remotes |
 
 **Key constraint:** a metapackage cannot be submitted to CRAN while any hard
-dependency is off CRAN. Until `sitemapr`, `pagerankr` (and `robotstxtr`) are
-published, `seor` stays forge-only. Before the first CRAN submission: drop
-`Remotes:`, and move published members into `Imports:`.
+dependency is off CRAN. Until `sitemapr` and `pagerankr` (and, for the optional
+member, `robotstxtr`) are published, `seor` stays forge-only. `Remotes:` must be
+absent from a CRAN tarball, so the last entries go at the first submission.
 
 ## Name history
 
