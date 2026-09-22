@@ -144,15 +144,55 @@ default:
       cmake libuv1-dev libglpk-dev libx11-dev
     - Rscript -e 'if (!requireNamespace("pak", quietly = TRUE)) install.packages("pak", repos = "https://cloud.r-project.org")'
 
-.on-mr-and-main:
+# --------------------------------------------------------------------------
+# workflow — keep only the pipeline on main
+#
+# Before this rule, one unit could fire up to three pipelines: a branch
+# pipeline, a merge-request pipeline, and the push-to-main pipeline that
+# actually gates the work. On the fleet's shared concurrency-1 runner the
+# first two are created FIRST and hold the runner's only slot while main's
+# pipeline sits pending behind them — measured repeatedly on 2026-09-22
+# (SEOR-bmgkzhvy): the branch pipeline is guaranteed waste, because the slice
+# flow deletes the branch at merge, so by the time the runner reaches it the
+# ref is gone and it dies at get_sources (exit 128, ~12s, all jobs red for no
+# reason); the MR pipeline can outlive its own merge and sit RUNNING or
+# PENDING against a tree nobody can act on anymore, once blocking the runner
+# for 36 minutes across three projects at once. An earlier, narrower version
+# of this rule — suppress only the branch pipeline, standard GitLab
+# duplicate-pipeline guard — was tried first and found insufficient: it does
+# nothing about an already-merged MR's pipeline, which is what caused that
+# stall. This is the superseding, final decision: suppress both.
+#
+# Cost, stated plainly: a feature-branch push gets no CI pipeline at all —
+# that is the intent, not an oversight — and neither does a web- or
+# API-triggered pipeline on a non-default branch (its $CI_COMMIT_BRANCH is
+# set but is not $CI_DEFAULT_BRANCH, so it falls through to the final
+# `when: never` below), which removes the manual escape hatch on branches.
+# This costs nothing in practice on this fleet:
+# `only_allow_merge_if_pipeline_succeeds` is false on every project here
+# (true only on raddr, until that was also flipped false — see
+# RADD-dyqdamzt), so a CI result has never gated a merge. What does gate a
+# merge is `main` being a protected branch (Maintainer-only push/merge,
+# force-push refused) on every project, and the pre-push `verify` hook below,
+# which runs the same chain before the branch is ever pushed.
+# --------------------------------------------------------------------------
+workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    # Without these, triggering a pipeline by hand on a feature branch — from
-    # the UI or the API — resolves to no jobs at all and GitLab rejects it as
-    # "the resulting pipeline would have been empty".
-    - if: $CI_PIPELINE_SOURCE == "web"
-    - if: $CI_PIPELINE_SOURCE == "api"
+    - when: never
+
+# Every pipeline that reaches a job now already carries either a tag or a
+# push to main (the workflow: rules above filter everything else out before
+# any job-level rule is evaluated) — so the merge-request/web/api branches
+# this template used to carry can never match and have been dropped rather
+# than left as dead config. Kept as a named template, extended by five jobs,
+# rather than inlined identically five times.
+.on-main:
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 .scheduled-or-manual:
   rules:
@@ -171,7 +211,9 @@ default:
       allow_failure: true
 
 # --------------------------------------------------------------------------
-# verify — the fast gate, on every merge request and every push to main
+# verify — the fast gate, on every push to main (see workflow: above — no
+# merge-request or branch pipeline runs, so this is the only pipeline a
+# change gets)
 # --------------------------------------------------------------------------
 
 # lintr::lint_package() plus `R CMD check --as-cran`, which is the same chain
@@ -196,7 +238,7 @@ default:
 verify:
   extends:
     - .r
-    - .on-mr-and-main
+    - .on-main
   stage: verify
   script:
     - Rscript -e 'pak::pak(c("any::lintr", "any::rcmdcheck", "any::styler"))'
@@ -208,7 +250,7 @@ verify:
 # Version, which catches a stale heading left in at release. Pure shell, so it
 # does not need the R image and runs in seconds.
 news-version:
-  extends: .on-mr-and-main
+  extends: .on-main
   stage: verify
   image: alpine:3
   before_script:
@@ -238,7 +280,7 @@ news-version:
 # Python, so it runs in seconds without the R image - same shape as
 # news-version above.
 citation-version:
-  extends: .on-mr-and-main
+  extends: .on-main
   stage: verify
   image: python:3.13-alpine
   script:
@@ -251,7 +293,7 @@ citation-version:
 readme:
   extends:
     - .r
-    - .on-mr-and-main
+    - .on-main
   stage: verify
   script:
     # Deliberately NOT `pak::pak(c("any::devtools", "local::."))`. Handing
@@ -288,7 +330,7 @@ readme:
 coverage:
   extends:
     - .r
-    - .on-mr-and-main
+    - .on-main
   stage: check
   script:
     # covr::package_coverage() installs the package to measure it, so seor's

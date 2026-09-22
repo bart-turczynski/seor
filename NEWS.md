@@ -65,3 +65,8 @@
   slower. `pagerankr`, `sitemapr` and `robotstxtr` stay listed because they are
   still off CRAN, so the rule that every non-CRAN dependency is declared in
   `Remotes:` is unchanged (SEOR-hqvzcfnc).
+* CI now runs only the pipeline on `main`: a top-level `workflow:` block
+  suppresses both the merge-request pipeline and the branch pipeline, so a
+  merged slice produces one pipeline instead of up to three. A feature-branch
+  push, and a web/API-triggered pipeline on a non-default branch, now get no
+  CI at all (SEOR-bmgkzhvy).
