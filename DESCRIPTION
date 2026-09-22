@@ -35,10 +35,7 @@ Suggests:
     testthat (>= 3.0.0)
 Remotes:
     gitlab::bart-turczynski/pagerankr,
-    gitlab::bart-turczynski/pslr,
-    gitlab::bart-turczynski/punycoder,
     gitlab::bart-turczynski/robotstxtr,
-    gitlab::bart-turczynski/rurl,
     gitlab::bart-turczynski/sitemapr
 Config/testthat/edition: 3
 VignetteBuilder: knitr
