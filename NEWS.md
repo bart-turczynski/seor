@@ -68,5 +68,7 @@
 * CI now runs only the pipeline on `main`: a top-level `workflow:` block
   suppresses both the merge-request pipeline and the branch pipeline, so a
   merged slice produces one pipeline instead of up to three. A feature-branch
-  push, and a web/API-triggered pipeline on a non-default branch, now get no
-  CI at all (SEOR-bmgkzhvy).
+  push, and an API-triggered pipeline on a non-default branch, now get no CI
+  at all. Hand-starting one from Build > Pipelines > Run pipeline still works
+  on any ref, and runs the full gate there; `pages` is the one job pinned to
+  `main`, so a branch can be verified but never published (SEOR-bmgkzhvy).
