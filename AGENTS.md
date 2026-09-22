@@ -61,6 +61,8 @@ On every commit, lightweight hooks run: end-of-file fixer, trailing-whitespace t
 
 On `git push`, the `verify` hook runs the project's verify command — the same chain CI runs. GitLab Free does offer protected branches, so wire those up too, but they only gate what reaches the default branch; this local hook blocks a push whose tree would turn CI red before it ever leaves your machine.
 
+**On a feature branch this hook is the only gate that runs anywhere, and that is deliberate.** `.gitlab-ci.yml` carries a top-level `workflow:` block admitting only a tag, a push to `main`, or a hand-started (`web`) pipeline — so a branch push creates no pipeline and a merge request creates none either, one pipeline per merge instead of three (SEOR-bmgkzhvy). Do not read a branch's clean pipeline list as a passing result: there is no result. To get a server-side answer on a branch before merging it, start one by hand at **Build > Pipelines > Run pipeline** and pick the ref; the full gate runs there. `pages` is the single exception, pinned to `main`, because it publishes rather than reports.
+
 ### Slice flow (standing authorization)
 
 Work a task as a self-contained slice and carry the whole flow through without pausing to confirm each step: branch → commit → push → open MR → merge → delete branch (local+remote). Do this once the slice is complete and the local verify gate passes. `.claude/settings.json` pre-allows the `git`/`glab` commands this needs, so there are no per-step permission prompts.

@@ -164,11 +164,10 @@ default:
 # stall. This is the superseding, final decision: suppress both.
 #
 # Cost, stated plainly: a feature-branch push gets no CI pipeline at all —
-# that is the intent, not an oversight — and neither does a web- or
-# API-triggered pipeline on a non-default branch (its $CI_COMMIT_BRANCH is
-# set but is not $CI_DEFAULT_BRANCH, so it falls through to the final
-# `when: never` below), which removes the manual escape hatch on branches.
-# This costs nothing in practice on this fleet:
+# that is the intent, not an oversight. An API-triggered pipeline on a
+# non-default branch gets nothing either, for the same reason. A *web*-
+# triggered one does run, and that is the deliberate exception: see the rule
+# below. This costs nothing in practice on this fleet:
 # `only_allow_merge_if_pipeline_succeeds` is false on every project here
 # (true only on raddr, until that was also flipped false — see
 # RADD-dyqdamzt), so a CI result has never gated a merge. What does gate a
@@ -182,17 +181,27 @@ workflow:
       when: never
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    # The escape hatch. `web` means a human opened Build > Pipelines > Run
+    # pipeline and chose a ref, so this can never fire on its own and cannot
+    # reintroduce the three-pipelines-per-merge problem above, which was
+    # entirely push- and merge-request-driven. What it buys back is running
+    # the gate against a feature branch BEFORE it merges (SEOR-bmgkzhvy).
+    - if: $CI_PIPELINE_SOURCE == "web"
     - when: never
 
-# Every pipeline that reaches a job now already carries either a tag or a
-# push to main (the workflow: rules above filter everything else out before
-# any job-level rule is evaluated) — so the merge-request/web/api branches
-# this template used to carry can never match and have been dropped rather
-# than left as dead config. Kept as a named template, extended by five jobs,
-# rather than inlined identically five times.
+# Every pipeline that reaches a job carries a tag, a push to main, or a
+# hand-started `web` run (the workflow: rules above filter everything else out
+# before any job-level rule is evaluated) — so the merge-request and api
+# branches this template used to carry can never match and have been dropped
+# rather than left as dead config. The `web` branch is NOT dead: without it
+# the escape hatch would open a pipeline in which the fast gate is the one
+# thing that cannot run, which is the whole reason to hand-start one. Kept as
+# a named template, extended by five jobs, rather than inlined identically
+# five times.
 .on-main:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "web"
 
 .scheduled-or-manual:
   rules:
@@ -390,7 +399,13 @@ pages:
   stage: pages
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "web"
+    # Deliberately pinned to the default branch, unlike every other job here.
+    # `pages` does not report on a tree, it PUBLISHES one to a live URL, so a
+    # hand-started pipeline on a feature branch must not reach it — the site
+    # would then serve unmerged code with nothing on the page saying so. The
+    # escape hatch added to `workflow:` is for verifying a branch, not for
+    # deploying one (SEOR-bmgkzhvy).
+    - if: $CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       when: manual
   script:
     # Not `pak::pak(c("any::pkgdown", "local::."))`. Handing `local::.` to pak
