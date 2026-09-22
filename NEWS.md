@@ -8,6 +8,12 @@
 
 ## Internal
 
+* The pkgdown site no longer publishes the repository's agent instruction
+  files. pkgdown renders every top-level `.md`, so `AGENTS.html`,
+  `CLAUDE.html` and `AGENTS_LANG.html` were being served next to the function
+  reference; the `pages` job now strips them with a glob before `build_site`
+  (SEOR-pibdjanz).
+
 * The documentation URL in `DESCRIPTION` and `_pkgdown.yml` names the host
   that actually serves the site. GitLab has unique-domain Pages enabled on this
   project, so its canonical address is `https://seor-272402.gitlab.io`, not the
