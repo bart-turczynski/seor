@@ -9,11 +9,18 @@
 #
 # The one structural change worth knowing up front: GitHub split lint, README
 # sync, check and coverage into four jobs because `setup-r-dependencies` cached
-# the package library across them almost for free. Here every job that needs R
-# packages pays for its own `pak` resolution, and on a runner with no binary
-# package server that means compiling from source. So the fast gate is **one**
-# job running the same chain the pre-push hook runs, and the jobs that are
-# genuinely separate concerns are the ones that stayed separate.
+# the package library across them almost for free. So the fast gate here is
+# **one** job running the same chain the pre-push hook runs, and the jobs that
+# are genuinely separate concerns are the ones that stayed separate.
+#
+# That consolidation was originally forced: until 2026-09-23 the runners had no
+# cache backend configured, so the `cache:` block below silently did nothing
+# across jobs and every job that needed R packages paid for its own full `pak`
+# resolution. They now share an S3 cache, so a second job in the same pipeline
+# starts warm — see design/adr/0003-fleet-ci-runs-on-self-hosted-runners.md.
+# Keep the consolidation anyway: it is still fewer runner acquisitions, and the
+# cache is an optimisation, not a guarantee (a DESCRIPTION change invalidates
+# it and the next pipeline is cold again).
 
 stages:
   - verify
@@ -56,6 +63,17 @@ default:
     # GitLab only caches paths under $CI_PROJECT_DIR, and R's user library
     # lives under $HOME — so move it here, then cache it. Without this every
     # job recompiles the full dependency closure from source.
+    #
+    # Setting this variable is NOT sufficient on its own, and was a silent
+    # no-op until 2026-09-23. rocker/r-ver's Renviron.site puts
+    # /usr/local/lib/R/site-library FIRST in .libPaths() and R_LIBS_USER
+    # third, and R installs into the first writable entry — so every package
+    # went into the image's site-library and died with the container, while
+    # `.r-lib` was cached empty (1 entry, 0 MiB, measured). Overriding
+    # R_LIBS_SITE does not help either: Renviron.site wins over the
+    # environment. The .libPaths() line in before_script is what actually
+    # moves the install target; do not remove it and leave this variable
+    # looking like it does the job.
     R_LIBS_USER: "$CI_PROJECT_DIR/.r-lib"
     PKG_CACHE_DIR: "$CI_PROJECT_DIR/.pak-cache"
     # rocker/r-ver bakes a *frozen* p3m snapshot into Rprofile.site at image
@@ -120,7 +138,15 @@ default:
       fi
       echo "options(repos = c(P3M = '${repo}', CRAN = 'https://cloud.r-project.org'))" \
         >> "${R_HOME}/etc/Rprofile.site"
-      Rscript -e 'cat("Effective repos:\n"); print(getOption("repos"))'
+      # Put the cached library FIRST so installs land in it (see R_LIBS_USER
+      # above). Appended to Rprofile.site rather than set as an environment
+      # variable because Renviron.site is read later and overrides the
+      # environment. site-library stays on the path behind it, so the image's
+      # own packages (docopt, littler) remain visible.
+      echo '.libPaths(c(Sys.getenv("R_LIBS_USER"), .libPaths()))' \
+        >> "${R_HOME}/etc/Rprofile.site"
+      Rscript -e 'cat("Effective repos:\n"); print(getOption("repos"))' \
+        -e 'cat("Library paths:\n"); print(.libPaths())'
     - apt-get update -qq
     # rocker/r-ver is a lean image. git is needed because pak and covr shell
     # out to it; the LaTeX set and qpdf are what `R CMD check --as-cran` needs
@@ -149,8 +175,10 @@ default:
 #
 # Before this rule, one unit could fire up to three pipelines: a branch
 # pipeline, a merge-request pipeline, and the push-to-main pipeline that
-# actually gates the work. On the fleet's shared concurrency-1 runner the
-# first two are created FIRST and hold the runner's only slot while main's
+# actually gates the work. On the fleet's self-hosted runners — a small fixed
+# number of slots shared across every repo on one Mac, `concurrent` in
+# ~/.gitlab-runner/config.toml — the first two are created FIRST and hold a
+# slot while main's
 # pipeline sits pending behind them — measured repeatedly on 2026-09-22
 # (SEOR-bmgkzhvy): the branch pipeline is guaranteed waste, because the slice
 # flow deletes the branch at merge, so by the time the runner reaches it the
