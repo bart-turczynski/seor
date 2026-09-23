@@ -133,3 +133,15 @@ unexpected (e.g. misspelled) arguments — for instance with
   together.
 - Never hand-edit generated files: `NAMESPACE` or anything under `man/`. Edit
   the roxygen source in `R/` and re-run `devtools::document()`.
+
+### A red gate on an untouched tree
+
+Toolchain drift makes the verify gate go red on a tree nobody changed, and it
+looks exactly like a defect in the change being made. `scripts/check-toolchain.R`
+runs ahead of the expensive step and names it in one line: roxygen2's installed
+version against this package's `Config/roxygen2/version`, and any installed
+package built under a newer R than the one running. Both have happened, and both
+cost an afternoon (SEOR-tcytizic).
+
+If that check passes and the gate is still red on a tree you have not touched,
+say so and keep the evidence rather than assuming your change caused it.
