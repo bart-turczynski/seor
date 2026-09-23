@@ -69,6 +69,14 @@ dependencies and (2) attach them all on `library(seor)`.
   imported from" — because members are attached at runtime rather than
   `importFrom`'d. This is inherent to the metapackage pattern (`tidyverse` gets
   the same NOTE) and is safe to leave.
+- **The verify gate suppresses CRAN incoming feasibility here, and only here.**
+  Incoming always ERRORs for a metapackage whose members are off CRAN, so
+  `_R_CHECK_CRAN_INCOMING_ = "false"` is deliberate and is not to be removed to
+  fix a red gate. Every other repository in the fleet runs the check, because it
+  is what surfaces dead `URL:`/`BugReports:` links — see
+  [ADR 0004](design/adr/0004-cran-incoming-runs-everywhere-except-seor.md) for
+  the boundary and how the rule is enforced across seven different gate
+  implementations.
 
 ## Membership and CRAN status
 
