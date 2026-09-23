@@ -8,6 +8,13 @@
 
 ## Internal
 
+* CI jobs now reuse the built package library instead of recompiling it. Two
+  faults had to be fixed together: the runners had no cache backend, and
+  `R_LIBS_USER` was a silent no-op because rocker/r-ver's `Renviron.site` puts
+  `site-library` first in `.libPaths()`, so packages installed into the image
+  and the cached `.r-lib` was empty. `before_script` now prepends the cached
+  library via `Rprofile.site` (SEOR-pgammbgo).
+
 * `DESCRIPTION`'s `URL:` now lists the package's r-universe page. r-universe
   records this repository's upstream owner as `gitlab-bart-turczynski` because
   it is hosted on GitLab, which does not match the `bart-turczynski` universe,
