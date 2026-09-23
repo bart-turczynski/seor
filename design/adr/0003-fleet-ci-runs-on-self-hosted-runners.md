@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-09-23
 tracking: SEOR-hhtzaknn, SEOR-pgammbgo
 ---
@@ -67,16 +67,26 @@ source and the build is the expensive part.
 
 ### What that cost, measured on seor
 
-Three full `main` pipelines, same commit, job-duration sums:
+Five full `main` pipelines, same commit, job-duration sums:
 
-    baseline   no cache,   concurrent=2    24.5m compute   33.1m wall
-    run 1      cold cache, concurrent=4    29.2m compute   30.1m wall
-    run 2      warm cache, concurrent=4    26.9m compute   28.2m wall
+    baseline    no cache,       concurrent=2   24.5m compute   33.1m wall
+    backend     cold cache,     concurrent=4   29.2m compute   30.1m wall
+    backend     warm cache,     concurrent=4   26.9m compute   28.2m wall
+    + libPaths  populating run, concurrent=4   12.5m compute
+    + libPaths  fully warm,     concurrent=4    5.5m compute    9.7m wall
 
 The backend alone made compute **worse** — 10% worse than no cache even fully
 warm — because each job paid to download and re-upload a 71 MiB archive whose
-useful half was missing. The wall-time improvement came from `concurrent`, not
-from caching.
+useful half was missing. The wall-time improvement at that stage came from
+`concurrent`, not from caching.
+
+With the library path fixed the archive grew from 71 MiB to 208 MiB
+(`.r-lib`: 1 empty entry → 9445 entries, 273.4 MiB uncompressed) and the
+picture inverted: **78% less compute and 71% less wall time than the
+no-cache baseline.** Per job, warm against baseline:
+
+    verify    333.8s ->  95.9s      coverage  290.0s -> 67.7s
+    readme    418.4s ->  72.2s      pages     420.3s -> 84.2s
 
 ## Decision
 
