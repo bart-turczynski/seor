@@ -15,6 +15,15 @@ attaches them all, the way \code{tidyverse} does for its members.
 Use \code{\link[=seor_packages]{seor_packages()}} to see the member packages and \code{\link[=seor_conflicts]{seor_conflicts()}} to
 inspect function-name collisions on the search path.
 }
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://seor-272402.gitlab.io}
+  \item \url{https://gitlab.com/bart-turczynski/seor}
+  \item \url{https://bart-turczynski.r-universe.dev/seor}
+}
+
+}
 \author{
 \strong{Maintainer}: Bart Turczynski \email{bartek@turczynski.pl}
 

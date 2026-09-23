@@ -11,7 +11,8 @@ Description: The 'seor' suite bundles a set of focused R packages for search
     to library() installs and attaches all of the member packages at once, in
     the style of the 'tidyverse' metapackage.
 URL: https://seor-272402.gitlab.io,
-    https://gitlab.com/bart-turczynski/seor
+    https://gitlab.com/bart-turczynski/seor,
+    https://bart-turczynski.r-universe.dev/seor
 License: MIT + file LICENSE
 Encoding: UTF-8
 Language: en-US
