@@ -1,24 +1,25 @@
 header:
   schema-version: 2.2.0
-  last-updated: '2026-01-01'
-  last-reviewed: '2026-01-01'
+  last-updated: '2026-09-23'
+  last-reviewed: '2026-09-23'
   url: https://gitlab.com/bart-turczynski/seor/-/raw/main/SECURITY-INSIGHTS.yml
   comment: |
     OpenSSF Security Insights self-report. Maintained alongside SECURITY.md
     (human-readable policy) and .bestpractices.json (OpenSSF Best Practices
-    badge self-assessment). Replace bart-turczynski, the maintainer identity, and the
-    dates before publishing.
+    badge self-assessment). Refresh both header dates whenever anything below
+    is re-measured, not only when it changes -- a self-report that claims a
+    review date it never had is the failure mode this file exists to avoid.
 
 project:
   name: seor
-  homepage: https://bart-turczynski.gitlab.io/seor/
+  homepage: https://seor-272402.gitlab.io/
   administrators:
     - name: Bart Turczynski
       email: bartek@turczynski.pl
       primary: true
   documentation:
-    quickstart-guide: https://bart-turczynski.gitlab.io/seor/
-    detailed-guide: https://bart-turczynski.gitlab.io/seor/reference/index.html
+    quickstart-guide: https://seor-272402.gitlab.io/
+    detailed-guide: https://seor-272402.gitlab.io/reference/index.html
     release-process: https://gitlab.com/bart-turczynski/seor/-/blob/main/CONTRIBUTING.md
   repositories:
     - name: seor
@@ -77,9 +78,19 @@ repository:
           release: false
         results: {}
         comment: |
-          Weekly and on-push audit of the runtime dependency closure against the
-          OSV database (osv.dev). No account or secrets required. See
-          the osv-audit job in .gitlab-ci.yml.
+          The osv-audit job in .gitlab-ci.yml audits the runtime dependency
+          closure against the OSV database (osv.dev). No account or secrets
+          required.
+
+          It has no automatic trigger. The job extends .scheduled-or-manual,
+          and this project has no pipeline schedules at all (measured
+          2026-09-23: pipeline_schedules returns []), so it runs only when a
+          pipeline is started by hand from the web UI. It is excluded from
+          .on-mr-and-main, so it does not run on a merge request or a push to
+          the default branch either. Creating the schedule is an owner action,
+          tracked as SEOR-tzxuisnf; the cadence it will take is decided in
+          SEOR-ihmntqzm. This comment states the trigger the job actually has
+          and must be updated in the same change that gives it a schedule.
       - name: oysteR (Sonatype OSS Index)
         type: SCA
         rulesets:
@@ -90,5 +101,14 @@ repository:
           release: false
         results: {}
         comment: |
-          Weekly and on-push audit of declared dependencies against the Sonatype
-          OSS Index. See the security-audit job in .gitlab-ci.yml.
+          The security-audit job in .gitlab-ci.yml audits declared dependencies
+          against the Sonatype OSS Index.
+
+          It has no automatic trigger, for the same reason as osv-audit above:
+          .scheduled-or-manual plus no pipeline schedules means hand-started
+          web pipelines only. It additionally needs the OSSINDEX_USER and
+          OSSINDEX_TOKEN CI/CD variables, which do not exist yet, so a
+          scheduled run would be red until an owner supplies them
+          (SEOR-tzxuisnf). seor's pre-push gate does not reach this audit
+          either: it runs rcmdcheck under rcmd_safe_env(), so skip_on_cran()
+          fires first.
