@@ -93,7 +93,19 @@ default:
   cache:
     # Keyed on DESCRIPTION: the dependency declaration. An R package has no
     # lockfile, so this is the closest thing to one.
+    #
+    # The prefix is load-bearing, not decoration. Every job here extends `.r`,
+    # but `full-check` is a parallel matrix over R_VERSION 4.5.1 and 4.4.3
+    # while the rest run 4.5.1, so without it three jobs on two different R
+    # versions would share one entry and hand each other binaries built by the
+    # wrong interpreter. raddr hit exactly that between its release and devel
+    # jobs and went red on `libxml2.so.2: cannot open shared object file`
+    # (SEOR-huidaviw). It has not fired here only because `full-check` is
+    # .scheduled-or-manual and this project has no schedules (SEOR-tzxuisnf),
+    # so it has never run -- a latent collision waiting on an owner action, not
+    # a safe configuration. $CI_JOB_NAME_SLUG expands per matrix leg.
     key:
+      prefix: "$CI_JOB_NAME_SLUG"
       files:
         - DESCRIPTION
     paths:
@@ -101,6 +113,27 @@ default:
       - .pak-cache
   before_script:
     - mkdir -p "$R_LIBS_USER" "$PKG_CACHE_DIR"
+    # The prefix above stops two DIFFERENT jobs sharing one entry. It cannot
+    # stop ONE job's entry going stale: the cached library is binaries, valid
+    # only for the R and the base image that built them, and neither is in the
+    # key. A pinned image tag makes that rare rather than impossible -- the tag
+    # is re-pushed, and `full-check` resolves R_VERSION at run time. So record
+    # what built the library and discard it when that no longer matches. A
+    # rebuild costs minutes; a library that half-loads costs a red pipeline and
+    # an afternoon reading the wrong logs (SEOR-huidaviw).
+    - |
+      stamp="$R_LIBS_USER/.toolchain-stamp"
+      . /etc/os-release
+      want="$(Rscript -e 'cat(R.version$major, R.version$minor, R.version$platform, sep = "-")')-${ID}-${VERSION_ID}"
+      have="$(cat "$stamp" 2>/dev/null || echo none)"
+      if [ "$have" != "$want" ]; then
+        echo "cache: built by '$have', this job is '$want' -- discarding the cached library"
+        rm -rf "$R_LIBS_USER" "$PKG_CACHE_DIR"
+        install -d "$R_LIBS_USER" "$PKG_CACHE_DIR"
+        printf '%s' "$want" > "$stamp"
+      else
+        echo "cache: '$want' matches the cached library -- keeping it"
+      fi
     # Point R at a snapshot new enough to carry the members (see
     # P3M_SNAPSHOT), then append CRAN itself BEHIND it.
     #
