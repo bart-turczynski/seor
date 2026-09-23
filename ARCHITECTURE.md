@@ -38,7 +38,11 @@ dependencies and (2) attach them all on `library(seor)`.
 - `vignettes/` — long-form documentation.
 - `inst/` — files that ship inside the installed package (`CITATION`, `WORDLIST`).
 - `design/`, `ARCHITECTURE.md` — durable project context. Kept out of the CRAN
-  tarball via `.Rbuildignore`.
+  tarball via `.Rbuildignore`. Two documents here are fleet-wide rather than
+  seor-specific, because seor is where fleet decisions are recorded:
+  [`design/github-mirror.md`](design/github-mirror.md), the procedure for
+  mirroring a GitLab repo to GitHub as proven on the eight R packages, and
+  [`design/badges.md`](design/badges.md).
 - `scripts/` — repository hygiene checks that run from the pre-push hook.
   `check-design.py` owns design-doc hygiene; `check-citation.py` owns the
   agreement between `CITATION.cff`, `.zenodo.json` and `DESCRIPTION`. Both are
