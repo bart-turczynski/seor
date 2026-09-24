@@ -4,7 +4,10 @@
   "identifier": "seor",
   "description": "The 'seor' suite bundles a set of focused R packages for search engine optimization and web-developer workflows: URL parsing, punycode and internationalized-domain conversion, public suffix list lookups, XML sitemap parsing and PageRank estimation. Loading 'seor' with a single call to library() installs and attaches all of the member packages at once, in the style of the 'tidyverse' metapackage.",
   "name": "seor: Easily Install and Load the 'seor' SEO and Developer Tools",
-  "relatedLink": "https://bart-turczynski.gitlab.io/seor/",
+  "relatedLink": [
+    "https://seor-272402.gitlab.io",
+    "https://bart-turczynski.r-universe.dev/seor"
+  ],
   "codeRepository": "https://gitlab.com/bart-turczynski/seor",
   "license": "https://spdx.org/licenses/MIT",
   "version": "0.0.0.9000",
@@ -84,6 +87,12 @@
     },
     {
       "@type": "SoftwareApplication",
+      "identifier": "robotstxtr",
+      "name": "robotstxtr",
+      "sameAs": "https://gitlab.com/bart-turczynski/robotstxtr"
+    },
+    {
+      "@type": "SoftwareApplication",
       "identifier": "rosv",
       "name": "rosv",
       "provider": {
@@ -113,7 +122,72 @@
       "@type": "SoftwareApplication",
       "identifier": "R",
       "name": "R",
-      "version": ">= 4.1.0"
+      "version": ">= 4.0.0"
+    },
+    "2": {
+      "@type": "SoftwareApplication",
+      "identifier": "pagerankr",
+      "name": "pagerankr",
+      "sameAs": "https://gitlab.com/bart-turczynski/pagerankr"
+    },
+    "3": {
+      "@type": "SoftwareApplication",
+      "identifier": "pslr",
+      "name": "pslr",
+      "provider": {
+        "@id": "https://cran.r-project.org",
+        "@type": "Organization",
+        "name": "Comprehensive R Archive Network (CRAN)",
+        "url": "https://cran.r-project.org"
+      },
+      "sameAs": "https://CRAN.R-project.org/package=pslr"
+    },
+    "4": {
+      "@type": "SoftwareApplication",
+      "identifier": "punycoder",
+      "name": "punycoder",
+      "provider": {
+        "@id": "https://cran.r-project.org",
+        "@type": "Organization",
+        "name": "Comprehensive R Archive Network (CRAN)",
+        "url": "https://cran.r-project.org"
+      },
+      "sameAs": "https://CRAN.R-project.org/package=punycoder"
+    },
+    "5": {
+      "@type": "SoftwareApplication",
+      "identifier": "raddr",
+      "name": "raddr",
+      "provider": {
+        "@id": "https://cran.r-project.org",
+        "@type": "Organization",
+        "name": "Comprehensive R Archive Network (CRAN)",
+        "url": "https://cran.r-project.org"
+      },
+      "sameAs": "https://CRAN.R-project.org/package=raddr"
+    },
+    "6": {
+      "@type": "SoftwareApplication",
+      "identifier": "rurl",
+      "name": "rurl",
+      "provider": {
+        "@id": "https://cran.r-project.org",
+        "@type": "Organization",
+        "name": "Comprehensive R Archive Network (CRAN)",
+        "url": "https://cran.r-project.org"
+      },
+      "sameAs": "https://CRAN.R-project.org/package=rurl"
+    },
+    "7": {
+      "@type": "SoftwareApplication",
+      "identifier": "sitemapr",
+      "name": "sitemapr",
+      "sameAs": "https://gitlab.com/bart-turczynski/sitemapr"
+    },
+    "8": {
+      "@type": "SoftwareApplication",
+      "identifier": "utils",
+      "name": "utils"
     },
     "SystemRequirements": null
   },
@@ -136,6 +210,8 @@
     }
   ],
   "releaseNotes": "https://gitlab.com/bart-turczynski/seor/-/blob/main/NEWS.md",
-  "contIntegration": ["https://gitlab.com/bart-turczynski/seor/-/pipelines"],
+  "contIntegration": [
+    "https://gitlab.com/bart-turczynski/seor/-/pipelines"
+  ],
   "developmentStatus": "https://lifecycle.r-lib.org/articles/stages.html#experimental"
 }
