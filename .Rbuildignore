@@ -43,7 +43,6 @@
 # and would otherwise trip "non-standard files/directories" in R CMD check.
 ^\.gitlab$
 ^\.gitlab-ci\.yml$
-^renovate\.json$
 ^\.editorconfig$
 ^\.env$
 ^\.env\.example$

@@ -56,7 +56,7 @@ removed rather than left to render broken:
   supports GitLab as an *import source*, but exposes no equivalent
   unauthenticated `snyk.io/test/gitlab/...` badge — you would have to run
   `snyk monitor` in CI with a `SNYK_TOKEN`, at which point the value over
-  Renovate plus GitLab's own dependency scanning is small. If you do want it,
+  the scheduled `osv-audit` and `security-audit` jobs is small. If you do want it,
   see "Optional: Snyk in CI" below.
 
 ## Per-tool setup

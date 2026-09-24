@@ -280,6 +280,24 @@ workflow:
       when: manual
       allow_failure: true
 
+# The two dependency-vulnerability audits (osv-audit, security-audit) need more
+# than "a schedule": a pipeline schedule alone is not a selector, and a job
+# guarded only by `$CI_PIPELINE_SOURCE == "schedule"` fires on EVERY schedule
+# the project ever gets. So they run only on a schedule that carries
+# SCHEDULE_KIND=dependency-audit (a pipeline-schedule variable set under
+# Build > Pipeline schedules, not here), plus the same hand-started `web`
+# escape hatch as above, and never otherwise (SEOR-fftbjnpl; punycoder's
+# SEOR-ihmntqzm is the same rule). A scheduled pipeline on the default branch
+# is admitted by the `workflow:` rules through the default-branch rule, so
+# this is not dead config.
+.dependency-audit:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_KIND == "dependency-audit"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+      allow_failure: true
+    - when: never
+
 # --------------------------------------------------------------------------
 # verify — the fast gate, on every push to main (see workflow: above — no
 # merge-request or branch pipeline runs, so this is the only pipeline a
@@ -543,8 +561,14 @@ pages:
 #
 # GitLab keeps pipeline schedules in project settings (CI/CD > Schedules), not
 # in this file, so the weekly cadence the GitHub workflows declared with `cron:`
-# is gone until you add a schedule there. Nothing below runs on a merge
-# request, and nothing below can turn one red.
+# is gone until you add a schedule there. The two audits additionally need that
+# schedule to set SCHEDULE_KIND=dependency-audit (see `.dependency-audit`).
+# Nothing below runs on a merge request, and nothing below can turn one red.
+#
+# Nothing below pushes to the repository or needs a write token either. The
+# `renovate` job (and its renovate.json) and `codemeta`'s commit-back to main
+# were removed on 2026-09-24 by owner decision (SEOR-tzxuisnf); each needed a
+# project access token with write scope (RENOVATE_TOKEN, CODEMETA_TOKEN).
 # --------------------------------------------------------------------------
 
 # Dependency vulnerability audit against the OSV database (https://osv.dev) via
@@ -554,7 +578,7 @@ pages:
 osv-audit:
   extends:
     - .r
-    - .scheduled-or-manual
+    - .dependency-audit
   stage: maintenance
   variables:
     # Belt and braces so skip_on_cran() in test-osv.R cannot skip the audit
@@ -604,11 +628,13 @@ osv-audit:
 # Also outstanding, and also an owner gate: this project has no pipeline
 # schedules at all (measured 2026-09-11, `pipeline_schedules` returns `[]`), so
 # neither this job nor `osv-audit` has ever run unattended. Add one under
-# Settings > CI/CD > Schedules.
+# Settings > CI/CD > Schedules, with the variable SCHEDULE_KIND set to
+# `dependency-audit` -- without it neither audit job is created (see
+# `.dependency-audit`).
 security-audit:
   extends:
     - .r
-    - .scheduled-or-manual
+    - .dependency-audit
   stage: maintenance
   variables:
     NOT_CRAN: "true"
@@ -619,66 +645,46 @@ security-audit:
     - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
     - Rscript -e 'testthat::test_local(filter = "security", stop_on_failure = TRUE)'
 
-# Regenerates codemeta.json (the CodeMeta / schema.org description of the
-# package) from DESCRIPTION + inst/CITATION and commits it back, so the
-# committed file stays a faithful mirror without manual upkeep.
+# codemeta.json (the CodeMeta / schema.org description of the package) is
+# generated from DESCRIPTION + inst/CITATION by codemetar. This job regenerates
+# it and FAILS if the result differs from the committed file, so drift is
+# reported instead of silently living on main. To fix a red run:
 #
-# The push is the hard part. GitHub handed the workflow a GITHUB_TOKEN that
-# could write to the repo; CI_JOB_TOKEN cannot push. This needs a project
-# access token with `write_repository` scope exposed as a masked CI/CD variable
-# named CODEMETA_TOKEN, which is why the job is manual/scheduled and
-# non-blocking rather than running on every DESCRIPTION change.
+#   Rscript -e 'codemetar::write_codemeta(".")'
+#
+# then review and commit codemeta.json.
+#
+# It used to commit the regenerated file back to main itself, which needed a
+# project access token with `write_repository` scope (CODEMETA_TOKEN). That
+# push-back was removed on 2026-09-24 by owner decision (SEOR-tzxuisnf): the
+# job now needs no secret and never writes to the repository.
+#
+# Two fields are excluded from the comparison because they describe the run,
+# not the package: `runtimePlatform` (the R version codemetar ran under, which
+# differs between CI's image and a laptop) and `fileSize` (the size of the
+# working tree codemetar measured). Everything else must match.
 codemeta:
   extends:
     - .r
     - .scheduled-or-manual
   stage: maintenance
   script:
-    - Rscript -e 'pak::pak("any::codemetar")'
+    - Rscript -e 'pak::pak(c("any::codemetar", "any::jsonlite"))'
+    - cp codemeta.json /tmp/codemeta.committed.json
     - Rscript -e 'codemetar::write_codemeta(".")'
     - |
-      if [ -z "$(git status --porcelain codemeta.json)" ]; then
-        echo "codemeta.json unchanged."
-        exit 0
-      fi
-      if [ -z "${CODEMETA_TOKEN:-}" ]; then
-        echo "codemeta.json changed but CODEMETA_TOKEN is not set; not pushing."
-        git --no-pager diff -- codemeta.json
-        exit 1
-      fi
-      git config user.name "gitlab-ci"
-      git config user.email "gitlab-ci@$CI_SERVER_HOST"
-      git add codemeta.json
-      git commit -m "chore: refresh codemeta.json [skip ci]"
-      git push "https://codemeta:${CODEMETA_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "HEAD:${CI_DEFAULT_BRANCH}"
-
-# renovate — replaces Dependabot, which is GitHub-only. Needs a RENOVATE_TOKEN
-# CI/CD variable (a project access token with `api` and `write_repository`
-# scope). What it bumps is configured in renovate.json — for an R package that
-# is the CI images and nothing else, since CRAN dependencies are declared as
-# version floors in DESCRIPTION and resolved against current CRAN at install
-# time, so there is no pin to bump.
-renovate:
-  extends: .scheduled-or-manual
-  stage: maintenance
-  image: renovate/renovate:41
-  variables:
-    RENOVATE_PLATFORM: gitlab
-    RENOVATE_ENDPOINT: $CI_API_V4_URL
-    RENOVATE_AUTODISCOVER: "false"
-    RENOVATE_REPOSITORIES: $CI_PROJECT_PATH
-    LOG_LEVEL: info
-  script:
-    # Skip loudly rather than fail when the token is missing: a fresh project has
-    # no RENOVATE_TOKEN by construction, and a red scheduled pipeline for a setup
-    # step nobody has done yet is noise. Every *other* renovate failure — bad
-    # config, API error, auth rejected — now fails the pipeline, which is the
-    # point of dropping `allow_failure` above.
-    - |
-      if [ -z "$RENOVATE_TOKEN" ]; then
-        echo "RENOVATE_TOKEN is not set - skipping renovate."
-        echo "Add it under Settings > CI/CD > Variables: a project access token"
-        echo "with 'api' and 'write_repository' scope."
-        exit 0
-      fi
-    - renovate
+      Rscript -e '
+        volatile <- c("fileSize", "runtimePlatform")
+        strip <- function(path) {
+          x <- jsonlite::read_json(path)
+          x[sort(setdiff(names(x), volatile))]
+        }
+        if (!identical(strip("/tmp/codemeta.committed.json"), strip("codemeta.json"))) {
+          system("git --no-pager diff -- codemeta.json")
+          cat("codemeta.json is out of date with DESCRIPTION / inst/CITATION.\n",
+              "Run codemetar::write_codemeta(\".\") locally and commit codemeta.json.\n",
+              sep = "")
+          quit(status = 1)
+        }
+        cat("codemeta.json matches DESCRIPTION / inst/CITATION.\n")
+      '
