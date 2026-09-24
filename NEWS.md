@@ -8,6 +8,9 @@
 * `raddr` (IP address parsing and classification) joins the core members, and
   `ssrfr` (SSRF guard, in design) joins `robotstxtr` as a planned member that
   is attached only when installed.
+* The citation metadata now carries the maintainer's ORCID iD
+  (0000-0002-8788-7980): `citation("seor")`, the package author line,
+  `CITATION.cff`, `.zenodo.json` and `codemeta.json` (SEOR-dvbdsvuq).
 
 ## Internal
 
@@ -100,3 +103,14 @@
   at all. Hand-starting one from Build > Pipelines > Run pipeline still works
   on any ref, and runs the full gate there; `pages` is the one job pinned to
   `main`, so a branch can be verified but never published (SEOR-bmgkzhvy).
+* CI no longer writes to the repository or needs a write token. The
+  `renovate` job and `renovate.json` are gone, and the `codemeta` job no longer
+  commits to `main` with `CODEMETA_TOKEN`: it regenerates `codemeta.json` and
+  fails if it differs from the committed file (SEOR-tzxuisnf).
+* `osv-audit` and `security-audit` run only on a pipeline schedule that sets
+  `SCHEDULE_KIND=dependency-audit` (or when started by hand), so a schedule
+  added for another purpose no longer fires them (SEOR-fftbjnpl).
+* `CONTRIBUTING.md` explains that CI runs on self-hosted runners on the
+  maintainer's Mac, so a job failing with `stuck_pending_no_matching_runners`
+  is the machine being asleep or the runner stopped, not the code, and how
+  to confirm and retry it (SEOR-hhtzaknn).
