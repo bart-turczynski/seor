@@ -5,9 +5,7 @@
   `punycoder`, `pslr`, `sitemapr` and `pagerankr`; the planned member
   `robotstxtr` is attached opportunistically when installed.
 * Added `seor_packages()` and `seor_conflicts()` helpers.
-* `raddr` (IP address parsing and classification) joins the core members, and
-  `ssrfr` (SSRF guard, in design) joins `robotstxtr` as a planned member that
-  is attached only when installed.
+* `raddr` (IP address parsing and classification) joins the core members.
 
 ## Internal
 

@@ -37,8 +37,8 @@ seor_packages()
 | `sitemapr`  | XML sitemap parsing                            |
 | `pagerankr` | PageRank estimation                            |
 
-`robotstxtr` and `ssrfr` are planned members; once installed, `library(seor)`
-attaches them automatically alongside the core packages.
+`robotstxtr` is a planned member; once it is installed, `library(seor)` attaches
+it automatically alongside the core packages.
 
 If two attached packages export the same name, `seor_conflicts()` reports which
 package wins on the search path:
