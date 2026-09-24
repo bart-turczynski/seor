@@ -34,9 +34,11 @@ member; `library(seor)` attaches them all at once, in the style of the
 | `rurl`       | URL parsing and manipulation                   |   yes   |
 | `punycoder`  | Punycode / internationalized-domain conversion |   yes   |
 | `pslr`       | Public Suffix List lookups                     |   yes   |
+| `raddr`      | IP address parsing and classification          |   yes   |
 | `sitemapr`   | XML sitemap parsing                            |   no    |
 | `pagerankr`  | PageRank estimation                            |   no    |
 | `robotstxtr` | `robots.txt` parsing (planned)                 |   no    |
+| `ssrfr`      | SSRF guard for outbound requests (planned)     |   no    |
 
 Because some members are not yet on CRAN, `seor` is installed from
 GitLab for now (a metapackage cannot go to CRAN until all of its hard

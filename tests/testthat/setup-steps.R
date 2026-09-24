@@ -12,7 +12,14 @@ if (requireNamespace("cucumber", quietly = TRUE)) {
   })
 
   then("the core members are listed", function(context) {
-    core_members <- c("rurl", "punycoder", "pslr", "sitemapr", "pagerankr")
+    core_members <- c(
+      "rurl",
+      "punycoder",
+      "pslr",
+      "raddr",
+      "sitemapr",
+      "pagerankr"
+    )
     expect_true(all(core_members %in% context$packages))
   })
 }
