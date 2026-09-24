@@ -27,6 +27,12 @@
   reference; the `pages` job now strips them with a glob before `build_site`
   (SEOR-pibdjanz).
 
+* That filter now fails closed. The `pages` job keeps an explicit list of the
+  top-level `.md` files meant for the site and moves every other one aside, so
+  an agent file with a new name is private by default instead of published.
+  Every page that was live when the change landed is on the list, so nothing
+  already published was taken down (SEOR-wqxhftpv).
+
 * The documentation URL in `DESCRIPTION` and `_pkgdown.yml` names the host
   that actually serves the site. GitLab has unique-domain Pages enabled on this
   project, so its canonical address is `https://seor-272402.gitlab.io`, not the
