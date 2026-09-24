@@ -81,6 +81,17 @@ dependencies and (2) attach them all on `library(seor)`.
   [ADR 0004](design/adr/0004-cran-incoming-runs-everywhere-except-seor.md) for
   the boundary and how the rule is enforced across seven different gate
   implementations.
+- **seor's cheap CI jobs are deliberately not folded into one.** The fleet folded
+  its cheap verify jobs into a single `gates` job to buy wall time; seor did not,
+  because fixing the cache took the six jobs a merge pipeline runs here from
+  24.5m of compute to 5.5m without touching job structure. See
+  [ADR 0005](design/adr/0005-cheap-ci-jobs-fold-into-one-gates-job.md) for the
+  decision and its boundary, and
+  [ADR 0003](design/adr/0003-fleet-ci-runs-on-self-hosted-runners.md) for the
+  cache mechanism. Two standing rules from ADR 0005 apply here even though seor
+  was not folded: never fold jobs for compute reasons, and a job carrying its own
+  `image:` cannot be folded into one that does not — `glab ci lint` passes on
+  that bug.
 
 ## Membership and CRAN status
 
