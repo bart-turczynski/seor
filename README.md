@@ -38,7 +38,6 @@ member; `library(seor)` attaches them all at once, in the style of the
 | `sitemapr`   | XML sitemap parsing                            |   no    |
 | `pagerankr`  | PageRank estimation                            |   no    |
 | `robotstxtr` | `robots.txt` parsing (planned)                 |   no    |
-| `ssrfr`      | SSRF guard for outbound requests (planned)     |   no    |
 
 Because some members are not yet on CRAN, `seor` is installed from
 GitLab for now (a metapackage cannot go to CRAN until all of its hard

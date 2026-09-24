@@ -1,7 +1,7 @@
 ## Submission note
 
-Not yet submittable to CRAN: the member packages `sitemapr`, `pagerankr`,
-`robotstxtr` and `ssrfr` are not yet on CRAN, and a metapackage's hard dependencies must all
+Not yet submittable to CRAN: the member packages `sitemapr`, `pagerankr` and
+`robotstxtr` are not yet on CRAN, and a metapackage's hard dependencies must all
 be on CRAN. Remove the `Remotes:` field and move any then-published members into
 `Imports:` before the first CRAN submission.
 

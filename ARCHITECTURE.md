@@ -66,9 +66,9 @@ dependencies and (2) attach them all on `library(seor)`.
   search path rather than re-exporting its functions, so every member stays a
   fully independent, standalone package usable without the umbrella. This
   matches `tidyverse`.
-- **Optional members degrade quietly.** `robotstxtr` and `ssrfr` are declared
-  under `Suggests` and attached only when already installed, so the suite still
-  loads without them.
+- **Optional members degrade quietly.** `robotstxtr` is declared under
+  `Suggests` and attached only when already installed, so the suite still loads
+  without it.
 - **`R CMD check` reports one expected NOTE** — "Namespaces in Imports field not
   imported from" — because members are attached at runtime rather than
   `importFrom`'d. This is inherent to the metapackage pattern (`tidyverse` gets
@@ -108,11 +108,10 @@ declared in `Remotes:`. When a member is published, its `Remotes:` line goes.
 | `sitemapr`  | core            |   no    | Imports + Remotes  |
 | `pagerankr` | core            |   no    | Imports + Remotes  |
 | `robotstxtr`| planned/optional|   no    | Suggests + Remotes |
-| `ssrfr`     | planned/optional|   no    | Suggests + Remotes |
 
 **Key constraint:** a metapackage cannot be submitted to CRAN while any hard
 dependency is off CRAN. Until `sitemapr` and `pagerankr` (and, for the optional
-members, `robotstxtr` and `ssrfr`) are published, `seor` stays forge-only. `Remotes:` must be
+member, `robotstxtr`) are published, `seor` stays forge-only. `Remotes:` must be
 absent from a CRAN tarball, so the last entries go at the first submission.
 
 ## Name history

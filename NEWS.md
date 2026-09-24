@@ -5,9 +5,7 @@
   `punycoder`, `pslr`, `sitemapr` and `pagerankr`; the planned member
   `robotstxtr` is attached opportunistically when installed.
 * Added `seor_packages()` and `seor_conflicts()` helpers.
-* `raddr` (IP address parsing and classification) joins the core members, and
-  `ssrfr` (SSRF guard, in design) joins `robotstxtr` as a planned member that
-  is attached only when installed.
+* `raddr` (IP address parsing and classification) joins the core members.
 * The citation metadata now carries the maintainer's ORCID iD
   (0000-0002-8788-7980): `citation("seor")`, the package author line,
   `CITATION.cff`, `.zenodo.json` and `codemeta.json` (SEOR-dvbdsvuq).
