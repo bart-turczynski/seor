@@ -1,17 +1,19 @@
 test_that("seor_packages() returns the core members", {
   expect_setequal(
     seor_packages(),
-    c("rurl", "punycoder", "pslr", "sitemapr", "pagerankr")
+    c("rurl", "punycoder", "pslr", "raddr", "sitemapr", "pagerankr")
   )
 })
 
-test_that("include_optional only adds robotstxtr when it is installed", {
+test_that("include_optional only adds planned members that are installed", {
   pkgs <- seor_packages(include_optional = TRUE)
   expect_true(all(seor_packages() %in% pkgs))
-  if (requireNamespace("robotstxtr", quietly = TRUE)) {
-    expect_true("robotstxtr" %in% pkgs)
-  } else {
-    expect_false("robotstxtr" %in% pkgs)
+  for (member in c("robotstxtr", "ssrfr")) {
+    if (requireNamespace(member, quietly = TRUE)) {
+      expect_true(member %in% pkgs)
+    } else {
+      expect_false(member %in% pkgs)
+    }
   }
 })
 
