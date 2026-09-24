@@ -104,9 +104,9 @@
   on any ref, and runs the full gate there; `pages` is the one job pinned to
   `main`, so a branch can be verified but never published (SEOR-bmgkzhvy).
 * CI no longer writes to the repository or needs a write token. The
-  `renovate` job and `renovate.json` are gone, and the `codemeta` job no longer
-  commits to `main` with `CODEMETA_TOKEN`: it regenerates `codemeta.json` and
-  fails if it differs from the committed file (SEOR-tzxuisnf).
+  `renovate` job and `renovate.json` are gone, and so is the `codemeta` job
+  that committed to `main` with `CODEMETA_TOKEN`; `codemeta.json` is now
+  maintained by hand (SEOR-tzxuisnf).
 * `osv-audit` and `security-audit` run only on a pipeline schedule that sets
   `SCHEDULE_KIND=dependency-audit` (or when started by hand), so a schedule
   added for another purpose no longer fires them (SEOR-fftbjnpl).

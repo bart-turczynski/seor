@@ -567,9 +567,11 @@ pages:
 # Nothing below runs on a merge request, and nothing below can turn one red.
 #
 # Nothing below pushes to the repository or needs a write token either. The
-# `renovate` job (and its renovate.json) and `codemeta`'s commit-back to main
-# were removed on 2026-09-24 by owner decision (SEOR-tzxuisnf); each needed a
-# project access token with write scope (RENOVATE_TOKEN, CODEMETA_TOKEN).
+# `renovate` job (and its renovate.json) was removed on 2026-09-24 by owner
+# decision (SEOR-tzxuisnf), and so was the `codemeta` job: codemetar derives
+# `issueTracker` from BugReports' `/-/issues`, while the fleet's committed
+# codemeta.json points humans at `/-/work_items` (SEOR-ocbtrrnl), so any
+# regenerate-and-compare job is red forever. codemeta.json is hand-maintained.
 # --------------------------------------------------------------------------
 
 # Dependency vulnerability audit against the OSV database (https://osv.dev) via
@@ -645,47 +647,3 @@ security-audit:
     - Rscript -e 'pak::pak(c("any::oysteR", "any::testthat"))'
     - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
     - Rscript -e 'testthat::test_local(filter = "security", stop_on_failure = TRUE)'
-
-# codemeta.json (the CodeMeta / schema.org description of the package) is
-# generated from DESCRIPTION + inst/CITATION by codemetar. This job regenerates
-# it and FAILS if the result differs from the committed file, so drift is
-# reported instead of silently living on main. To fix a red run:
-#
-#   Rscript -e 'codemetar::write_codemeta(".")'
-#
-# then review and commit codemeta.json.
-#
-# It used to commit the regenerated file back to main itself, which needed a
-# project access token with `write_repository` scope (CODEMETA_TOKEN). That
-# push-back was removed on 2026-09-24 by owner decision (SEOR-tzxuisnf): the
-# job now needs no secret and never writes to the repository.
-#
-# Two fields are excluded from the comparison because they describe the run,
-# not the package: `runtimePlatform` (the R version codemetar ran under, which
-# differs between CI's image and a laptop) and `fileSize` (the size of the
-# working tree codemetar measured). Everything else must match.
-codemeta:
-  extends:
-    - .r
-    - .scheduled-or-manual
-  stage: maintenance
-  script:
-    - Rscript -e 'pak::pak(c("any::codemetar", "any::jsonlite"))'
-    - cp codemeta.json /tmp/codemeta.committed.json
-    - Rscript -e 'codemetar::write_codemeta(".")'
-    - |
-      Rscript -e '
-        volatile <- c("fileSize", "runtimePlatform")
-        strip <- function(path) {
-          x <- jsonlite::read_json(path)
-          x[sort(setdiff(names(x), volatile))]
-        }
-        if (!identical(strip("/tmp/codemeta.committed.json"), strip("codemeta.json"))) {
-          system("git --no-pager diff -- codemeta.json")
-          cat("codemeta.json is out of date with DESCRIPTION / inst/CITATION.\n",
-              "Run codemetar::write_codemeta(\".\") locally and commit codemeta.json.\n",
-              sep = "")
-          quit(status = 1)
-        }
-        cat("codemeta.json matches DESCRIPTION / inst/CITATION.\n")
-      '
