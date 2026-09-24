@@ -16,7 +16,7 @@ solely to satisfy those integrations, at zero Actions-runner cost.
 
 **Reading guide.** §1–4 are ecosystem-agnostic — read these for a Python, JS,
 or C++ repo and stop there. §5 (Zenodo) is also universal: any repo wanting a
-DOI works the same way. §6 is currently a stub — it is blocked and there is
+DOI works the same way. §6 is currently a stub — it is parked and there is
 nothing to read yet. §7 is R-only (R-hub, r-universe, CRAN); skip it entirely
 for a non-R repo.
 
@@ -401,27 +401,29 @@ of language:
 - A release does **not** wake disabled Actions — confirmed by an unchanged
   run count immediately before and after `gh release create`.
 
-## 6. The `cran-prep` trigger guard — BLOCKED, pending SEOR-fybaobgk
+## 6. The `cran-prep` trigger guard — PARKED (SEOR-fybaobgk)
 
 **This section is intentionally a stub.** SEOR-fybaobgk (the manual-dispatch
 `cran-prep.yml` workflow and the guard that keeps any future workflow file
-from reintroducing `push`/`pull_request`/`schedule` triggers) is `todo` and
-untouched as of 2026-09-23 — no guard script exists, no workflow file exists,
-nothing has been built. Do not treat the workflow-trigger check in §2.1 as
-that guard: §2.1 is a one-time manual read done during rollout, not an
-enforced, durable check. Until SEOR-fybaobgk lands, GitHub Actions stays
-disabled on every mirrored repo, full stop — there is no repo in the fleet
-where it's currently safe to turn Actions on. This section gets filled in
-once that ticket produces something proven; nothing generalized beyond it
-belongs here yet.
+from reintroducing `push`/`pull_request`/`schedule` triggers) was parked on
+2026-09-24: on 2026-09-23 the owner chose `rhub::rc_submit()` for R-hub and
+decided that GitHub Actions stay off (SEOR-wnbjpydq), which left the workflow
+with no consumer. Nothing was built under it — no guard script, no workflow
+file. Do not treat the workflow-trigger check in §2.1 as that guard: §2.1 is
+a one-time manual read done during rollout, not an enforced, durable check.
+GitHub Actions stays disabled on every mirrored repo, full stop — there is no
+repo in the fleet where it's currently safe to turn Actions on. This section
+gets filled in only if that ticket is unparked and produces something proven.
 
 ## 7. R-specific extras
 
 These apply only to R packages and have no equivalent for a non-R mirror.
 
-- **R-hub v2** (`rhub::rhub_check()`) dispatches checks as GitHub Actions
-  runs in the package's own GitHub repo — it's the reason Actions needs to
-  exist on GitHub at all for this fleet, gated behind §6.
+- **R-hub v2**: use `rhub::rc_submit()`, which runs on R-hub's own
+  infrastructure and needs no forge account. `rhub::rhub_check()` dispatches
+  GitHub Actions runs in the package's own GitHub repo, which would mean
+  turning Actions on; the fleet decided against that (SEOR-wnbjpydq,
+  2026-09-23), and §6 is parked accordingly.
 - **r-universe**: create the registry repo, install the r-universe GitHub
   App, **then** push `packages.json` — in that order. Installing the app
   against an empty/nonexistent registry does not itself trigger a sync; the
@@ -439,7 +441,7 @@ These apply only to R packages and have no equivalent for a non-R mirror.
   version and URLs, not its DOI identifiers or dates — so a stale DOI in
   `CITATION.cff` or a `NEWS.md` top heading that still names a released
   version number (instead of "(development version)") after a dev-cycle
-  bump can sit undetected until the next `cran-prep` run fails on it
+  bump can sit undetected until the next pre-submission check fails on it
   (SEOR-bzqbjxxo, 2026-09-20 10:48).
 
 ## Sources
@@ -460,7 +462,10 @@ These apply only to R packages and have no equivalent for a non-R mirror.
 - SEOR-bzqbjxxo — Zenodo versioning through GitHub Releases, all of §5.
 - SEOR-mqwxeblh — the r-universe registry/app/push ordering gotcha in §7.
 - SEOR-fybaobgk — confirms §6 is genuinely untouched (`todo`, 2 comments,
-  neither containing implementation work) as of 2026-09-23.
+  neither containing implementation work) as of 2026-09-23; parked
+  2026-09-24 (SEOR-wpmpmlaa).
+- SEOR-wnbjpydq — the 2026-09-23 decision: R-hub via `rhub::rc_submit()`,
+  GitHub Actions stay off.
 - SEOR-jfoszwzz — this ticket's own 2026-09-22 audit comment, source for the
   Pages-verification-via-API and forced-visibility-decision additions in §1
   and §2.3.
