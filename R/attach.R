@@ -1,9 +1,9 @@
 # The core members of the seor suite. These are attached when a user runs
 # library(seor). Keep this list in sync with Imports: in DESCRIPTION.
 #
-# robotstxtr and ssrfr are planned members: they are declared under Suggests
-# (not yet on CRAN) and are only attached opportunistically once installed, so
-# the suite does not fail to load without them.
+# robotstxtr is a planned member: it is declared under Suggests (not yet on
+# CRAN) and is only attached opportunistically once it is installed, so the
+# suite does not fail to load without it.
 core <- c(
   "rurl", # URL parsing and manipulation
   "punycoder", # punycode / internationalized-domain conversion
@@ -13,12 +13,12 @@ core <- c(
   "pagerankr" # PageRank estimation
 )
 
-optional <- c("robotstxtr", "ssrfr")
+optional <- "robotstxtr"
 
 #' The member packages of the seor suite
 #'
 #' @param include_optional Whether to append planned members (currently
-#'   `robotstxtr` and `ssrfr`) that are only attached when already installed.
+#'   `robotstxtr`) that are only attached when already installed.
 #'
 #' @return A character vector of package names.
 #'
