@@ -441,9 +441,10 @@ coverage:
         coverage_format: cobertura
         path: cobertura.xml
 
-# The cross-platform matrix, reduced to what GitLab.com actually offers for
-# free. GitHub ran macOS, Windows and Ubuntu on R devel/release/oldrel-1;
-# GitLab.com's macOS and Windows runners are paid tiers, and there is no
+# The cross-platform matrix, reduced to what this fleet's runners can run.
+# GitHub ran macOS, Windows and Ubuntu on R devel/release/oldrel-1; CI here
+# runs only on self-hosted Linux Docker runners (ADR 0003; GitLab.com's own
+# macOS and Windows runners are paid tiers), and there is no
 # `r-version: devel` equivalent to point an image at. So this keeps the R
 # version axis on Linux and the rest moves to R-hub before a CRAN submission —
 # `rhub::rc_submit()` runs on R-hub's own infrastructure and needs no forge
