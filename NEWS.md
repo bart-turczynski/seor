@@ -9,6 +9,11 @@
 * The maintainer's ORCID iD is now in `DESCRIPTION`, `citation("seor")`,
   `CITATION.cff` and `.zenodo.json`. The README carries the OpenSSF Best
   Practices badge (project 14932) (SEOR-dvbdsvuq, SEOR-oaqnafzs).
+* `DESCRIPTION` has a `BugReports` field that points at the GitLab issue
+  tracker. `CONTRIBUTING.md` says where to report bugs and what a merge
+  request needs. `SECURITY.md` names the private channels: a confidential
+  GitLab issue or email. `.bestpractices.json` names GitLab as the tracker
+  and CI instead of GitHub (SEOR-oaqnafzs, SEOR-wmtfrsjq).
 
 ## Internal
 
