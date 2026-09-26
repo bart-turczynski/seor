@@ -4,7 +4,6 @@
 # seor
 
 <!-- badges: start -->
-
 <!-- The lifecycle starts at "experimental" — bump it to "stable" once the API
      settles and the package is on CRAN, and add a CRAN downloads badge then.
      Coverage comes from GitLab's own badge, so it needs no account or token;
