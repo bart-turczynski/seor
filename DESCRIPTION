@@ -14,6 +14,7 @@ Description: The 'seor' suite bundles a set of focused R packages for search
 URL: https://seor-272402.gitlab.io,
     https://gitlab.com/bart-turczynski/seor,
     https://bart-turczynski.r-universe.dev/seor
+BugReports: https://gitlab.com/bart-turczynski/seor/-/work_items
 License: MIT + file LICENSE
 Encoding: UTF-8
 Language: en-US
