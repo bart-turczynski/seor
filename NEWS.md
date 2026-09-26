@@ -17,6 +17,11 @@
 
 ## Internal
 
+* `.bestpractices.json` answers every passing-level OpenSSF criterion (75
+  fields, the same set the member packages answer). `SECURITY.md` now commits
+  to acknowledging a report within 7 days, as the members' policies do
+  (SEOR-oaqnafzs).
+
 * `CONTRIBUTING.md` has a stuck-pending runbook. A job that fails with
   `stuck_pending_no_matching_runners` means the self-hosted runner was
   offline, not that the code is broken. The runbook covers bringing the
