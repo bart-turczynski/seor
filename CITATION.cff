@@ -2,13 +2,11 @@
 # not render a "Cite this repository" panel the way GitHub does, but the format
 # is forge-independent: cffconvert, Zenodo and the R package cffr all read it,
 # which is why it still ships. Kept out of the CRAN tarball via .Rbuildignore.
-# After you replace the maintainer identity, add your ORCID below, and once the
-# package has a Zenodo DOI add `doi:` and an `identifiers:` block.
+# Once the package has a Zenodo DOI, add `doi:` and an `identifiers:` block.
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
 title: "seor"
-# TODO(ORCID): add `orcid:` under authors once an ORCID iD is registered.
 abstract: >-
   The 'seor' suite bundles a set of focused R packages for search engine optimization and web-developer workflows: URL parsing, punycode and internationalized-domain conversion, public suffix list lookups, XML sitemap parsing and PageRank estimation. Loading 'seor' with a single call to library() installs and attaches all of the member packages at once, in the style of the 'tidyverse' metapackage.
 version: 0.0.0.9000
@@ -16,6 +14,7 @@ authors:
   - family-names: Turczynski
     given-names: Bart
     email: bartek@turczynski.pl
+    orcid: "https://orcid.org/0000-0002-8788-7980"
 repository-code: "https://gitlab.com/bart-turczynski/seor"
 url: "https://seor-272402.gitlab.io"
 license: MIT

@@ -4,6 +4,7 @@
 # seor
 
 <!-- badges: start -->
+
 <!-- The lifecycle starts at "experimental" — bump it to "stable" once the API
      settles and the package is on CRAN, and add a CRAN downloads badge then.
      Coverage comes from GitLab's own badge, so it needs no account or token;
@@ -17,10 +18,9 @@ status](https://www.r-pkg.org/badges/version/seor)](https://CRAN.R-project.org/p
 [![Coverage](https://gitlab.com/bart-turczynski/seor/badges/main/coverage.svg)](https://gitlab.com/bart-turczynski/seor/-/pipelines)
 [![Lifecycle:
 experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
-<!-- Register at https://www.bestpractices.dev/projects/new, replace PROJECT_ID,
-     then uncomment the badge below.
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/PROJECT_ID/badge)](https://www.bestpractices.dev/projects/PROJECT_ID)
---> <!-- badges: end -->
+[![OpenSSF Best
+Practices](https://www.bestpractices.dev/projects/14932/badge)](https://www.bestpractices.dev/projects/14932)
+<!-- badges: end -->
 
 `seor` bundles a suite of focused R packages for SEO and web-developer
 workflows into a single metapackage. Installing `seor` installs every
