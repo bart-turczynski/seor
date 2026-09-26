@@ -6,6 +6,9 @@
   `robotstxtr` is attached opportunistically when installed.
 * Added `seor_packages()` and `seor_conflicts()` helpers.
 * `raddr` (IP address parsing and classification) joins the core members.
+* The maintainer's ORCID iD is now in `DESCRIPTION`, `citation("seor")`,
+  `CITATION.cff` and `.zenodo.json`. The README carries the OpenSSF Best
+  Practices badge (project 14932) (SEOR-dvbdsvuq, SEOR-oaqnafzs).
 
 ## Internal
 

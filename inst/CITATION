@@ -13,7 +13,8 @@ note <- sprintf("R package version %s", meta$Version)
 bibentry(
   bibtype = "Manual",
   title   = "{seor}: Easily Install and Load the 'seor' SEO and Developer Tools",
-  author  = person("Bart", "Turczynski"),
+  author  = person("Bart", "Turczynski",
+                   comment = c(ORCID = "0000-0002-8788-7980")),
   year    = year,
   note    = note,
   url     = "https://gitlab.com/bart-turczynski/seor"
