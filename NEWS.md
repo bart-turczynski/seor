@@ -20,7 +20,8 @@
 * `scripts/bestpractices-url.py` turns `.bestpractices.json` into
   bestpractices.dev edit links, because the site does not read the file from a
   GitLab repository. `--check` verifies the live entry against the file
-  (SEOR-oaqnafzs).
+  (SEOR-oaqnafzs). The script is vendored into the member packages, and an
+  implementation digest, checked on every run, catches a copy that drifts.
 
 * `.bestpractices.json` answers all 67 passing-level OpenSSF criteria, plus
   six silver-level ones the member packages also answer. `SECURITY.md` now commits
