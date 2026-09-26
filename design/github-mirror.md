@@ -83,6 +83,13 @@ Dependabot-updates entry cannot be disabled via API (`422`) while
 first mirror push deletes that file, so don't spend time fighting the 422
 (SEOR-zfpaxrxk, 2026-09-19).
 
+Even after that, `actions/workflows` can go on listing `Dependabot Updates`
+(`dynamic/dependabot/dependabot-updates`) as `active`. With Actions off and
+no `.github/dependabot.yml` on GitHub it cannot run, so check the settings
+that matter rather than that entry: `vulnerability-alerts` answers `404`
+(off) and `automated-security-fixes` answers `"enabled": false`
+(cc-cream and unbreak, SEOR-jfoszwzz, 2026-09-26).
+
 **Staffing note:** this exact API call is refused by the agent permission
 classifier as `[Security Weaken]`. Every repo in the rollout stalled here
 until the human owner ran it (or until a Bash permission rule was added).
@@ -157,6 +164,21 @@ called "a GitLab branch" turned out to already be an ancestor of GitLab main
 (no work lost, but don't take the handover's word for it — check with
 `git cherry`) (SEOR-zfpaxrxk, 2026-09-19).
 
+A `+` from `git cherry` means no identical patch, not lost work. A branch
+whose PR was squash-merged, or rebased onto a later fix, leaves a different
+patch on main. unbreak's `feature/cli-version-flag` showed two `+` commits
+and had landed as `feat(cli): add --version / -V flag (#58)`. Find the
+landed commit by subject before calling a branch unmerged, and bundle it
+either way. Work in a scratch bare clone with GitLab's heads fetched into it
+(`git fetch <gitlab-url> '+refs/heads/*:refs/gitlab/*'`), not in a working
+copy, and put bundles in `~/Projects/_backups/` (SEOR-jfoszwzz, 2026-09-26).
+
+**Staffing note:** deleting a GitHub branch is refused by the agent
+permission classifier, like §2.2 (SEOR-zfpaxrxk, 2026-09-19). Hand the owner
+one command per repo. `gh pr close --delete-branch` (§2.6) removes a PR's
+branch together with the PR; a branch with no open PR needs
+`gh api -X DELETE repos/OWNER/REPO/git/refs/heads/<branch>`.
+
 ### 2.6 Contribution note, on GitLab, not GitHub
 
 GitHub cannot disable pull requests, so add a pinned note instead: a
@@ -173,6 +195,12 @@ gh pr close <number> -R OWNER/REPO -c "Superseded by gitlab.com/OWNER/REPO — G
 **Staffing note:** `gh pr close` is refused by the agent permission
 classifier as `[External System Writes]`, on every repo, the same as §2.2.
 Hand this off to the owner too (SEOR-ggkpweeg, 2026-09-20 11:14).
+
+Add `--delete-branch` for PRs whose head branch lives in the repo
+(Dependabot's, or your own); it closes the PR and deletes the branch in one
+call. Leave it off for PRs from forks, such as the FOSSA bot's
+`add-license-scan-badge`: the branch is in the fork, and there is nothing of
+ours to delete (cc-cream #38, unbreak #54; SEOR-jfoszwzz, 2026-09-26).
 
 ### 2.7 The PAT
 
@@ -271,6 +299,14 @@ were previously dispositioned only in the old GitHub-era dashboard state
 - **Main SHA parity**: `git ls-remote` (or `gh`/`glab` API) shows the same
   SHA on both forges after a sync.
 - **Tag parity**: `v*` tags have identical object IDs on both forges.
+  GitHub's `/tags` endpoint returns 30 per page by default, so pass
+  `?per_page=100` (and page beyond that); unpaged, cc-cream looked two tags
+  short (30 against GitLab's 32) when the forges matched. Parity today does
+  not prove the §2.8 rule exists either: a repo mirrored or pushed to GitHub
+  before its mirror was set up can have every old tag on both sides and
+  still no `protected_tags` entry, so the next release never arrives. Read
+  `protected_tags` directly. cf-crawl and unbreak were in exactly that state
+  (SEOR-jfoszwzz, 2026-09-26).
 - **Feature branches don't leak.** Safest test: create a throwaway branch on
   GitLab via the API, force a sync, confirm it does *not* appear on GitHub,
   then delete it. GitLab branch create/delete both pass the agent
@@ -484,7 +520,10 @@ These apply only to R packages and have no equivalent for a non-R mirror.
   GitHub Actions stay off.
 - SEOR-jfoszwzz — this ticket's own 2026-09-22 audit comment, source for the
   Pages-verification-via-API and forced-visibility-decision additions in §1
-  and §2.3.
+  and §2.3; its 2026-09-26 comment records the lockdown of three non-R
+  mirrors (cf-crawl, cc-cream, unbreak), the source of the Dependabot-entry,
+  squash-merge, fork-PR and tag-parity notes in §2.2, §2.5, §2.6 and the
+  acceptance checks.
 
 Live-checked against the running system on 2026-09-23 rather than taken on
 ticket text alone: `glab api projects/bart-turczynski%2Fseor/remote_mirrors`
