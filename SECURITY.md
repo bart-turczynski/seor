@@ -12,3 +12,10 @@ confidential issue is the closest supported channel. The GitHub repository is a
 read-only mirror and does not accept reports.
 
 Do not include secrets, credentials, tokens, or private customer data in issues, merge requests, logs, or `_scratch/`.
+
+## What to expect
+
+- We aim to acknowledge a report within **7 days**.
+- We will investigate, work on a fix, and coordinate disclosure with you.
+- We are happy to credit reporters in the release notes unless you prefer to
+  remain anonymous.
