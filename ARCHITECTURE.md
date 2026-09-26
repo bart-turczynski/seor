@@ -50,7 +50,9 @@ dependencies and (2) attach them all on `library(seor)`.
   `bestpractices-url.py` is a maintainer tool, not a check. It turns
   `.bestpractices.json` into bestpractices.dev edit links and verifies the live
   entry against the file. It reads the network, and only its offline
-  `--self-test` runs from the hook.
+  `--self-test` runs from the hook. Like `check-citation.py`, it is vendored
+  into the member packages, and its `IMPLEMENTATION_DIGEST` catches a copy
+  that drifts.
 - `CITATION.cff`, `.zenodo.json` — publication metadata, kept out of the CRAN
   tarball via `.Rbuildignore`. The version they carry is governed by
   [ADR 0002](design/adr/0002-citation-urls-are-the-ones-about-this-package.md),

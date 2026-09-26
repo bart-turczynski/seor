@@ -1,4 +1,4 @@
-# bestpractices-url v1
+# bestpractices-url v2
 """Turn `.bestpractices.json` into bestpractices.dev edit links, and check it.
 
 WHY THIS EXISTS. bestpractices.dev only reads `.bestpractices.json` when the
@@ -44,6 +44,8 @@ fails loudly if the layout changes rather than guessing.
 from __future__ import annotations
 
 import argparse
+import ast
+import hashlib
 import json
 import re
 import sys
@@ -66,6 +68,66 @@ URL_RE = re.compile(r"https?://")
 LEVEL_LINE = re.compile(r"^- '(\d)':")
 CRITERION_LINE = re.compile(r"^ {6}- ([A-Za-z0-9_]+):\s*(#.*)?$")
 PROPERTY_LINE = re.compile(r"^ {10}([a-z_]+):\s*(\S.*)?$")
+
+
+# --- fleet sync --------------------------------------------------------------
+#
+# THIS FILE IS VENDORED into every repository that carries a
+# `.bestpractices.json`, and into the boilerplate R template, for the same
+# reason `check-citation.py` is: each repository has to work from a fresh
+# clone on its own. The digest below covers the implementation -- every byte
+# below the module docstring, minus this assignment -- so the prose may differ
+# per repository while any change to behaviour is caught. It is verified on
+# every run, including `--self-test`, which the pre-push hook runs whenever
+# this file changes. Whether the copies agree is one grep:
+#
+#     grep -h '^IMPLEMENTATION_DIGEST' ~/Projects/*/scripts/bestpractices-url.py | sort -u
+#
+# One line out means every copy is in sync. Re-bless it in all copies in the
+# same change, never in one. The mechanism is check-citation.py's (SEOR-tssbiedr).
+IMPLEMENTATION_DIGEST = "8812f4578a0de769"
+
+
+def module_docstring_end(source: str) -> int:
+    """The 1-based line on which this module's docstring ends, or 0 if none."""
+    body = ast.parse(source).body
+    if body:
+        first = body[0]
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            return first.end_lineno or 0
+    return 0
+
+
+def implementation_source(source: str) -> str:
+    """This file's bytes below the docstring, minus the digest assignment."""
+    lines = source.splitlines(keepends=True)
+    start = module_docstring_end(source)
+    return "".join(
+        line
+        for line in lines[start:]
+        if not line.startswith("IMPLEMENTATION_DIGEST = ")
+    )
+
+
+def implementation_digest(source: str) -> str:
+    return hashlib.sha256(implementation_source(source).encode()).hexdigest()[:16]
+
+
+def check_vendored_copy() -> list[str]:
+    """Fail when this copy's implementation is not the one it claims to be."""
+    found = implementation_digest(Path(__file__).resolve().read_text(encoding="utf-8"))
+    if found == IMPLEMENTATION_DIGEST:
+        return []
+    return [
+        f"vendored copy drifted: implementation digest is {found}, "
+        f"IMPLEMENTATION_DIGEST records {IMPLEMENTATION_DIGEST}. Either this "
+        "copy was edited without re-blessing it, or it was re-blessed without "
+        "the other copies. Fix every copy in one change."
+    ]
 
 
 # --- criteria.yml ------------------------------------------------------------
@@ -226,6 +288,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--max-length", type=int, default=MAX_LENGTH)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
+    drift = check_vendored_copy()
+    if drift:
+        print("\n".join(["bestpractices-url failed:"] + drift), file=sys.stderr)
+        return 1
     if args.self_test:
         return self_test()
 
@@ -374,6 +440,22 @@ def self_test() -> int:
 
     expect("differences", differences(good, live, criteria, "passing")
            == ["description_good_justification: site='Old text.' file='Clear.'"])
+    here = Path(__file__).resolve().read_text(encoding="utf-8")
+    lines = here.splitlines(keepends=True)
+    end = module_docstring_end(here)
+    expect("vendor: docstring found", end > 0)
+    prose = "".join(lines[: end - 1] + ["Inserted by the self-test.\n"] + lines[end - 1:])
+    expect("vendor: prose edit keeps digest",
+           implementation_digest(prose) == implementation_digest(here))
+    expect("vendor: code edit moves digest",
+           implementation_digest(here + "\n_ = None\n") != implementation_digest(here))
+    reblessed = here.replace(
+        'IMPLEMENTATION_DIGEST = "' + IMPLEMENTATION_DIGEST + '"',
+        'IMPLEMENTATION_DIGEST = "ffffffffffffffff"',
+    )
+    expect("vendor: constant found", reblessed != here)
+    expect("vendor: rebless ignores own value",
+           implementation_digest(reblessed) == implementation_digest(here))
     print("bestpractices-url self-test: all checks passed.")
     return 0
 
