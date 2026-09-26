@@ -42,6 +42,15 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # bestpractices-url.py is a maintainer tool that reads the network, so the
+      # hook runs only its offline self-test, and only when the script changes.
+      - id: bestpractices-url-self-test
+        name: bestpractices-url self-test
+        entry: python3 scripts/bestpractices-url.py --self-test
+        language: system
+        pass_filenames: false
+        files: ^scripts/bestpractices-url\.py$
+        stages: [pre-push]
       # seor is a metapackage whose members `pagerankr`, `sitemapr` and `robotstxtr`
       # are not yet on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always
       # reports an ERROR: non-mainstream strong dependencies, the `Remotes:` field, and

@@ -47,6 +47,10 @@ dependencies and (2) attach them all on `library(seor)`.
   `check-design.py` owns design-doc hygiene; `check-citation.py` owns the
   agreement between `CITATION.cff`, `.zenodo.json` and `DESCRIPTION`. Both are
   offline and stdlib-only, so they also run as cheap CI jobs.
+  `bestpractices-url.py` is a maintainer tool, not a check. It turns
+  `.bestpractices.json` into bestpractices.dev edit links and verifies the live
+  entry against the file. It reads the network, and only its offline
+  `--self-test` runs from the hook.
 - `CITATION.cff`, `.zenodo.json` — publication metadata, kept out of the CRAN
   tarball via `.Rbuildignore`. The version they carry is governed by
   [ADR 0002](design/adr/0002-citation-urls-are-the-ones-about-this-package.md),

@@ -17,8 +17,13 @@
 
 ## Internal
 
-* `.bestpractices.json` answers every passing-level OpenSSF criterion (75
-  fields, the same set the member packages answer). `SECURITY.md` now commits
+* `scripts/bestpractices-url.py` turns `.bestpractices.json` into
+  bestpractices.dev edit links, because the site does not read the file from a
+  GitLab repository. `--check` verifies the live entry against the file
+  (SEOR-oaqnafzs).
+
+* `.bestpractices.json` answers all 67 passing-level OpenSSF criteria, plus
+  six silver-level ones the member packages also answer. `SECURITY.md` now commits
   to acknowledging a report within 7 days, as the members' policies do
   (SEOR-oaqnafzs).
 
