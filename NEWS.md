@@ -9,6 +9,12 @@
 
 ## Internal
 
+* `CONTRIBUTING.md` has a stuck-pending runbook. A job that fails with
+  `stuck_pending_no_matching_runners` means the self-hosted runner was
+  offline, not that the code is broken. The runbook covers bringing the
+  runner back, retrying, and closing the `runner-heartbeat` alert
+  (SEOR-hhtzaknn).
+
 * CI jobs now reuse the built package library instead of recompiling it. Two
   faults had to be fixed together: the runners had no cache backend, and
   `R_LIBS_USER` was a silent no-op because rocker/r-ver's `Renviron.site` puts
