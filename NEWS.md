@@ -22,6 +22,9 @@
   README rendered with a newer local pandoc passed the pre-push gate and then
   failed CI (SEOR-kaqtnovh).
 
+* `CHANGELOG.md` is gone, along with its page on the pkgdown site. It was an
+  empty stub from the project template, and `NEWS.md` is the changelog.
+
 * `scripts/bestpractices-url.py` turns `.bestpractices.json` into
   bestpractices.dev edit links, because the site does not read the file from a
   GitLab repository. `--check` verifies the live entry against the file

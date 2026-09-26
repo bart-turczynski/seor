@@ -520,14 +520,16 @@ pages:
     # SECURITY each returned 200 as <name>.html; README and NEWS render as
     # index.html and news/. Grandfathered on purpose: taking an already
     # published page down is an editorial decision, not a side effect of
-    # closing a leak. cran-comments.md is not listed because pkgdown never
+    # closing a leak. CHANGELOG was later taken down as one such decision
+    # (2026-09-26): it was an empty boilerplate stub, and NEWS.md is the
+    # changelog. cran-comments.md is not listed because pkgdown never
     # renders it (package_mds() hardcodes it as no_render); moving it out
     # changes nothing. A kept file that goes missing fails the job, so KEEP
     # cannot silently drift from the tree. To publish a new top-level page,
     # add its name here in the same commit.
     - |
       set -eu
-      KEEP="README.md NEWS.md LICENSE.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md ACKNOWLEDGMENTS.md ARCHITECTURE.md CHANGELOG.md"
+      KEEP="README.md NEWS.md LICENSE.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md ACKNOWLEDGMENTS.md ARCHITECTURE.md"
       for f in $KEEP; do
         if [ ! -f "$f" ]; then
           echo "ERROR: expected top-level file '$f' is missing -- update KEEP in .gitlab-ci.yml or restore the file." >&2
