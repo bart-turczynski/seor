@@ -112,6 +112,22 @@ why a run-count check (§4) cannot catch it — check `/pages` per repo,
 separately (SEOR-jfoszwzz, 2026-09-22 audit comment; confirmed still true
 2026-09-23 for rurl in this session).
 
+Those old URLs were kept alive, not dropped: a redirect user site,
+`bart-turczynski/bart-turczynski.github.io`, mirrored from GitLab like any
+other repo, answers every old `github.io/<pkg>/` path, and the owner then ran
+`DELETE /pages` on the project repos (SEOR-wmtfrsjq, 2026-09-25). Two
+gotchas from that cutover:
+
+- **A live project site beats the user site on its own path.** While
+  `<repo>` still has Pages on, `bart-turczynski.github.io/<repo>/` serves the
+  project build, not the user site's redirect. Smoke-test the user site at its
+  root before the cutover; `/<repo>/` only shows the redirect once the
+  project's `/pages` returns 404.
+- **A `<username>.github.io` repository turns Pages on by itself.** The first
+  push, including the first mirror push, enables Pages from `main` `/`, so
+  there is no separate step to switch it on. It is the one mirror whose
+  `/pages` should answer `built`; a per-repo Pages audit has to expect it.
+
 ### 2.4 Issues, Wiki, Projects off; description and homepage
 
 ```sh
