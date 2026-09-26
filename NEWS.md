@@ -17,6 +17,11 @@
 
 ## Internal
 
+* CI's `readme` job ignores blank-line-only differences in `README.md`.
+  pandoc versions disagree about the blank line after the badges marker, so a
+  README rendered with a newer local pandoc passed the pre-push gate and then
+  failed CI (SEOR-kaqtnovh).
+
 * `scripts/bestpractices-url.py` turns `.bestpractices.json` into
   bestpractices.dev edit links, because the site does not read the file from a
   GitLab repository. `--check` verifies the live entry against the file

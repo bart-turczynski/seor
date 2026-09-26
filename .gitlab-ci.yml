@@ -382,8 +382,17 @@ readme:
     - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
     - Rscript -e 'pak::pak("any::devtools")'
     - Rscript -e 'devtools::build_readme()'
+    # Blank-line-only differences don't count. pandoc versions disagree about
+    # the blank line after `<!-- badges: start -->`: a Mac's pandoc 3.10 adds
+    # one and the image's apt pandoc does not, so a README rendered locally
+    # passed pre-push and turned main red here (SEOR-oaqnafzs, !33). The test
+    # is on the diff's output, not `--exit-code`: the image's git 2.43 still
+    # exits 1 on a blank-only diff under --ignore-blank-lines (git 2.54
+    # exits 0) (SEOR-kaqtnovh).
     - |
-      if ! git diff --exit-code -- README.md; then
+      readme_diff=$(git diff --ignore-blank-lines -- README.md)
+      if [ -n "$readme_diff" ]; then
+        printf '%s\n' "$readme_diff"
         echo "README.md is out of sync with README.Rmd. Run devtools::build_readme() and commit the result."
         exit 1
       fi
