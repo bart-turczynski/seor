@@ -33,7 +33,11 @@ maintainer's Mac, not on GitLab.com shared runners. When the Mac sleeps, or
 `gitlab-runner` or Docker stops, jobs sit in `pending` and eventually fail
 with `failure_reason: stuck_pending_no_matching_runners`, `runner: None` and
 a long `queued_duration`. **That is infrastructure, not a code failure.**
-Don't debug the code; bring the runner back and retry.
+Don't debug the code; bring the runner back and retry. To confirm from the
+API, `glab api projects/:id/jobs/<job_id>` shows that `failure_reason` and
+`"runner": null`; a job that ran and failed names its runner. Why the fleet
+runs this way:
+[ADR 0003](https://gitlab.com/bart-turczynski/seor/-/blob/main/design/adr/0003-fleet-ci-runs-on-self-hosted-runners.md).
 
 The `runner-heartbeat` Worker checks every 15 minutes. When a fleet job has
 been pending for more than 20 minutes, it opens a `stuck-runner` issue in

@@ -7,7 +7,7 @@
 * Added `seor_packages()` and `seor_conflicts()` helpers.
 * `raddr` (IP address parsing and classification) joins the core members.
 * The maintainer's ORCID iD is now in `DESCRIPTION`, `citation("seor")`,
-  `CITATION.cff` and `.zenodo.json`. The README carries the OpenSSF Best
+  `CITATION.cff`, `.zenodo.json` and `codemeta.json`. The README carries the OpenSSF Best
   Practices badge (project 14932) (SEOR-dvbdsvuq, SEOR-oaqnafzs).
 * `DESCRIPTION` has a `BugReports` field that points at the GitLab issue
   tracker. `CONTRIBUTING.md` says where to report bugs and what a merge
@@ -131,3 +131,14 @@
   at all. Hand-starting one from Build > Pipelines > Run pipeline still works
   on any ref, and runs the full gate there; `pages` is the one job pinned to
   `main`, so a branch can be verified but never published (SEOR-bmgkzhvy).
+* CI no longer writes to the repository or needs a write token. The
+  `renovate` job and `renovate.json` are gone, and so is the `codemeta` job
+  that committed to `main` with `CODEMETA_TOKEN`; `codemeta.json` is now
+  maintained by hand (SEOR-tzxuisnf).
+* `osv-audit` and `security-audit` run only on a pipeline schedule that sets
+  `SCHEDULE_KIND=dependency-audit` (or when started by hand), so a schedule
+  added for another purpose no longer fires them (SEOR-fftbjnpl).
+* `CONTRIBUTING.md` explains that CI runs on self-hosted runners on the
+  maintainer's Mac, so a job failing with `stuck_pending_no_matching_runners`
+  is the machine being asleep or the runner stopped, not the code, and how
+  to confirm and retry it (SEOR-hhtzaknn).
