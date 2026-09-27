@@ -38,7 +38,7 @@
   "release_notes_status": "Met",
   "release_notes_justification": "NEWS.md (https://gitlab.com/bart-turczynski/seor/-/blob/main/NEWS.md) is the human-readable changelog. Every user-facing change adds a bullet there, and the news-version CI job checks that its top heading matches DESCRIPTION's Version.",
   "report_process_status": "Met",
-  "report_process_justification": "Bug reports go to the GitLab issue tracker (https://gitlab.com/bart-turczynski/seor/-/work_items), named in CONTRIBUTING.md and in DESCRIPTION's BugReports field.",
+  "report_process_justification": "Bug reports go to the GitLab issue tracker (https://gitlab.com/bart-turczynski/seor/-/work_items), named in CONTRIBUTING.md. DESCRIPTION's BugReports field names the same tracker in the /-/issues form that CRAN's incoming check requires.",
   "report_tracker_status": "Met",
   "report_tracker_justification": "The project uses GitLab work items as its public issue tracker: https://gitlab.com/bart-turczynski/seor/-/work_items.",
   "report_archive_status": "Met",

@@ -14,6 +14,12 @@
   request needs. `SECURITY.md` names the private channels: a confidential
   GitLab issue or email. `.bestpractices.json` names GitLab as the tracker
   and CI instead of GitHub (SEOR-oaqnafzs, SEOR-wmtfrsjq).
+* `BugReports:` now uses the `/-/issues` form CRAN's incoming check asks for,
+  and the package help page links it. The files a person reads
+  (`CONTRIBUTING.md`, `SECURITY.md`, `codemeta.json`, `.bestpractices.json`)
+  keep pointing at `/-/work_items`, the address that does not 404.
+  `scripts/check-bugreports.py` enforces the split on the pre-push hook and in
+  the `citation-version` CI job (SEOR-ocbtrrnl).
 
 ## Internal
 
