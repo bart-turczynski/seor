@@ -16,7 +16,9 @@ mkdocs/sphinx/docusaurus, handwritten publisher docs in a browser extension.
 - [`specs/`](specs/) — durable specs: the *what*, as accepted. Point-in-time
   records, frozen once shipped.
 - [`agent-workflow.md`](agent-workflow.md) — where files belong, the design
-  checks, git hooks, the slice flow and the pages `KEEP` list.
+  checks, git hooks and the pages `KEEP` list.
+- [`fleet.md`](fleet.md) — the fleet tracker convention and the per-repository
+  instruction drift table.
 - [`badges.md`](badges.md) — the README badge suite and its one-time setup.
 - [`github-mirror.md`](github-mirror.md) — playbook for the read-only GitHub
   mirror.

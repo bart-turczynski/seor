@@ -6,10 +6,11 @@ R metapackage, tidyverse-style: `library(seor)` installs and attaches the member
 - `man/` and `NAMESPACE` are generated from roxygen in `R/`.
 - Each user-facing change: one NEWS.md bullet. Top heading matches `DESCRIPTION` Version.
 - `_scratch/`, `tmp/`, `.fp/` stay uncommitted. `docs/` is pkgdown output, never design docs.
-- fp tracks issues. Status changes have no git side effects.
+- Git follows the `agent-workflow` skill. fp tracks issues; status changes stay decoupled from git (the `fp` skill's `references/decoupling.md`).
 
 For R style, tests, lints and roxygen, see AGENTS_LANG.md.
 For specs, ADRs and the design/ lifecycle, see design/README.md.
-For hooks, the slice flow and the pages KEEP list, see design/agent-workflow.md.
+For hooks and the pages KEEP list, see design/agent-workflow.md.
+For the fleet tracker convention and the per-repo drift table, see design/fleet.md.
 For members, invariants and CRAN status, see ARCHITECTURE.md.
 For setup and the verify command, see CONTRIBUTING.md.
