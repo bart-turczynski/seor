@@ -12,14 +12,14 @@ header:
 
 project:
   name: seor
-  homepage: https://seor-272402.gitlab.io/
+  homepage: https://bart-turczynski.gitlab.io/seor/
   administrators:
     - name: Bart Turczynski
       email: bartek@turczynski.pl
       primary: true
   documentation:
-    quickstart-guide: https://seor-272402.gitlab.io/
-    detailed-guide: https://seor-272402.gitlab.io/reference/index.html
+    quickstart-guide: https://bart-turczynski.gitlab.io/seor/
+    detailed-guide: https://bart-turczynski.gitlab.io/seor/reference/index.html
     release-process: https://gitlab.com/bart-turczynski/seor/-/blob/main/CONTRIBUTING.md
   repositories:
     - name: seor

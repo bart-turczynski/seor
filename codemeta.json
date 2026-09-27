@@ -5,7 +5,7 @@
   "description": "The 'seor' suite bundles a set of focused R packages for search engine optimization and web-developer workflows: URL parsing, punycode and internationalized-domain conversion, public suffix list lookups, XML sitemap parsing and PageRank estimation. Loading 'seor' with a single call to library() installs and attaches all of the member packages at once, in the style of the 'tidyverse' metapackage.",
   "name": "seor: Easily Install and Load the 'seor' SEO and Developer Tools",
   "relatedLink": [
-    "https://seor-272402.gitlab.io",
+    "https://bart-turczynski.gitlab.io/seor/",
     "https://bart-turczynski.r-universe.dev/seor"
   ],
   "codeRepository": "https://gitlab.com/bart-turczynski/seor",
