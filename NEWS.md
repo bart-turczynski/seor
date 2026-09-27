@@ -23,6 +23,10 @@
 
 ## Internal
 
+* The agent instructions point at the house `agent-workflow` and `fp` skills
+  instead of carrying their own copy of the slice flow and the fp/git
+  decoupling rule. `design/fleet.md` holds the fleet tracker convention and a
+  measured table of how the nine repositories' gates differ (SEOR-ipwcbcov).
 * CI's `readme` job ignores blank-line-only differences in `README.md`.
   pandoc versions disagree about the blank line after the badges marker, so a
   README rendered with a newer local pandoc passed the pre-push gate and then
