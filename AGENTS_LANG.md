@@ -74,12 +74,13 @@ reasons a real package hits as it grows past this scaffold:
   legitimately call `library()`.
 - `undesirable_operator_linter`: configured to keep flagging `<<-`/`->>` but
   allow `:::`, which tests use to reach internal (unexported) functions.
-- `strings_as_factors_linter`: off. It flags every `data.frame()` /
-  `as.data.frame()` call that omits `stringsAsFactors=`, a portability guard for
-  the pre-R-4.0 default. The fleet targets R >= 4.0 where
-  `stringsAsFactors = FALSE` is already the default, so every hit is a no-op
-  annotation with no behavioral risk. (Dropped 2026-07-18; see pagerankr
-  PAGE-iiqjlfxl for the evidence.)
+
+`strings_as_factors_linter` is off, as in goodpractice, which dropped it in 1.2.0
+(ropensci-review-tools/goodpractice#321). It only guarded the pre-R-4.0
+`data.frame()` default, and the fleet targets R >= 4.0. A package whose R floor
+is below 4.0 keeps it on and documents that as a deviation (punycoder). The
+fleet turned it off on 2026-07-18, before goodpractice did (pagerankr
+PAGE-iiqjlfxl).
 
 ### Code style
 
