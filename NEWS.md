@@ -23,6 +23,10 @@
 
 ## Internal
 
+* seor no longer commits a `.claude/settings.json`. Agent permissions come from
+  the user-level settings, as in the other fleet repositories; its extra `ask`
+  entries (`git rebase`, `git commit --amend`) and a pre-allowed `gh pr merge`
+  made seor behave differently from the rest of the fleet.
 * The agent instructions point at the house `agent-workflow` and `fp` skills
   instead of carrying their own copy of the slice flow and the fp/git
   decoupling rule. `design/fleet.md` holds the fleet tracker convention and a
