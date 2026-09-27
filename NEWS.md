@@ -81,14 +81,11 @@
   Every page that was live when the change landed is on the list, so nothing
   already published was taken down (SEOR-wqxhftpv).
 
-* The documentation URL in `DESCRIPTION` and `_pkgdown.yml` names the host
-  that actually serves the site. GitLab has unique-domain Pages enabled on this
-  project, so its canonical address is `https://seor-272402.gitlab.io`, not the
-  namespace-path form `https://bart-turczynski.gitlab.io/seor/` — that address
-  belongs to no project here and returned 403 to every client. `R CMD check
-  --as-cran` fetches declared URLs, so this was a latent submission blocker as
-  well as a wrong address. Measured 2026-09-10 after the Pages access level was
-  set to `enabled`: the unique domain returns 200 (SEOR-cmoyxzky).
+* The documentation site lives at `https://bart-turczynski.gitlab.io/seor/`,
+  the namespace path every package in the family uses. `DESCRIPTION`,
+  `_pkgdown.yml` and the citation and security metadata name it. The earlier
+  unique-domain address `https://seor-272402.gitlab.io` no longer resolves
+  (SEOR-cmoyxzky, SEOR-hcmtspmv).
 
 * `CITATION.cff` and `.zenodo.json` now name that same host; both still pointed
   at the namespace-path address that returns 403, because the earlier fix

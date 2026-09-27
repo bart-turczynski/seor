@@ -16,7 +16,7 @@ authors:
     email: bartek@turczynski.pl
     orcid: "https://orcid.org/0000-0002-8788-7980"
 repository-code: "https://gitlab.com/bart-turczynski/seor"
-url: "https://seor-272402.gitlab.io"
+url: "https://bart-turczynski.gitlab.io/seor/"
 license: MIT
 keywords:
   - R
