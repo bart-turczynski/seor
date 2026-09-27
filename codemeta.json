@@ -9,6 +9,7 @@
     "https://bart-turczynski.r-universe.dev/seor"
   ],
   "codeRepository": "https://gitlab.com/bart-turczynski/seor",
+  "issueTracker": "https://gitlab.com/bart-turczynski/seor/-/work_items",
   "license": "https://spdx.org/licenses/MIT",
   "version": "0.0.0.9000",
   "programmingLanguage": {

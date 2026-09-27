@@ -42,6 +42,18 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # DESCRIPTION's BugReports: keeps the /-/issues form CRAN's incoming
+      # check string-tests for; every human-facing tracker link (codemeta.json,
+      # .bestpractices.json, CONTRIBUTING.md, SECURITY.md) names /-/work_items,
+      # and no other human-facing file may carry a /-/issues link
+      # (SEOR-ocbtrrnl). Offline, stdlib-only, same shape as check-citation.
+      - id: check-bugreports
+        name: BugReports split (DESCRIPTION vs human-facing links)
+        entry: python3 scripts/check-bugreports.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       # bestpractices-url.py is a maintainer tool that reads the network, so the
       # hook runs only its offline self-test, and only when the script changes.
       - id: bestpractices-url-self-test

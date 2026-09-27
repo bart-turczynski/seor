@@ -374,6 +374,10 @@ citation-version:
   script:
     - python3 scripts/check-citation.py --self-test
     - python3 scripts/check-citation.py
+    # BugReports split (SEOR-ocbtrrnl): same offline, stdlib-only shape, so it
+    # rides here rather than taking a runner slot of its own.
+    - python3 scripts/check-bugreports.py --self-test
+    - python3 scripts/check-bugreports.py
 
 # README.md is knit from README.Rmd, so a hand-edit to the markdown is silently
 # lost on the next render. devtools::build_readme() installs the package and
