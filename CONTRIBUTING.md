@@ -1,5 +1,13 @@
 # Contributing
 
+Report bugs and request features in the GitLab issue tracker:
+<https://gitlab.com/bart-turczynski/seor/-/work_items>. Report security issues
+privately as described in `SECURITY.md`. Send changes as merge requests on
+GitLab; the GitHub repository is a read-only mirror.
+
+New code needs tests, and each user-facing change needs one `NEWS.md` bullet.
+A merge request must pass the verification command below.
+
 Install dependencies:
 
 ```sh
@@ -18,35 +26,33 @@ ERROR (non-mainstream dependencies, the `Remotes:` field, the archived `seoR` na
 clash) — a permanent, known state rather than a regression. Every other
 `--as-cran` check still runs. Re-enable it for the first CRAN submission.
 
-## CI runners
+## Stuck-pending runbook
 
-seor's CI does not run on GitLab.com's shared runners. Its jobs run on
-self-hosted Docker runners on the maintainer's Mac (`seor-local-docker`,
-`pslr-local-docker`, `pagerankr-local-docker`), which serve the whole fleet.
-The namespace's 400-minute GitLab Free quota governs only the shared-runner
-fallback, and that quota is exhausted, so nothing else picks a job up when
-those runners are away. See
+CI for seor and its members runs on self-hosted Docker runners on the
+maintainer's Mac, not on GitLab.com shared runners. When the Mac sleeps, or
+`gitlab-runner` or Docker stops, jobs sit in `pending` and eventually fail
+with `failure_reason: stuck_pending_no_matching_runners`, `runner: None` and
+a long `queued_duration`. **That is infrastructure, not a code failure.**
+Don't debug the code; bring the runner back and retry. To confirm from the
+API, `glab api projects/:id/jobs/<job_id>` shows that `failure_reason` and
+`"runner": null`; a job that ran and failed names its runner. Why the fleet
+runs this way:
 [ADR 0003](https://gitlab.com/bart-turczynski/seor/-/blob/main/design/adr/0003-fleet-ci-runs-on-self-hosted-runners.md).
 
-**A job that sits `pending` and then fails with
-`stuck_pending_no_matching_runners` is an infrastructure failure, not a code
-failure.** The Mac was asleep or the runner was stopped. Do not debug the
-change it ran against.
+The `runner-heartbeat` Worker checks every 15 minutes. When a fleet job has
+been pending for more than 20 minutes, it opens a `stuck-runner` issue in
+`bart-turczynski/runner-heartbeat`, and that issue is the alert. To recover:
 
-To confirm, read the job from the API (from a checkout of this repo, `:id`
-resolves to the project):
-
-```sh
-glab api projects/:id/jobs/<job_id>
-```
-
-An infrastructure failure has `"failure_reason": "stuck_pending_no_matching_runners"`,
-`"runner": null` and a long `"queued_duration"`. A job that ran and failed
-names its runner and has a different `failure_reason`.
-
-To fix it, wake the Mac and check the runner with `gitlab-runner status`
-(start it with `gitlab-runner start` if it is stopped), then retry the job:
-`glab ci retry <job_id>`, or **Retry** on the job page.
+1. Wake the Mac and start Docker Desktop if it isn't running
+   (`docker info` should succeed).
+2. Start the runner: `brew services start gitlab-runner`. Confirm that it is
+   polling: `glab api "projects/:id/runners?type=project_type"` should show
+   the project's `*-local-docker` runner `online`.
+3. Pending jobs are usually picked up within a minute. Retry the ones that
+   already failed: `glab ci retry <job-id>`, or
+   `glab api --method POST "projects/:id/pipelines/<pipeline-id>/retry"` for
+   a whole pipeline.
+4. Close the `stuck-runner` issue. No new alert opens while one is open.
 
 See the project README for the source, behavior-specification, and test layout.
 Durable project context lives in `ARCHITECTURE.md` and `design/`.

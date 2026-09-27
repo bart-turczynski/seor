@@ -135,6 +135,26 @@ automation suggestions: review every answer rather than accepting it blindly.
 4. Complete the self-assessment and keep `.bestpractices.json` aligned with the
    package as its security posture changes.
 
+**The site does not import the file from GitLab.** bestpractices.dev reads
+`.bestpractices.json` only when the project's repository URL is on github.com,
+and a file answer never replaces one already stored. A project first
+registered through its GitHub mirror keeps the mirror's answers. Push the file
+through automation-proposal links instead:
+
+```sh
+python3 scripts/bestpractices-url.py --open    # links for what differs
+python3 scripts/bestpractices-url.py --check   # after saving: exit 0 = in sync
+```
+
+Each link pre-fills the edit form with the file's answers, marks every change
+for review, and saves nothing until you click Save. Answers are split across
+several links because the site rejects a link over about 8 KB. The script
+refuses to print links for a file the site would not count: a "URL required"
+criterion marked Met without a link, or N/A where N/A is not allowed. Use
+`--section silver` for the next level, and `--field description=...` to
+propose the project description. seor went from 30% to passing this way on
+2026-09-26 (SEOR-oaqnafzs).
+
 The file and the badge are deliberately R-only. The R template targets public,
 CRAN-shaped libraries; the other templates may describe private applications,
 where the public-project self-assessment is not an appropriate default.

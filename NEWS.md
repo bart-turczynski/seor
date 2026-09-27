@@ -6,11 +6,41 @@
   `robotstxtr` is attached opportunistically when installed.
 * Added `seor_packages()` and `seor_conflicts()` helpers.
 * `raddr` (IP address parsing and classification) joins the core members.
-* The citation metadata now carries the maintainer's ORCID iD
-  (0000-0002-8788-7980): `citation("seor")`, the package author line,
-  `CITATION.cff`, `.zenodo.json` and `codemeta.json` (SEOR-dvbdsvuq).
+* The maintainer's ORCID iD is now in `DESCRIPTION`, `citation("seor")`,
+  `CITATION.cff`, `.zenodo.json` and `codemeta.json`. The README carries the OpenSSF Best
+  Practices badge (project 14932) (SEOR-dvbdsvuq, SEOR-oaqnafzs).
+* `DESCRIPTION` has a `BugReports` field that points at the GitLab issue
+  tracker. `CONTRIBUTING.md` says where to report bugs and what a merge
+  request needs. `SECURITY.md` names the private channels: a confidential
+  GitLab issue or email. `.bestpractices.json` names GitLab as the tracker
+  and CI instead of GitHub (SEOR-oaqnafzs, SEOR-wmtfrsjq).
 
 ## Internal
+
+* CI's `readme` job ignores blank-line-only differences in `README.md`.
+  pandoc versions disagree about the blank line after the badges marker, so a
+  README rendered with a newer local pandoc passed the pre-push gate and then
+  failed CI (SEOR-kaqtnovh).
+
+* `CHANGELOG.md` is gone, along with its page on the pkgdown site. It was an
+  empty stub from the project template, and `NEWS.md` is the changelog.
+
+* `scripts/bestpractices-url.py` turns `.bestpractices.json` into
+  bestpractices.dev edit links, because the site does not read the file from a
+  GitLab repository. `--check` verifies the live entry against the file
+  (SEOR-oaqnafzs). The script is vendored into the member packages, and an
+  implementation digest, checked on every run, catches a copy that drifts.
+
+* `.bestpractices.json` answers all 67 passing-level OpenSSF criteria, plus
+  six silver-level ones the member packages also answer. `SECURITY.md` now commits
+  to acknowledging a report within 7 days, as the members' policies do
+  (SEOR-oaqnafzs).
+
+* `CONTRIBUTING.md` has a stuck-pending runbook. A job that fails with
+  `stuck_pending_no_matching_runners` means the self-hosted runner was
+  offline, not that the code is broken. The runbook covers bringing the
+  runner back, retrying, and closing the `runner-heartbeat` alert
+  (SEOR-hhtzaknn).
 
 * CI jobs now reuse the built package library instead of recompiling it. Two
   faults had to be fixed together: the runners had no cache backend, and
