@@ -38,19 +38,20 @@ nobody noticed until an agent acted on them (SEOR-tullzdwb). Before a brief
 asserts one of these facts about a repository, read its row here; before
 relying on a row, re-measure it if the repository has changed its gate since.
 
-Measured 2026-09-27 on each repository's `main`:
+Measured 2026-09-27 on each repository's `main`; the spelling-gate column
+re-measured 2026-09-28, after SEOR-mtbzfroz gated every package:
 
 | repo       | `AGENTS_LANG.md` | spelling gate                     | `.pre-commit-config.yaml` | pre-push verify entry                   | CRAN incoming in the gate |
 |------------|------------------|-----------------------------------|---------------------------|-----------------------------------------|---------------------------|
-| seor       | yes              | no (`inst/WORDLIST` only)         | yes                       | inline R                                | off: the named exception  |
-| punycoder  | no               | no (`inst/WORDLIST` only)         | yes                       | inline R                                | on                        |
+| seor       | yes              | yes (pre-commit `spelling` hook)  | yes                       | inline R                                | off: the named exception  |
+| punycoder  | no               | yes (pre-commit `spelling` hook)  | yes                       | inline R                                | on                        |
 | raddr      | no               | yes (`data-raw/verify.sh`)        | yes                       | `data-raw/verify.sh`                    | on                        |
-| robotstxtr | no               | no                                | yes                       | `dev/verify.sh`                         | on                        |
-| sitemapr   | no               | no                                | yes                       | `tools/verify.R`                        | on                        |
+| robotstxtr | no               | yes (`dev/gates.R spelling`)      | yes                       | `dev/verify.sh`                         | on                        |
+| sitemapr   | no               | yes (`tools/verify.R` stage)      | yes                       | `tools/verify.R`                        | on                        |
 | pagerankr  | no               | yes (`.githooks/pre-push`)        | yes                       | `.githooks/pre-push`                    | on                        |
-| rurl       | no               | no (`inst/WORDLIST` only)         | yes                       | `tools/verify-on-push.sh`               | on                        |
-| pslr       | no               | no (`inst/WORDLIST` only)         | yes                       | `tools/verify.sh standard`              | no check in the gate      |
-| ssrfr      | yes              | no                                | yes                       | `Rscript scripts/verify.R`              | on (logs `incoming=on`)   |
+| rurl       | no               | yes (`tools/verify.R` stage)      | yes                       | `tools/verify-on-push.sh`               | on                        |
+| pslr       | no               | yes (`tools/verify.sh`)           | yes                       | `tools/verify.sh standard`              | no check in the gate      |
+| ssrfr      | yes              | yes (`scripts/check-spelling.R`)  | yes                       | `Rscript scripts/verify.R`              | on (logs `incoming=on`)   |
 
 "Spelling gate" means a verify step that runs `spelling::spell_check_package()`
 and fails on a hit; an `inst/WORDLIST` alone gates nothing. "Incoming" is the
@@ -62,8 +63,8 @@ Notes the table cannot carry:
 - **pagerankr has a `.pre-commit-config.yaml`.** Its `verify` hook calls
   `.githooks/pre-push`. Older notes (SEOR-ipwcbcov's own description) say it
   has none and must be run by hand; that is no longer true.
-- **pslr's pre-push gate runs no `R CMD check`.** The `standard` tier is lint
-  and tests. The CI `check` job runs `--as-cran` with
+- **pslr's pre-push gate runs no `R CMD check`.** The `standard` tier is lint,
+  spelling and tests. The CI `check` job runs `--as-cran` with
   `_R_CHECK_CRAN_INCOMING_REMOTE_=false`, and the `cran` tier turns the remote
   half back on. ADR 0004 records the CI setting as grandfathered.
 - **raddr's floor scripts** (`data-raw/check-r-floor.sh`,
