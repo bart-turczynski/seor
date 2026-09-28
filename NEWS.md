@@ -156,3 +156,7 @@
   maintainer's Mac, so a job failing with `stuck_pending_no_matching_runners`
   is the machine being asleep or the runner stopped, not the code, and how
   to confirm and retry it (SEOR-hhtzaknn).
+* The README spells "behavior" in US English, and `inst/WORDLIST` no longer
+  accepts the British spelling. `design/fleet.md` states the fleet rule:
+  prose is US English, and a British spelling is respelled, never added
+  to the word list (SEOR-kfiqpymb).
