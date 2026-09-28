@@ -152,11 +152,13 @@ default:
     #     p3m latest                      rurl 1.2.0
     #     cloud.r-project.org             rurl 3.0.1
     #
-    # seor resolves pagerankr from GitLab main (see Remotes: in DESCRIPTION),
-    # and pagerankr now requires rurl (>= 3.0.1), so a p3m-only repo set cannot
-    # solve seor's own dependency closure at all — every job here would die on
-    # "Can't install dependency rurl (>= 3.0.1)" (SEOR-arofvftg). pagerankr hit
-    # this first and fixed it the same way (cfdef3c).
+    # seor then resolved pagerankr from GitLab main (via Remotes: in
+    # DESCRIPTION), and pagerankr requires rurl (>= 3.0.1), so a p3m-only repo
+    # set could not solve seor's own dependency closure at all — every job here
+    # died on "Can't install dependency rurl (>= 3.0.1)" (SEOR-arofvftg).
+    # pagerankr hit this first and fixed it the same way (cfdef3c). pagerankr
+    # has been on CRAN since 2026-09-28; the same lag applies to every new
+    # release of a member that seor needs.
     #
     # Appended rather than rewritten, so the HTTPUserAgent line rocker sets —
     # the one that makes p3m serve binaries instead of source — survives, and
