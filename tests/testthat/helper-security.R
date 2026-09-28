@@ -12,11 +12,14 @@
 #
 # That clean result is an artifact of who is on CRAN, not of seor being
 # unexposed. `oysteR::audit_description()` expands the dependency closure from
-# CRAN metadata, and `sitemapr`, `pagerankr` and `robotstxtr` are not on CRAN
-# -- so their own subtrees are invisible to the audit and are reported as
-# single leaf components (measured: `sitemapr 0.0.0.9000`, zero
-# vulnerabilities). When Phase 4b lands sitemapr on CRAN, seor inherits
-# `httr2 -> curl` and sitemapr's two curl rows become necessary here.
+# CRAN metadata, and `sitemapr` and `robotstxtr` are not on CRAN -- so their
+# own subtrees are invisible to the audit and are reported as single leaf
+# components (measured: `sitemapr 0.0.0.9000`, zero vulnerabilities).
+# `pagerankr` was one such leaf at that measurement; it reached CRAN on
+# 2026-09-28, so its subtree (`igraph`, `Matrix` and their imports) is now
+# expanded too, and has not been re-audited since. When Phase 4b lands
+# sitemapr on CRAN, seor inherits `httr2 -> curl` and sitemapr's two curl rows
+# become necessary here.
 #
 # They are deliberately NOT copied in ahead of that (SEOR-sxvcbuia): rule B
 # below fails a row that is not currently reported, so an anticipatory row is

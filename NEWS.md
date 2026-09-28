@@ -20,6 +20,9 @@
   keep pointing at `/-/work_items`, the address that does not 404.
   `scripts/check-bugreports.py` enforces the split on the pre-push hook and in
   the `citation-version` CI job (SEOR-ocbtrrnl).
+* `pagerankr` is on CRAN (0.1.0), so `DESCRIPTION` no longer lists it in
+  `Remotes:`; only `robotstxtr` and `sitemapr` still install from GitLab
+  (SEOR-wnbjpydq).
 
 ## Internal
 

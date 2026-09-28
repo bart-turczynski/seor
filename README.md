@@ -35,7 +35,7 @@ member; `library(seor)` attaches them all at once, in the style of the
 | `pslr`       | Public Suffix List lookups                     |   yes   |
 | `raddr`      | IP address parsing and classification          |   yes   |
 | `sitemapr`   | XML sitemap parsing                            |   no    |
-| `pagerankr`  | PageRank estimation                            |   no    |
+| `pagerankr`  | PageRank estimation                            |   yes   |
 | `robotstxtr` | `robots.txt` parsing (planned)                 |   no    |
 
 Because some members are not yet on CRAN, `seor` is installed from

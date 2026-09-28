@@ -112,12 +112,12 @@ declared in `Remotes:`. When a member is published, its `Remotes:` line goes.
 | `pslr`      | core            |   yes   | Imports            |
 | `raddr`     | core            |   yes   | Imports            |
 | `sitemapr`  | core            |   no    | Imports + Remotes  |
-| `pagerankr` | core            |   no    | Imports + Remotes  |
+| `pagerankr` | core            |   yes   | Imports            |
 | `robotstxtr`| planned/optional|   no    | Suggests + Remotes |
 
 **Key constraint:** a metapackage cannot be submitted to CRAN while any hard
-dependency is off CRAN. Until `sitemapr` and `pagerankr` (and, for the optional
-member, `robotstxtr`) are published, `seor` stays forge-only. `Remotes:` must be
+dependency is off CRAN. Until `sitemapr` (and, for the optional member,
+`robotstxtr`) is published, `seor` stays forge-only. `Remotes:` must be
 absent from a CRAN tarball, so the last entries go at the first submission.
 
 ## Name history
