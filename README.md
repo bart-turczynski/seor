@@ -78,7 +78,7 @@ Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
 Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false"))'
 ```
 
-`R CMD check` runs the testthat and cucumber specs, so the behaviour
+`R CMD check` runs the testthat and cucumber specs, so the behavior
 specs are verified as part of the check.
 
 The `env =` argument disables only the CRAN incoming-feasibility step.

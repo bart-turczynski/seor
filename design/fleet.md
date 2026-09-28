@@ -4,8 +4,9 @@ The nine R repositories (seor, punycoder, raddr, robotstxtr, sitemapr,
 pagerankr, rurl, pslr, ssrfr) share a git workflow and a tracker, not a
 template. Git follows the house `agent-workflow` skill; fp status changes stay
 decoupled from git (the `fp` skill's `references/decoupling.md`). This file
-holds the two things that are neither in the skills nor in any one repository:
-where fleet work is tracked, and what actually differs between the repositories.
+holds what is neither in the skills nor in any one repository: where fleet work
+is tracked, which English the prose is written in, and what actually differs
+between the repositories.
 
 ## Tracker convention
 
@@ -30,6 +31,25 @@ as the written source.
 - A repository issue never restates a seor ordering; it cites the SEOR id. A
   seor issue never restates implementation detail.
 - Non-coding work (articles, analyses, brainstorming) is `[PARKED]`.
+
+## Prose language
+
+Fleet prose is US English only (owner's rule, 2026-09-28; SEOR-kfiqpymb). Every
+package declares `Language: en-US`, and its spelling gate checks against that.
+
+- A British spelling the gate flags is respelled, never added to
+  `inst/WORDLIST`. That includes historical NEWS entries.
+- Before adding a word to a WORDLIST, check it against en_US. If en_GB accepts
+  it and en_US rejects it, it is a respelling, not a new word:
+
+  ```sh
+  Rscript -e 'w <- readLines("inst/WORDLIST"); w[hunspell::hunspell_check(w, dict = hunspell::dictionary("en_GB")) & !hunspell::hunspell_check(w, dict = hunspell::dictionary("en_US"))]'
+  ```
+
+  Most of that command's output is dictionary noise: acronyms, technical terms,
+  and US forms en_GB also accepts. Read it by hand.
+- Exceptions are proper nouns and quoted upstream text (a spec's or an API's
+  own spelling), and identifiers, which stay as written.
 
 ## Instruction drift
 
