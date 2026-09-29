@@ -19,7 +19,7 @@
 # resolution. They now share an S3 cache, so a second job in the same pipeline
 # starts warm — see design/adr/0003-fleet-ci-runs-on-self-hosted-runners.md.
 # Keep the consolidation anyway: it is still fewer runner acquisitions, and the
-# cache is an optimisation, not a guarantee (a DESCRIPTION change invalidates
+# cache is an optimization, not a guarantee (a DESCRIPTION change invalidates
 # it and the next pipeline is cold again).
 
 stages:
@@ -86,7 +86,7 @@ default:
     # into Rprofile.site as a literal, so it has to be replaced at run time
     # (see before_script). Pinned rather than "latest" so a rebuild of an old
     # commit resolves the same versions. Bumping it when a member publishes is
-    # now an optimisation, not a fix: p3m lags CRAN at every coordinate, so the
+    # now an optimization, not a fix: p3m lags CRAN at every coordinate, so the
     # CRAN fallback appended in before_script is what actually resolves a
     # freshly published member.
     P3M_SNAPSHOT: "2026-09-01"
