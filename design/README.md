@@ -22,6 +22,8 @@ mkdocs/sphinx/docusaurus, handwritten publisher docs in a browser extension.
 - [`badges.md`](badges.md) — the README badge suite and its one-time setup.
 - [`github-mirror.md`](github-mirror.md) — playbook for the read-only GitHub
   mirror.
+- [`release-checklist.md`](release-checklist.md) — the fleet CRAN release
+  checklist; each package's `CONTRIBUTING.md` adds its own deltas.
 
 See also [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for the structural map.
 
