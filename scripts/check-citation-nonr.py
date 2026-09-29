@@ -103,7 +103,7 @@ from pathlib import Path
 # One line out means every copy is in sync. Re-bless it in every copy in the
 # same change, never in one. It is a different digest from check-citation.py's
 # on purpose: the two scripts are re-blessed independently (ADR 0006).
-IMPLEMENTATION_DIGEST = "13c2894a9c4f6fef"
+IMPLEMENTATION_DIGEST = "73ffec92ee64fe3b"
 
 
 SOURCES = ("package-json", "git-tag")
@@ -196,13 +196,156 @@ def git_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in GIT_LOCAL_ENV}
 
 
-def check_repo(root: Path, source: str) -> list[str]:
-    """Findings for one repository; empty when the metadata agrees.
+def git(root: Path, *args: str) -> str | None:
+    """Run git in `root`, returning None if it fails (no git, no repository).
 
-    STUB. The version sources land in the next commit; until then every
-    repository reads as clean, so each drift fixture fails the self-test.
+    S603/S607 as in check-design.py: no shell is involved, every argument is a
+    literal or a path passed after `-C`, and `git` is resolved from PATH on
+    purpose so the script runs wherever the checkout does.
     """
-    return []
+    try:
+        result = subprocess.run(  # noqa: S603
+            ["git", "-C", str(root), *args],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+            env=git_env(),
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    return result.stdout
+
+
+def read_cff(path: Path) -> tuple[dict[str, str], set[str]]:
+    """Top-level scalars, plus the set of every top-level key present.
+
+    The key set is what lets `version:`, `date-released:` and `identifiers:`
+    be detected whether they are scalars or block openers.
+    """
+    scalars: dict[str, str] = {}
+    keys: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or line[0].isspace() or line.lstrip().startswith("#"):
+            continue
+        key_match = CFF_KEY.match(line)
+        if key_match:
+            keys.add(key_match.group(1))
+        scalar = CFF_SCALAR.match(line)
+        if scalar:
+            scalars[scalar.group(1)] = scalar.group(2).strip().strip("\"'")
+    return scalars, keys
+
+
+def version_from_package_json(root: Path) -> tuple[str | None, str, list[str]]:
+    """(release or None if never released, where it came from, errors)."""
+    path = root / "package.json"
+    where = "package.json `version`"
+    if not path.exists():
+        return None, where, [
+            "package.json is missing; `--source package-json` has nothing to read."
+        ]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return None, where, [f"package.json is not valid JSON: {exc}"]
+    version = data.get("version") if isinstance(data, dict) else None
+    if not isinstance(version, str) or not version.strip():
+        return None, where, ["package.json has no string `version` field."]
+    version = version.strip()
+    if version == PLACEHOLDER_VERSION:
+        return None, f"{where} ({PLACEHOLDER_VERSION})", []
+    return version, f"{where} ({version})", []
+
+
+def version_from_git_tag(root: Path) -> tuple[str | None, str, list[str]]:
+    """(release or None if never released, where it came from, errors)."""
+    where = "the newest vX.Y.Z tag merged into HEAD"
+    # An explicit sort, so a user's `tag.sort` cannot change what is listed
+    # first; the newest release is chosen by `max()` below either way.
+    listed = git(root, "tag", "--list", "v*", "--merged", "HEAD", "--sort=refname")
+    if listed is None:
+        return None, where, [
+            "could not list git tags (no git on PATH, not a repository, or no "
+            "commit yet); `--source git-tag` has nothing to read."
+        ]
+    releases = []
+    for tag in listed.split():
+        match = RELEASE_TAG.match(tag)
+        if match:
+            releases.append(tuple(int(part) for part in match.groups()))
+    if not releases:
+        where += " (none found; a shallow or tagless clone looks the same)"
+        return None, where, []
+    newest = ".".join(str(part) for part in max(releases))
+    return newest, f"{where} (v{newest})", []
+
+
+RESOLVERS = {
+    "package-json": version_from_package_json,
+    "git-tag": version_from_git_tag,
+}
+
+
+def check_repo(root: Path, source: str) -> list[str]:
+    """Findings for one repository; empty when the metadata agrees."""
+    if source not in RESOLVERS:
+        declared = ", ".join(SOURCES)
+        return [f"unknown version source {source!r}; declare one of {declared}."]
+
+    cff_path = root / "CITATION.cff"
+    zenodo_path = root / ".zenodo.json"
+    if not cff_path.exists() and not zenodo_path.exists():
+        # Whether this repository should carry them is a separate question.
+        return []
+
+    expected, where, errors = RESOLVERS[source](root)
+    if errors:
+        return errors
+
+    unreleased = f"{where} names no release: there is no version, date or DOI to cite."
+
+    if cff_path.exists():
+        scalars, keys = read_cff(cff_path)
+        if expected is None:
+            for claim in ("version", *CFF_RELEASE_CLAIMS):
+                if claim in keys:
+                    errors.append(f"CITATION.cff carries `{claim}:`, but {unreleased}")
+        elif "version" not in scalars:
+            errors.append(
+                "CITATION.cff has no top-level `version:` scalar. Either it is "
+                "absent or this gate's reader does not understand the file; "
+                "both need a human."
+            )
+        elif scalars["version"] != expected:
+            errors.append(
+                f"CITATION.cff says version {scalars['version']}; {where} "
+                f"names release {expected}."
+            )
+
+    if zenodo_path.exists():
+        try:
+            data = json.loads(zenodo_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            errors.append(f".zenodo.json is not valid JSON: {exc}")
+            data = None
+        if data is not None and not isinstance(data, dict):
+            errors.append(".zenodo.json is not a JSON object.")
+        elif isinstance(data, dict):
+            if expected is None:
+                for claim in ("version", "doi"):
+                    if claim in data:
+                        errors.append(
+                            f".zenodo.json carries `{claim}`, but {unreleased}"
+                        )
+            elif "version" not in data:
+                errors.append(".zenodo.json has no `version` key.")
+            elif data["version"] != expected:
+                errors.append(
+                    f".zenodo.json says version {data['version']}; {where} "
+                    f"names release {expected}."
+                )
+
+    return errors
 
 
 # --- self-test (positive + negative coverage, executable) --------------------

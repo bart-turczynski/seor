@@ -63,6 +63,18 @@ repos:
         pass_filenames: false
         files: ^scripts/bestpractices-url\.py$
         stages: [pre-push]
+      # check-citation-nonr.py is the citation gate for the non-R repositories
+      # (package.json or git-tag version sources), vendored from here into
+      # them (ADR 0006). seor is an R package and keeps check-citation.py, so
+      # only the offline self-test runs here, and only when the script
+      # changes. It builds throwaway git repositories, so it needs git on PATH.
+      - id: check-citation-nonr-self-test
+        name: check-citation-nonr self-test
+        entry: python3 scripts/check-citation-nonr.py --self-test
+        language: system
+        pass_filenames: false
+        files: ^scripts/check-citation-nonr\.py$
+        stages: [pre-push]
       # seor is a metapackage whose members `pagerankr`, `sitemapr` and `robotstxtr`
       # are not yet on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always
       # reports an ERROR: non-mainstream strong dependencies, the `Remotes:` field, and
