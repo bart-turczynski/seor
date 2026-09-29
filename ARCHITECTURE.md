@@ -53,6 +53,14 @@ dependencies and (2) attach them all on `library(seor)`.
   `--self-test` runs from the hook. Like `check-citation.py`, it is vendored
   into the member packages, and its `IMPLEMENTATION_DIGEST` catches a copy
   that drifts.
+  `check-citation-nonr.py` is the citation gate for the non-R repositories
+  (cc-cream, cf-crawl, linklint, unbreak). seor holds the reference copy
+  they vendor, with a digest of its own, and runs only its offline
+  `--self-test`, from the hook, when the script changes. Each repository
+  declares where its release version lives (`--source package-json` or
+  `--source git-tag`); see
+  [ADR 0006](design/adr/0006-non-r-citation-metadata-has-its-own-gate.md)
+  for why it is not part of `check-citation.py`.
 - `CITATION.cff`, `.zenodo.json` — publication metadata, kept out of the CRAN
   tarball via `.Rbuildignore`. The version they carry is governed by
   [ADR 0002](design/adr/0002-citation-urls-are-the-ones-about-this-package.md),
