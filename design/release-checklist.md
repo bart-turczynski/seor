@@ -95,12 +95,17 @@ Who runs each step:
       `https://github.com/bart-turczynski/<pkg>.git`.
     - **owner** Create the GitHub Release from that tag, never letting GitHub
       create one: `gh release create vX.Y.Z --verify-tag -R bart-turczynski/<pkg>`.
-    - **agent** Wait for the record. It takes minutes, not seconds. A release
-      stuck at "Received" on Zenodo's GitHub page needs the §5.1 recovery,
-      which the owner approves.
+    - **agent** Wait for the record. It usually takes minutes, and a release
+      at "Received" on Zenodo's GitHub page can take well over an hour. Wait
+      at least two hours before the next §5.1 step (email support). Never
+      re-create the release without the owner's approval: it makes a
+      duplicate version.
     - **agent** Check the record's version and title against the release;
       Zenodo reads both from `.zenodo.json` in the tagged archive:
       `curl -s 'https://zenodo.org/api/records?q=conceptrecid:<concept-recid>&allversions=true' | jq '.hits.hits[].metadata | [.version, .title]'`.
+      A wrong version means the tag's `.zenodo.json` was stale (step 3).
+      The owner corrects it with a metadata edit on zenodo.org, not a new
+      release.
       Compare the archived zip with the tag by content, not checksum (§5.2).
     - **agent** Check that doi.org resolves both the concept DOI and the new
       version DOI: `curl -s -o /dev/null -w '%{http_code}\n' https://doi.org/<doi>`

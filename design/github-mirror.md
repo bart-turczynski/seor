@@ -448,8 +448,8 @@ archive (next bullet).
   10:48).
 - **The deposit is not instant.** In the pilot, the release published at
   10:36:31Z and the Zenodo record appeared at 10:42:54Z — about 6.5 minutes
-  later. Don't conclude failure from a one-minute poll. Don't wait
-  indefinitely either: robotstxtr's first release stuck (§5.1).
+  later. Don't conclude failure from a one-minute poll, or from an hour:
+  robotstxtr's and rurl's releases took 96 and 82 minutes (§5.1).
 - **The webhook delivery log is misleading; judge by the record.** One
   non-prerelease publish fires three separate `release` webhook deliveries,
   and Zenodo answers them inconsistently. In the pilot it answered `created`
@@ -457,9 +457,11 @@ archive (next bullet).
   correctly. robotstxtr's first release got the same three answers and stuck
   at "Received". Its re-create got `deleted` `202`, `created` `202`,
   `published` `409` and `released` `409`, and a record appeared four minutes
-  later. No status code predicted the outcome. Check the Zenodo record itself,
-  not the delivery log (SEOR-bzqbjxxo, 2026-09-20 10:48; ROBO-smfnomib,
-  2026-09-28).
+  later. rurl v3.0.1 got `released` `202`, `published` `500` and `created`
+  `403`, and published 82 minutes later. No status code predicted the
+  outcome. Check the Zenodo record itself, not the delivery log
+  (SEOR-bzqbjxxo, 2026-09-20 10:48; ROBO-smfnomib, 2026-09-28;
+  SEOR-gdylmkab, 2026-09-29).
 - **Decision: manual, not automated — and why.** Automating "create the
   GitHub Release" from a GitLab tag pipeline would need a *second* GitHub
   credential with Contents write, which directly contradicts §1's "the
@@ -473,12 +475,43 @@ archive (next bullet).
 ### 5.1 A release stuck at "Received"
 
 Zenodo's page for the repo (`zenodo.org/account/settings/github/repository/OWNER/REPO`)
-lists each GitHub Release with a status. robotstxtr's v0.3.0 release,
-published 2026-09-28T13:35:41Z, still showed "Received" about 85 minutes
-later, with no record. Zenodo was depositing other GitHub releases normally
-at the time, so this was not a general outage.
+lists each GitHub Release with a status. A release can sit at "Received"
+for well over an hour and still publish without any help. Recover in this
+order.
 
-Recovery that worked, about 90 minutes in, after the owner approved it:
+**1. Wait at least two hours from the release's publish time.** Both stalls
+so far published without intervention:
+
+- robotstxtr v0.3.0 published at 2026-09-28T13:35:41Z. Its record,
+  `23018996`, appeared at 15:12:04Z, 96 minutes later (ROBO-smfnomib).
+- rurl v3.0.1 published at 2026-09-29T16:01:35Z. Its record, `23043923`,
+  appeared at 17:23:15Z, 82 minutes later, with no re-create and no support
+  email. Its webhook answered `released` `202`, `published` `500` and
+  `created` `403`. The `403` had an HTML body reading "Access to this
+  resource has been restricted due to unusual traffic from your network",
+  which suggests rate limiting at Zenodo, and it still did not predict the
+  outcome (SEOR-gdylmkab).
+
+During the wait, poll the concept's version list (below), not the webhook
+log.
+
+**2. Then email Zenodo support.** Give the repo, the tag, the release's
+publish time, the GitHub release id and the webhook delivery statuses. Keep
+waiting while support looks; don't touch the release.
+
+**3. Re-create the release only as a last resort, and only with the owner's
+approval.** A stuck release is not a dead one. If it publishes later, the
+re-created release publishes too, and the concept DOI carries two identical
+versions. robotstxtr is the case. Its release was re-created at 15:08:00Z,
+92 minutes in and four minutes before the original published by itself.
+The re-created release published a second record, `23020877`, at 17:13Z.
+Zenodo support confirmed both deposits (ticket #3327493, 2026-09-29). The
+owner then deleted `23020877` through Zenodo's record-deletion flow
+(help.zenodo.org/docs/deposit/manage-records/#delete), which the owner can
+use only while the record is under 30 days old; after that, only support can
+remove it. The deleted DOI stays retired and resolves to a tombstone.
+
+If it comes to a re-create:
 
 1. `gh release delete <tag> --yes -R OWNER/REPO`. Leave off `--cleanup-tag`:
    the tag stays, and it must.
@@ -487,22 +520,17 @@ Recovery that worked, about 90 minutes in, after the owner approved it:
 3. `gh release create <tag> --verify-tag -R OWNER/REPO`. Zenodo gets a new
    release id.
 
-The re-create published at 15:08:00Z and a record appeared at 15:12:04Z.
-
-**The record may belong to the deleted release.** On Zenodo's repository
-page, the Published entry was the original, deleted release. The re-created
-release, the one GitHub now has, still showed "Received". If that entry ever
-publishes, it adds a **duplicate version** under the same concept DOI, and a
-published record can only be removed by Zenodo support (the record's
-`request_deletion` link). After a recovery, check the concept's version
-count before citing it, and again later:
+**Count the versions before citing a DOI.** After any stall, and again later
+if the release was re-created:
 
 ```sh
 curl -s 'https://zenodo.org/api/records?q=conceptrecid:<concept-recid>&allversions=true' | jq '.hits.total'
 ```
 
-Expect `1` for a first release. Anything more means a duplicate; stop and
-take it to Zenodo support.
+The count must go up by exactly one per release (`1` for a first release).
+Anything more is a duplicate. Keep the record whose archive passes §5.2 and
+that was created first, delete the other within its 30 days, and cite
+nothing until the count is right.
 
 ### 5.2 Verify the archive by content, not by checksum
 
