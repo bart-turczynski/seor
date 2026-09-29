@@ -47,7 +47,7 @@
 # So that job now sets OSSINDEX_AUDIT_REQUIRED=true, and under that flag every
 # precondition below becomes a hard failure with a message naming what is
 # missing. The flag is set in `.gitlab-ci.yml` and nowhere else, so no other
-# context changes behaviour.
+# context changes behavior.
 #
 # NOTE ON THE PRE-PUSH HOOK. `SEOR-fkvlzltx` names "the audit runs in the
 # pre-push hook, which nothing documents and nobody chose" as a defect of this
