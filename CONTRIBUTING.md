@@ -26,6 +26,31 @@ ERROR (non-mainstream dependencies, the `Remotes:` field, the archived `seoR` na
 clash) — a permanent, known state rather than a regression. Every other
 `--as-cran` check still runs. Re-enable it for the first CRAN submission.
 
+## CRAN release checklist
+
+Follow the fleet checklist,
+[seor `design/release-checklist.md`](https://gitlab.com/bart-turczynski/seor/-/blob/main/design/release-checklist.md).
+seor's deltas:
+
+- **Step 1: every member is on CRAN first.** A metapackage cannot be
+  submitted while any member it declares is off CRAN. That includes
+  `robotstxtr`, although it is only in `Suggests:`. When a member is
+  published, its `Remotes:` line goes and the "Membership and CRAN status"
+  table in `ARCHITECTURE.md` changes with it. The first submission drops
+  `Remotes:` entirely.
+- **Step 5: turn incoming on.** The verify gate sets
+  `_R_CHECK_CRAN_INCOMING_=false` on purpose
+  ([ADR 0004](https://gitlab.com/bart-turczynski/seor/-/blob/main/design/adr/0004-cran-incoming-runs-everywhere-except-seor.md)),
+  so a green gate says nothing about incoming feasibility. Run step 5's
+  check, with both incoming variables `true`, rather than the gate command.
+  Leave the gate's setting alone: dropping it is ADR 0004's revisit
+  condition, not a release step.
+- **Step 4: keep the name-reuse and `BugReports:` sections** of
+  `cran-comments.md`. CRAN treats `seor` and the archived `seoR` as the same
+  name.
+- **Step 14:** seor's first release is its first Zenodo archive
+  (SEOR-dvbdsvuq).
+
 ## Stuck-pending runbook
 
 CI for seor and its members runs on self-hosted Docker runners on the
