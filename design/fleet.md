@@ -97,8 +97,8 @@ Current aliases, from the 2026-09-28 audit:
 | rurl      | `path_normalization` argument  | `path_normalisation`           | in `get_clean_url()`, `get_path()`, `safe_parse_url()`, `safe_parse_urls()`   |
 | pagerankr | `analyze_pagerank_grid()`      | `analyse_pagerank_grid()`      |                                                                               |
 | pagerankr | `sf_normalize_position()`      | `sf_normalise_position()`      |                                                                               |
-| punycoder | `host_normalize()`             | `host_normalise()`             | held until punycoder 1.3.0 is on CRAN (SEOR-zfnbbujk)                         |
-| punycoder | `normalization_profile_info()` | `normalisation_profile_info()` | held, as above                                                                |
+| punycoder | `host_normalize()`             | `host_normalise()`             | on main (punycoder !41); first ships in 1.3.0                                 |
+| punycoder | `normalization_profile_info()` | `normalisation_profile_info()` | on main (punycoder !41); first ships in 1.3.0                                 |
 
 Identifiers carrying a British alias are legitimate British spellings in code,
 and the codespell gate (SEOR-xtmnpmae) passes them rather than respelling them.
