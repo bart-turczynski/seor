@@ -105,7 +105,7 @@ scaffold ships this badge because it survives a move between forges.
 1. Sign in at <https://app.codecov.io> with GitLab and add the project. Codecov
    namespaces GitLab under `/gl/` — `codecov.io/gl/OWNER/REPO` — where the
    GitHub URLs used `/gh/`. Getting this wrong is the usual reason a Codecov
-   badge stays grey.
+   badge stays gray.
 2. Copy the repo upload token and store it as a **masked** CI/CD variable named
    `CODECOV_TOKEN` (Settings > CI/CD > Variables). Public projects can upload
    tokenless, but a token avoids flaky rate-limited uploads.
