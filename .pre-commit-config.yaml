@@ -22,6 +22,21 @@ repos:
     rev: 0.8.2
     hooks:
       - id: air-format
+  # The `spelling` hook below reads DESCRIPTION, roxygen, vignettes, README
+  # and NEWS, but not code, comments, string literals or tooling. This covers
+  # those for British spellings (SEOR-xtmnpmae; design/fleet.md "Prose
+  # language"). Skipped: generated man/ and docs/, .bestpractices.json (it
+  # mirrors the live bestpractices.dev entry), and accepted ADRs 0003 and 0005,
+  # which scripts/check-design.py keeps immutable. The British forms
+  # design/fleet.md quotes on purpose carry inline codespell:ignore comments.
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.3
+    hooks:
+      - id: codespell
+        name: codespell (British spellings, en-GB_to_en-US; SEOR-xtmnpmae)
+        args: [--builtin, en-GB_to_en-US]
+        stages: [pre-commit, pre-push]
+        exclude: '^(man/|docs/|\.bestpractices\.json$|design/adr/0003-fleet-ci-runs-on-self-hosted-runners\.md$|design/adr/0005-cheap-ci-jobs-fold-into-one-gates-job\.md$)'
   - repo: local
     hooks:
       - id: check-design
