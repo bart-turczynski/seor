@@ -43,6 +43,18 @@ Who runs each step:
    fleet-wide: "New submission" (first release only) and the `BugReports:`
    `/-/issues` 404 (SEOR-ocbtrrnl). `cran-comments.md` explains every item
    that is not fixed.
+
+   Run it against `https://cloud.r-project.org`, not a Posit mirror. For a
+   package already on CRAN, "checking CRAN incoming feasibility" reads
+   `src/contrib/Meta/current.rds` and `web/packages/packages.rds` from the
+   `repos` option's `CRAN` entry, and p3m returns 404 for both, so the check
+   halts there (SEOR-ygzjighu). rocker/r-ver images point that entry at p3m.
+   Setting `R_CRAN_SRC` and `R_CRAN_WEB` to `https://cloud.r-project.org`
+   moves only that step; raddr's and punycoder's CI jobs do this. In
+   robotstxtr, sitemapr, pagerankr and rurl (`r-base`) the `CRAN` entry is
+   already cloud.r-project.org, and pslr turns the remote half off. Don't count a CI `--as-cran` result that shows
+   `Execution halted` under the incoming step as a pass, even when rcmdcheck
+   reports it as 0/0/0: nothing after that line ran.
 6. **agent+go** Cross-platform checks, all on the same final SHA:
    - win-builder: `devtools::check_win_devel()`, `check_win_release()` and
      `check_win_oldrelease()`.
@@ -54,6 +66,17 @@ Who runs each step:
 
    Write every platform and its result into `cran-comments.md`. A fix after
    these ran means running them again on the new SHA.
+
+   **A win-builder flavor that stops at "checking CRAN incoming
+   feasibility"** on an update submission is a builder-side stop, not a
+   package result, and nothing after that line ran for that flavor. It
+   happened to punycoder 1.3.0 on R-release 4.6.1 and R-devel, twice each,
+   while R-oldrelease finished. The cause is unconfirmed: win-builder is
+   CRAN's own infrastructure and shouldn't read p3m. Keep the `00check.log`,
+   resubmit that flavor once, and if it stops again, record it in
+   `cran-comments.md` as not completed. The incoming checks are still covered
+   by step 5's local run against `https://cloud.r-project.org`, and Windows by
+   R-hub's Windows platforms.
 
 ## Submission
 
