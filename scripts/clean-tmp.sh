@@ -3,7 +3,7 @@
 # Empties tmp/ — logs, build output, agent working files. Everything under tmp/
 # is deletable by definition, so this needs no policy and asks no questions.
 #
-# v2 changed observable behaviour, hence the bump: the reported count is now
+# v2 changed observable behavior, hence the bump: the reported count is now
 # what was actually removed (top-level entries), and a clean that leaves
 # anything behind exits 1 instead of printing success.
 #
