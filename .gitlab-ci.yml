@@ -621,8 +621,16 @@ osv-audit:
 # Dependency vulnerability audit against the Sonatype OSS Index via {oysteR}.
 # OSS Index requires authentication (anonymous requests get HTTP 401), so this
 # job needs two CI/CD variables:
-#   OSSINDEX_USER   - OSS Index account email (https://ossindex.sonatype.org)
-#   OSSINDEX_TOKEN  - OSS Index API token
+#   OSSINDEX_USER   - the literal placeholder `x`, NOT the account email
+#   OSSINDEX_TOKEN  - a Sonatype Guide personal access token (`sonatype_pat_*`)
+#
+# OSS Index moved to Sonatype Guide, whose help says the basic-auth username is
+# ignored for a PAT. It is not: with the account email as username a valid PAT
+# returns HTTP 401, and with `x` the same token returns 200 (measured in
+# pagerankr 2026-07-25 by changing only OSSINDEX_USER). A local
+# `curl -u 'x:$PAT'` that succeeds while this job 401s is this, not a bad
+# token. A legacy OSS Index API token, if one is ever rotated back in, is the
+# case that takes the email. SEOR-ipgxtzca.
 #
 # THIS JOB FAILS WHEN THEY ARE ABSENT, ON PURPOSE. It used to skip cleanly and
 # stay green, which is the failure `PUNY-rsxtbbln` records in punycoder and
@@ -634,16 +642,18 @@ osv-audit:
 # a skip; it is set here and nowhere else, so local runs, the pre-push gate and
 # `R CMD check` still skip.
 #
-# OWNER GATE -- the variables cannot be set from a merge request. Run, once:
+# OWNER GATE -- the variables cannot be set from a merge request. Both are set
+# on this project (OSSINDEX_USER read back as `x` on 2026-09-29). To set them,
+# or to rotate the token:
 #
-#   glab variable set OSSINDEX_TOKEN '<api token>' \
+#   glab variable set OSSINDEX_TOKEN '<Guide PAT>' \
 #     --masked --repo bart-turczynski/seor
-#   glab variable set OSSINDEX_USER '<account email>' \
+#   glab variable set OSSINDEX_USER 'x' \
 #     --repo bart-turczynski/seor
 #
-# OSSINDEX_USER is deliberately not `--masked`: GitLab rejects masking for a
-# value containing `@`, and the account email is not the secret. Until both
-# exist, a scheduled run of this job is red and says exactly why.
+# OSSINDEX_USER is not `--masked`: `x` is not the secret, and GitLab refuses to
+# mask a value shorter than 8 characters. If either is missing, a scheduled run
+# of this job is red and says exactly why.
 #
 # Also outstanding, and also an owner gate: this project has no pipeline
 # schedules at all (measured 2026-09-11, `pipeline_schedules` returns `[]`), so

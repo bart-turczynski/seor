@@ -1,7 +1,7 @@
 header:
   schema-version: 2.2.0
-  last-updated: '2026-09-23'
-  last-reviewed: '2026-09-23'
+  last-updated: '2026-09-30'
+  last-reviewed: '2026-09-30'
   url: https://gitlab.com/bart-turczynski/seor/-/raw/main/SECURITY-INSIGHTS.yml
   comment: |
     OpenSSF Security Insights self-report. Maintained alongside SECURITY.md
@@ -106,9 +106,9 @@ repository:
 
           It has no automatic trigger, for the same reason as osv-audit above:
           .scheduled-or-manual plus no pipeline schedules means hand-started
-          web pipelines only. It additionally needs the OSSINDEX_USER and
-          OSSINDEX_TOKEN CI/CD variables, which do not exist yet, so a
-          scheduled run would be red until an owner supplies them
-          (SEOR-tzxuisnf). seor's pre-push gate does not reach this audit
+          web pipelines only. It additionally needs the OSSINDEX_USER
+          (the literal `x`, not the account email) and OSSINDEX_TOKEN (a
+          Sonatype Guide personal access token) CI/CD variables. Both are set
+          on the project (listed 2026-09-30; SEOR-ipgxtzca). seor's pre-push gate does not reach this audit
           either: it runs rcmdcheck under rcmd_safe_env(), so skip_on_cran()
           fires first.
