@@ -5,8 +5,8 @@ pagerankr, rurl, pslr, ssrfr) share a git workflow and a tracker, not a
 template. Git follows the house `agent-workflow` skill; fp status changes stay
 decoupled from git (the `fp` skill's `references/decoupling.md`). This file
 holds what is neither in the skills nor in any one repository: where fleet work
-is tracked, which English the prose is written in, and what actually differs
-between the repositories.
+is tracked, which English the prose and exported names use, and what actually
+differs between the repositories.
 
 ## Tracker convention
 
@@ -50,6 +50,54 @@ package declares `Language: en-US`, and its spelling gate checks against that.
   and US forms en_GB also accepts. Read it by hand.
 - Exceptions are proper nouns and quoted upstream text (a spec's or an API's
   own spelling), and identifiers, which stay as written.
+
+### British aliases
+
+Exported names are US English, and a British spelling survives only as an
+alias (owner's decision, 2026-09-28, tidyverse style). Functions are
+SEOR-qwomlgjd; arguments are SEOR-oytkybis.
+
+Function names:
+
+- A name containing a word with a British variant also exports the British
+  alias, defined as `british_name <- us_name`. This reverses dplyr's
+  `summarize <- summarise`: the US name is primary.
+- The alias is documented on the US name's help page (`@rdname`), and its NEWS
+  bullet names both spellings.
+- A new export follows the rule from the start.
+- Out of scope: S3 methods, whose generics' names come from base R, and column
+  or field names in returned data.
+
+Argument names, after ggplot2's `colour`/`color` (dplyr aliases no ordinary
+argument):
+
+- The US name is the documented argument. The British name is an extra formal
+  defaulting to `NULL`, placed last in the signature so no existing positional
+  call shifts.
+- A supplied British name's value is used. Supplying both is an error that
+  names both.
+- Both share one `@param us_name,british_name` entry.
+- One shared internal helper per package resolves the alias at the top of the
+  function; internal functions receive the resolved value. Code that tests
+  `missing()` on the US name must count a supplied alias as supplied.
+- The risk is partial argument matching. With both spellings as formals, a
+  prefix they share (`path_normali`) is ambiguous and errors, so adding an
+  alias breaks any caller that abbreviates that way. Check callers first.
+
+Current aliases, from the 2026-09-28 audit:
+
+| package   | US name                        | British alias                  | note                                                                          |
+|-----------|--------------------------------|--------------------------------|-------------------------------------------------------------------------------|
+| rurl      | `serialize_url()`              | `serialise_url()`              |                                                                               |
+| rurl      | `path_normalization` argument  | `path_normalisation`           | in `get_clean_url()`, `get_path()`, `safe_parse_url()`, `safe_parse_urls()`   |
+| pagerankr | `analyze_pagerank_grid()`      | `analyse_pagerank_grid()`      |                                                                               |
+| pagerankr | `sf_normalize_position()`      | `sf_normalise_position()`      |                                                                               |
+| punycoder | `host_normalize()`             | `host_normalise()`             | held until punycoder 1.3.0 is on CRAN (SEOR-zfnbbujk)                         |
+| punycoder | `normalization_profile_info()` | `normalisation_profile_info()` | held, as above                                                                |
+
+Identifiers carrying a British alias are legitimate British spellings in code:
+a future codespell gate (SEOR-xtmnpmae) allow-lists them rather than respelling
+them.
 
 ## Instruction drift
 
