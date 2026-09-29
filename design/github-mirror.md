@@ -415,7 +415,17 @@ yet (see §6).
 ## 5. Zenodo releases through GitHub Releases (universal)
 
 Any repo wanting a Zenodo DOI works the same way once mirrored, independent
-of language:
+of language. The pslr pilot (SEOR-bzqbjxxo, 2026-09-20) set the procedure.
+The robotstxtr 0.3.0 run (ROBO-smfnomib, 2026-09-28) added §5.1 to §5.3.
+
+**Which repos get Zenodo.** The integration is ON for the fleet's packages
+and tools. It is OFF for `bart-turczynski.github.io` (a site),
+`bart-turczynski.r-universe.dev` (a registry configuration) and
+`robotstxt-cpp` (mostly Google's code). It is also OFF for cc-cream until its
+metadata lands; the owner switched it off on 2026-09-28 (ROBO-smfnomib). An
+ON repo commits `.zenodo.json` **before** its first GitHub Release, in the
+commit that release's tag points at, because Zenodo reads it from the tagged
+archive (next bullet).
 
 - Zenodo's GitHub integration fires on a **GitHub Release**, not on a
   mirrored tag arriving by itself. A tag reaching GitHub via the mirror does
@@ -425,10 +435,12 @@ of language:
   correct at tag time, not after (SEOR-bzqbjxxo, 2026-09-20 10:31 discovery
   comment).
 - Handle the **first** release by hand, deliberately, in this order: (1)
-  confirm the tag's object ID matches on both forges, (2) run
-  `gh release create <tag> --verify-tag` against the **already-mirrored**
-  tag — never let GitHub create a new one — (3) confirm the resulting Zenodo
-  record before automating anything further.
+  switch the repo ON in Zenodo's GitHub settings, which adds a webhook
+  (`events: release`) to the mirror, (2) confirm the tag's object ID matches
+  on both forges, (3) run `gh release create <tag> --verify-tag` against the
+  **already-mirrored** tag — never let GitHub create a new one — (4) confirm
+  the resulting Zenodo record, and check its archive by content (§5.2),
+  before automating anything further.
 - A new GitHub Release attaches a **new version under the existing concept
   DOI**; it does not start a new record and does not change any existing DOI
   badge (verified on pslr: concept DOI `10.5281/zenodo.20973660` unchanged,
@@ -436,13 +448,18 @@ of language:
   10:48).
 - **The deposit is not instant.** In the pilot, the release published at
   10:36:31Z and the Zenodo record appeared at 10:42:54Z — about 6.5 minutes
-  later. Don't conclude failure from a one-minute poll.
+  later. Don't conclude failure from a one-minute poll. Don't wait
+  indefinitely either: robotstxtr's first release stuck (§5.1).
 - **The webhook delivery log is misleading; judge by the record.** One
-  non-prerelease publish fires three separate `release` webhook deliveries
-  (`released`, `published`, `created`), and Zenodo answers them
-  inconsistently (`202`, `500`, `409` in the pilot) while still depositing
-  correctly. Check the Zenodo record itself, not the delivery log
-  (SEOR-bzqbjxxo, 2026-09-20 10:48).
+  non-prerelease publish fires three separate `release` webhook deliveries,
+  and Zenodo answers them inconsistently. In the pilot it answered `created`
+  `202`, `published` `500` and `released` `409`, and still deposited
+  correctly. robotstxtr's first release got the same three answers and stuck
+  at "Received". Its re-create got `deleted` `202`, `created` `202`,
+  `published` `409` and `released` `409`, and a record appeared four minutes
+  later. No status code predicted the outcome. Check the Zenodo record itself,
+  not the delivery log (SEOR-bzqbjxxo, 2026-09-20 10:48; ROBO-smfnomib,
+  2026-09-28).
 - **Decision: manual, not automated — and why.** Automating "create the
   GitHub Release" from a GitLab tag pipeline would need a *second* GitHub
   credential with Contents write, which directly contradicts §1's "the
@@ -452,6 +469,83 @@ of language:
   not just here (SEOR-bzqbjxxo, 2026-09-20 10:48).
 - A release does **not** wake disabled Actions — confirmed by an unchanged
   run count immediately before and after `gh release create`.
+
+### 5.1 A release stuck at "Received"
+
+Zenodo's page for the repo (`zenodo.org/account/settings/github/repository/OWNER/REPO`)
+lists each GitHub Release with a status. robotstxtr's v0.3.0 release,
+published 2026-09-28T13:35:41Z, still showed "Received" about 85 minutes
+later, with no record. Zenodo was depositing other GitHub releases normally
+at the time, so this was not a general outage.
+
+Recovery that worked, about 90 minutes in, after the owner approved it:
+
+1. `gh release delete <tag> --yes -R OWNER/REPO`. Leave off `--cleanup-tag`:
+   the tag stays, and it must.
+2. Check the tag object is unchanged on GitHub (and still matches GitLab),
+   for example `gh api repos/OWNER/REPO/git/ref/tags/<tag> --jq .object.sha`.
+3. `gh release create <tag> --verify-tag -R OWNER/REPO`. Zenodo gets a new
+   release id.
+
+The re-create published at 15:08:00Z and a record appeared at 15:12:04Z.
+
+**The record may belong to the deleted release.** On Zenodo's repository
+page, the Published entry was the original, deleted release. The re-created
+release, the one GitHub now has, still showed "Received". If that entry ever
+publishes, it adds a **duplicate version** under the same concept DOI, and a
+published record can only be removed by Zenodo support (the record's
+`request_deletion` link). After a recovery, check the concept's version
+count before citing it, and again later:
+
+```sh
+curl -s 'https://zenodo.org/api/records?q=conceptrecid:<concept-recid>&allversions=true' | jq '.hits.total'
+```
+
+Expect `1` for a first release. Anything more means a duplicate; stop and
+take it to Zenodo support.
+
+### 5.2 Verify the archive by content, not by checksum
+
+Zenodo archives GitHub's zipball. Its top-level directory is
+`<owner>-<repo>-<short SHA of the tag object>` (robotstxtr:
+`bart-turczynski-robotstxtr-c43d14a`, where `c43d14a` is the annotated tag,
+not the commit it points at). GitHub's `archive/refs/tags/<tag>.zip` names
+that directory differently, so the two files never share an md5 even when
+their contents are identical. Compare the trees instead:
+
+```sh
+unzip -q <zenodo-file>.zip -d zenodo
+mkdir tagged && git archive <tag> | tar -x -C tagged
+diff -r zenodo/<owner>-<repo>-<short-sha> tagged
+```
+
+An empty `diff -r` is the pass. For robotstxtr 0.3.0 it was empty
+(ROBO-smfnomib, 2026-09-28).
+
+### 5.3 No DOI in the repo until doi.org resolves it
+
+Zenodo shows a DOI as soon as the record exists. DataCite registers it
+later, and until then doi.org answers `404`. Don't commit a DOI to
+`CITATION.cff`, `inst/CITATION`, `codemeta.json` or the README until both
+the concept and version DOIs resolve:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' https://doi.org/<doi>   # expect 302
+```
+
+The lag can be long and Zenodo-wide. On 2026-09-28, Zenodo DOIs minted up to
+13:51Z resolved, while every DOI sampled from 15:09Z onward returned `404` at
+doi.org (9 of 9 through 15:55Z). robotstxtr's two DOIs, minted around
+15:12Z, still returned `404` at doi.org and at the DataCite API at 15:56Z.
+It was still unresolved when the owner filed a Zenodo support
+request that afternoon. The stall may also explain the "Received" stall in
+§5.1; that is not confirmed. Zenodo's status page
+(`stats.uptimerobot.com/vlYOVuWgM`) monitors only Website, Search and Files
+upload/download, so it showed nothing. Test doi.org directly.
+
+For an R package, a DOI that 404s is also a `R CMD check --as-cran` NOTE.
+robotstxtr's citation MR was held for that reason (ROBO-smfnomib,
+2026-09-28).
 
 ## 6. The `cran-prep` trigger guard — PARKED (SEOR-fybaobgk)
 
