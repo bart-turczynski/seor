@@ -331,9 +331,12 @@ verify:
     - .on-main
   stage: verify
   script:
+    # rcmdcheck reads a check that halted partway as 0/0/0 and returns normally,
+    # so this and `full-check` also fail on R CMD check's own exit status
+    # (SEOR-maavnxdm).
     - Rscript -e 'pak::pak(c("any::lintr", "any::rcmdcheck", "any::styler"))'
     - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
-    - Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false"))'
+    - Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'res <- rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false")); if (!identical(as.integer(res$status), 0L)) stop("R CMD check exited with status ", res$status, "; the run did not complete.", call. = FALSE)'
 
 # Lightweight guard against NEWS/DESCRIPTION version drift: the top NEWS.md
 # heading must be either "(development version)" or exactly the DESCRIPTION
@@ -476,7 +479,7 @@ full-check:
   script:
     - Rscript -e 'pak::pak(c("any::lintr", "any::rcmdcheck", "any::styler"))'
     - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
-    - Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false"))'
+    - Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'res <- rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false")); if (!identical(as.integer(res$status), 0L)) stop("R CMD check exited with status ", res$status, "; the run did not complete.", call. = FALSE)'
 
 # --------------------------------------------------------------------------
 # pages — the pkgdown site
