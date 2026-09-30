@@ -126,11 +126,14 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # rcmdcheck reads a check that halted partway as 0/0/0 and returns
+      # normally, so the gate also fails on R CMD check's own exit status
+      # (SEOR-maavnxdm).
       - id: verify
         name: verify (mirrors CI)
         entry: Rscript -e
         args:
-          - 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }; rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false"))'
+          - 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }; res <- rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false")); if (!identical(as.integer(res$status), 0L)) stop("R CMD check exited with status ", res$status, "; the run did not complete.", call. = FALSE)'
         language: system
         pass_filenames: false
         always_run: true

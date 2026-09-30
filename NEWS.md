@@ -26,6 +26,10 @@
 
 ## Internal
 
+* The verify gate (pre-push hook, CI `verify` and `full-check`) also fails when
+  `R CMD check` exits non-zero. `rcmdcheck` reads a check that halted partway as
+  0 errors, 0 warnings and 0 notes, so a halted check used to pass
+  (`SEOR-maavnxdm`).
 * seor no longer commits a `.claude/settings.json`. Agent permissions come from
   the user-level settings, as in the other fleet repositories; its extra `ask`
   entries (`git rebase`, `git commit --amend`) and a pre-allowed `gh pr merge`
