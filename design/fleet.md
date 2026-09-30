@@ -216,7 +216,7 @@ self-hosted project runners don't draw on.
 |------------|------------------|----------------------------------------|---------------|-----------|----------|-------------|
 | pagerankr  | rurl-devel       | rurl-devel                             | Mon 05:00 UTC | Mon 07:00 | 4466631  | ~10 min     |
 | punycoder  | dependency-audit | osv-audit, security-audit              | Mon 10:17     | Mon 11:00 | 4427280  | ~7 min      |
-| ssrfr      | deep-check       | full-check (4.4.3, 4.5.1), renovate    | Mon 10:43     | Mon 11:00 | 4459714  | ~33 min     |
+| ssrfr      | deep-check       | full-check (4.4.3, 4.5.1), renovate    | Mon 12:00     | Mon 12:00 | 4459714  | ~33 min     |
 | punycoder  | deep-check       | full-check (3 legs), sanitizers        | Mon 21:00     | Mon 21:00 | 4466444  | ~16 min     |
 | raddr      | deep-check       | check:linux-devel (also on every push) | Tue 21:00     | Tue 21:00 | 4467064  | ~6 min      |
 | rurl       | dependency-audit | osv-audit, security-audit              | Tue 10:17     | Tue 11:00 | 4467472  | ~11 min     |
@@ -239,11 +239,9 @@ it is awake, not capacity.
 when the Mac is most likely awake. Deep checks go at 21:00 on distinct
 weekdays, as punycoder's and raddr's already did. New schedules start an hour
 apart, longer than any one run takes, so no two scheduled pipelines queue
-against each other on the same host. **Known collision:** punycoder's audit and
-ssrfr's deep check both start Mon 11:00, because the hour rounding puts 10:17
-and 10:43 in the same slot. They share the `concurrent = 4` host for about
-half an hour. That is tolerable, but moving ssrfr's schedule to another hour
-would clear it.
+against each other on the same host. The rounding once put punycoder's 10:17
+audit and ssrfr's 10:43 deep check in the same Mon 11:00 slot; ssrfr's moved
+to Mon 12:00 on 2026-09-30 (owner approved).
 
 **How the estimates were made** (2026-09-30, medians of each project's last
 100 successful jobs). Measured: every main-pipeline job, punycoder's audits
@@ -255,7 +253,7 @@ full-check at about 200 s a leg (seor's `verify` job, which runs the same
 `R CMD check`, takes 195 s). Each new schedule's first run replaces its estimate
 with a measurement; update the row then.
 
-**Open question, not decided.** About two-thirds of a new schedule's
+**Kept for now (owner, 2026-09-30).** About two-thirds of a new schedule's
 runner time is the main pipeline rerunning on a commit that already passed.
 Adding `$CI_PIPELINE_SOURCE != "schedule"` to each repository's on-main rules
 would cut the week to about an hour, but a scheduled run would no longer
