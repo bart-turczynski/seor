@@ -11,6 +11,6 @@ R metapackage, tidyverse-style: `library(seor)` installs and attaches the member
 For R style, tests, lints and roxygen, see AGENTS_LANG.md.
 For specs, ADRs and the design/ lifecycle, see design/README.md.
 For hooks and the pages KEEP list, see design/agent-workflow.md.
-For the fleet tracker convention and the per-repo drift table, see design/fleet.md.
+For the fleet tracker convention, the per-repo drift table and the pipeline schedules, see design/fleet.md.
 For members, invariants and CRAN status, see ARCHITECTURE.md.
 For setup and the verify command, see CONTRIBUTING.md.
