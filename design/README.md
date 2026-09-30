@@ -17,8 +17,8 @@ mkdocs/sphinx/docusaurus, handwritten publisher docs in a browser extension.
   records, frozen once shipped.
 - [`agent-workflow.md`](agent-workflow.md) — where files belong, the design
   checks, git hooks and the pages `KEEP` list.
-- [`fleet.md`](fleet.md) — the fleet tracker convention and the per-repository
-  instruction drift table.
+- [`fleet.md`](fleet.md) — the fleet tracker convention, the per-repository
+  instruction drift table and the pipeline schedule table.
 - [`badges.md`](badges.md) — the README badge suite and its one-time setup.
 - [`github-mirror.md`](github-mirror.md) — playbook for the read-only GitHub
   mirror.

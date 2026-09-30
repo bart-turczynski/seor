@@ -5,8 +5,8 @@ pagerankr, rurl, pslr, ssrfr) share a git workflow and a tracker, not a
 template. Git follows the house `agent-workflow` skill; fp status changes stay
 decoupled from git (the `fp` skill's `references/decoupling.md`). This file
 holds what is neither in the skills nor in any one repository: where fleet work
-is tracked, which English the prose and exported names use, and what actually
-differs between the repositories.
+is tracked, which English the prose and exported names use, what actually
+differs between the repositories, and when each one's scheduled pipelines run.
 
 ## Tracker convention
 
@@ -173,3 +173,82 @@ reason is the 2026-09-22 finding: punycoder's gate, which runs incoming, was
 the only thing that noticed the fleet's `BugReports:` URLs returned 404. seor
 is exempt because its members are not on CRAN, so incoming always errors
 there. ssrfr, added to the fleet after the ADR, complies.
+
+## Scheduled pipelines
+
+Owner decision, 2026-09-23 (SEOR-ihmntqzm): expensive checks and dependency
+audits run on **weekly, staggered** pipeline schedules, not nightly and not
+`when: manual`. The only runner host is a Mac that can sleep (SEOR-hhtzaknn).
+A nightly window would repeat that failure every night, and `when: manual` in
+practice meant never. Before a release, check that the repository's scheduled
+pipelines below are green. A red or missing run is a finding, not noise.
+
+Schedules live in each project's settings (Build > Pipeline schedules), not in
+`.gitlab-ci.yml`. Two rules hold everywhere:
+
+- **Every schedule sets `SCHEDULE_KIND`**, and every scheduled job requires
+  both `$CI_PIPELINE_SOURCE == "schedule"` and its kind, with `when: never` for
+  any other schedule. The kinds are `dependency-audit` (`osv-audit`,
+  `security-audit`), `deep-check` (release-shaped checks) and `rurl-devel`
+  (pagerankr only). Set the variable on the schedule itself, never as a project
+  variable, which every schedule would inherit.
+- **Every schedule targets `main`.** Every repository's `workflow:` rules admit
+  a schedule only through the default-branch rule, so a schedule on any other
+  ref creates no pipeline.
+
+A schedule pipeline on `main` also runs every job that runs on a push to `main`
+(check, coverage, gates or verify, pages), because those jobs key on the branch,
+not the pipeline source. pslr is the exception: its `workflow:` admits only the
+two audits. So a schedule costs its own jobs plus one main pipeline.
+
+### The schedule table
+
+Times are Europe/Warsaw except where marked. "Runner time" is the sum of job
+durations for one run: busy time on the Mac's runners. It is not GitLab compute
+minutes, which self-hosted project runners don't draw on.
+
+| repo       | kind             | jobs it adds to the main pipeline      | when              | id / status        | runner time |
+|------------|------------------|----------------------------------------|-------------------|--------------------|-------------|
+| pagerankr  | rurl-devel       | rurl-devel                             | Mon 05:00 UTC     | 4466631, active    | ~10 min     |
+| punycoder  | dependency-audit | osv-audit, security-audit              | Mon 10:17         | 4427280, active    | ~7 min      |
+| ssrfr      | deep-check       | full-check (4.4.3, 4.5.1), renovate    | Mon 10:43         | 4459714, active    | ~33 min     |
+| punycoder  | deep-check       | full-check (3 legs), sanitizers        | Mon 21:00         | 4466444, active    | ~16 min     |
+| raddr      | deep-check       | check:linux-devel (also on every push) | Tue 21:00         | 4467064, active    | ~6 min      |
+| rurl       | dependency-audit | osv-audit, security-audit              | Tue 10:17         | proposed           | ~11 min     |
+| robotstxtr | dependency-audit | osv-audit, security-audit              | Tue 11:17         | proposed           | ~10 min     |
+| sitemapr   | dependency-audit | osv-audit, security-audit              | Wed 10:17         | proposed           | ~8 min      |
+| pagerankr  | dependency-audit | osv-audit, security-audit              | Wed 11:17         | proposed           | ~12 min     |
+| pagerankr  | deep-check       | check-oldrel                           | Wed 21:00         | proposed           | ~11 min     |
+| pslr       | dependency-audit | osv-audit, security-audit only         | Thu 10:17         | proposed           | ~3 min      |
+| seor       | dependency-audit | osv-audit, security-audit              | Thu 11:17         | proposed           | ~12 min     |
+| seor       | deep-check       | full-check (4.5.1, 4.4.3)              | Thu 21:00         | proposed           | ~15 min     |
+
+Total: about 71 min a week today, and about 2.6 runner-hours a week (about 11
+a month) once the proposed rows exist. The host runs `concurrent = 4`, so this
+is a small share of its week; the constraint is when it is awake, not capacity.
+
+**The stagger.** One schedule per slot. Audits go in weekday working hours,
+when the Mac is most likely awake. Deep checks go at 21:00 on distinct
+weekdays, as punycoder's and raddr's already did. New slots are an hour apart,
+longer than any one run takes, so no two scheduled pipelines queue against
+each other or against the working day's merges on the same host. Minute 17
+keeps them off the top of the hour. The one tighter pair, Mon 10:17 and 10:43,
+predates this table and doesn't overlap: punycoder's audit pipeline finishes
+in about 7 minutes.
+
+**How the estimates were made** (2026-09-30, medians of each project's last
+100 successful jobs). Measured: every main-pipeline job, punycoder's audits
+(57 s, 60 s) and deep checks, ssrfr's full-check (486 s a leg), raddr's
+`check:linux-devel` (190 s), pagerankr's `check-oldrel` (130 s) and
+`rurl-devel` (120 s), and pslr's audits (100 s, 90 s). Estimated, with no run
+on record: the audits elsewhere at 100 s each (pslr's figure), and seor's
+full-check at about 200 s a leg (seor's `verify` job, which runs the same
+`R CMD check`, takes 195 s). Each proposed schedule's first run replaces its
+estimate with a measurement; update the row then.
+
+**Open question, not decided.** About two-thirds of a proposed schedule's
+runner time is the main pipeline rerunning on a commit that already passed.
+Adding `$CI_PIPELINE_SOURCE != "schedule"` to each repository's on-main rules
+would cut the week to about an hour, but a scheduled run would no longer
+re-check `main` against moved dependencies. That re-check is useful for the
+audits and deep checks, and it's why the rows above keep it.
