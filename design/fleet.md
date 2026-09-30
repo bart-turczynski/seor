@@ -131,7 +131,8 @@ relying on a row, re-measure it if the repository has changed its gate since.
 
 Measured 2026-09-27 on each repository's `main`; the spelling-gate column
 re-measured 2026-09-28, after SEOR-mtbzfroz gated every package; the codespell
-column measured 2026-09-29 on each `main` plus the SEOR-xtmnpmae branches:
+column measured 2026-09-29 on each `main` plus the SEOR-xtmnpmae branches, and
+ssrfr's re-measured 2026-09-30 after its own gate landed (SSRF-bdeefzlj):
 
 | repo       | `AGENTS_LANG.md` | spelling gate                     | `.pre-commit-config.yaml` | pre-push verify entry                   | CRAN incoming in the gate | codespell hook          |
 |------------|------------------|-----------------------------------|---------------------------|-----------------------------------------|---------------------------|-------------------------|
@@ -143,7 +144,7 @@ column measured 2026-09-29 on each `main` plus the SEOR-xtmnpmae branches:
 | pagerankr  | no               | yes (`.githooks/pre-push`)        | yes                       | `.githooks/pre-push`                    | on                        | yes                     |
 | rurl       | no               | yes (`tools/verify.R` stage)      | yes                       | `tools/verify-on-push.sh`               | on                        | yes                     |
 | pslr       | no               | yes (`tools/verify.sh`)           | yes                       | `tools/verify.sh standard`              | no check in the gate      | yes                     |
-| ssrfr      | yes              | yes (`scripts/check-spelling.R`)  | yes                       | `Rscript scripts/verify.R`              | on (logs `incoming=on`)   | no (out of scope)       |
+| ssrfr      | yes              | yes (`scripts/check-spelling.R`)  | yes                       | `Rscript scripts/verify.R`              | on (logs `incoming=on`)   | yes                     |
 
 "Spelling gate" means a verify step that runs `spelling::spell_check_package()`
 and fails on a hit; an `inst/WORDLIST` alone gates nothing. "Incoming" is the
