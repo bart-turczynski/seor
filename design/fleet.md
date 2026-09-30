@@ -203,38 +203,47 @@ two audits. So a schedule costs its own jobs plus one main pipeline.
 
 ### The schedule table
 
-Times are Europe/Warsaw except where marked. "Runner time" is the sum of job
-durations for one run: busy time on the Mac's runners. It is not GitLab compute
-minutes, which self-hosted project runners don't draw on.
+"Cron" is the schedule's own setting, in Europe/Warsaw except where marked.
+"Starts" is when the pipeline actually appears. GitLab.com runs a schedule at
+the first full hour at or after its cron time (`next_run_at`), and the pipeline
+shows up a few minutes later. On 2026-09-28, punycoder's 10:17 and ssrfr's 10:43
+schedules both started at 09:08 UTC. So only the hour separates two schedules;
+the minute does not. "Runner time" is the sum of job durations for one run:
+busy time on the Mac's runners. It is not GitLab compute minutes, which
+self-hosted project runners don't draw on.
 
-| repo       | kind             | jobs it adds to the main pipeline      | when              | id / status        | runner time |
-|------------|------------------|----------------------------------------|-------------------|--------------------|-------------|
-| pagerankr  | rurl-devel       | rurl-devel                             | Mon 05:00 UTC     | 4466631, active    | ~10 min     |
-| punycoder  | dependency-audit | osv-audit, security-audit              | Mon 10:17         | 4427280, active    | ~7 min      |
-| ssrfr      | deep-check       | full-check (4.4.3, 4.5.1), renovate    | Mon 10:43         | 4459714, active    | ~33 min     |
-| punycoder  | deep-check       | full-check (3 legs), sanitizers        | Mon 21:00         | 4466444, active    | ~16 min     |
-| raddr      | deep-check       | check:linux-devel (also on every push) | Tue 21:00         | 4467064, active    | ~6 min      |
-| rurl       | dependency-audit | osv-audit, security-audit              | Tue 10:17         | proposed           | ~11 min     |
-| robotstxtr | dependency-audit | osv-audit, security-audit              | Tue 11:17         | proposed           | ~10 min     |
-| sitemapr   | dependency-audit | osv-audit, security-audit              | Wed 10:17         | proposed           | ~8 min      |
-| pagerankr  | dependency-audit | osv-audit, security-audit              | Wed 11:17         | proposed           | ~12 min     |
-| pagerankr  | deep-check       | check-oldrel                           | Wed 21:00         | proposed           | ~11 min     |
-| pslr       | dependency-audit | osv-audit, security-audit only         | Thu 10:17         | proposed           | ~3 min      |
-| seor       | dependency-audit | osv-audit, security-audit              | Thu 11:17         | proposed           | ~12 min     |
-| seor       | deep-check       | full-check (4.5.1, 4.4.3)              | Thu 21:00         | proposed           | ~15 min     |
+| repo       | kind             | jobs it adds to the main pipeline      | cron          | starts    | id       | runner time |
+|------------|------------------|----------------------------------------|---------------|-----------|----------|-------------|
+| pagerankr  | rurl-devel       | rurl-devel                             | Mon 05:00 UTC | Mon 07:00 | 4466631  | ~10 min     |
+| punycoder  | dependency-audit | osv-audit, security-audit              | Mon 10:17     | Mon 11:00 | 4427280  | ~7 min      |
+| ssrfr      | deep-check       | full-check (4.4.3, 4.5.1), renovate    | Mon 10:43     | Mon 11:00 | 4459714  | ~33 min     |
+| punycoder  | deep-check       | full-check (3 legs), sanitizers        | Mon 21:00     | Mon 21:00 | 4466444  | ~16 min     |
+| raddr      | deep-check       | check:linux-devel (also on every push) | Tue 21:00     | Tue 21:00 | 4467064  | ~6 min      |
+| rurl       | dependency-audit | osv-audit, security-audit              | Tue 10:17     | Tue 11:00 | 4467472  | ~11 min     |
+| robotstxtr | dependency-audit | osv-audit, security-audit              | Tue 11:17     | Tue 12:00 | 4467473  | ~10 min     |
+| sitemapr   | dependency-audit | osv-audit, security-audit              | Wed 10:17     | Wed 11:00 | 4467474  | ~8 min      |
+| pagerankr  | dependency-audit | osv-audit, security-audit              | Wed 11:17     | Wed 12:00 | 4467475  | ~12 min     |
+| pagerankr  | deep-check       | check-oldrel                           | Wed 21:00     | Wed 21:00 | 4467476  | ~11 min     |
+| pslr       | dependency-audit | osv-audit, security-audit only         | Thu 10:17     | Thu 11:00 | 4467477  | ~3 min      |
+| seor       | dependency-audit | osv-audit, security-audit              | Thu 11:17     | Thu 12:00 | 4467483  | ~12 min     |
+| seor       | deep-check       | full-check (4.5.1, 4.4.3)              | Thu 21:00     | Thu 21:00 | 4467484  | ~15 min     |
 
-Total: about 71 min a week today, and about 2.6 runner-hours a week (about 11
-a month) once the proposed rows exist. The host runs `concurrent = 4`, so this
-is a small share of its week; the constraint is when it is awake, not capacity.
+All thirteen are active; the eight from rurl down were created 2026-09-30.
+
+Total: about 2.6 runner-hours a week (about 11 a month); the five schedules
+that predate 2026-09-30 are about 71 min of that. The host runs
+`concurrent = 4`, so this is a small share of its week; the constraint is when
+it is awake, not capacity.
 
 **The stagger.** One schedule per slot. Audits go in weekday working hours,
 when the Mac is most likely awake. Deep checks go at 21:00 on distinct
-weekdays, as punycoder's and raddr's already did. New slots are an hour apart,
-longer than any one run takes, so no two scheduled pipelines queue against
-each other or against the working day's merges on the same host. Minute 17
-keeps them off the top of the hour. The one tighter pair, Mon 10:17 and 10:43,
-predates this table and doesn't overlap: punycoder's audit pipeline finishes
-in about 7 minutes.
+weekdays, as punycoder's and raddr's already did. New schedules start an hour
+apart, longer than any one run takes, so no two scheduled pipelines queue
+against each other on the same host. **Known collision:** punycoder's audit and
+ssrfr's deep check both start Mon 11:00, because the hour rounding puts 10:17
+and 10:43 in the same slot. They share the `concurrent = 4` host for about
+half an hour. That is tolerable, but moving ssrfr's schedule to another hour
+would clear it.
 
 **How the estimates were made** (2026-09-30, medians of each project's last
 100 successful jobs). Measured: every main-pipeline job, punycoder's audits
@@ -243,10 +252,10 @@ in about 7 minutes.
 `rurl-devel` (120 s), and pslr's audits (100 s, 90 s). Estimated, with no run
 on record: the audits elsewhere at 100 s each (pslr's figure), and seor's
 full-check at about 200 s a leg (seor's `verify` job, which runs the same
-`R CMD check`, takes 195 s). Each proposed schedule's first run replaces its
-estimate with a measurement; update the row then.
+`R CMD check`, takes 195 s). Each new schedule's first run replaces its estimate
+with a measurement; update the row then.
 
-**Open question, not decided.** About two-thirds of a proposed schedule's
+**Open question, not decided.** About two-thirds of a new schedule's
 runner time is the main pipeline rerunning on a commit that already passed.
 Adding `$CI_PIPELINE_SOURCE != "schedule"` to each repository's on-main rules
 would cut the week to about an hour, but a scheduled run would no longer
