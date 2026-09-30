@@ -107,9 +107,10 @@ default:
     # wrong interpreter. raddr hit exactly that between its release and devel
     # jobs and went red on `libxml2.so.2: cannot open shared object file`
     # (SEOR-huidaviw). It has not fired here only because `full-check` is
-    # .scheduled-or-manual and this project has no schedules (SEOR-tzxuisnf),
-    # so it has never run -- a latent collision waiting on an owner action, not
-    # a safe configuration. $CI_JOB_NAME_SLUG expands per matrix leg.
+    # .scheduled-or-manual and this project has no deep-check schedule
+    # (SEOR-ihmntqzm), so it has never run -- a latent collision waiting on an
+    # owner action, not a safe configuration. $CI_JOB_NAME_SLUG expands per
+    # matrix leg.
     key:
       prefix: "$CI_JOB_NAME_SLUG"
       files:
@@ -278,8 +279,14 @@ workflow:
     # detectors; `allow_failure: true` here made a scheduled pipeline report
     # success even when the detector fired, which is the one outcome that makes
     # them worthless. They are independent jobs, so a red leg neither stops its
-    # siblings nor hides their results.
+    # siblings nor hides their results. Only a schedule that sets
+    # SCHEDULE_KIND=deep-check (a variable on the schedule itself, never a
+    # project or group variable, which every schedule would inherit) runs
+    # these jobs; any other schedule, such as the dependency-audit one, falls
+    # to the explicit `when: never` below (SEOR-nqexdjgl, SEOR-ihmntqzm).
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_KIND == "deep-check"
     - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     # Under `rules`, `when: manual` defaults to `allow_failure: false` (unlike a
     # job-level `when: manual`), which would leave a hand-triggered pipeline
     # sitting *blocked* on a job nobody meant to gate on. This line is
