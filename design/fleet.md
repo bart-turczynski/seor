@@ -32,6 +32,23 @@ as the written source.
   seor issue never restates implementation detail.
 - Non-coding work (articles, analyses, brainstorming) is `[PARKED]`.
 
+### Session ownership
+
+Adopted by the owner on 2026-09-30, after the seor session shipped a punycoder
+fix while the punycoder session held a release queue.
+
+- When a session is live in a repository's folder, it is the only one that
+  writes to that repository: branches, MRs, pipeline triggers and that
+  repository's fp backlog.
+- The seor session files and orders fleet sweeps and cascades. It does the
+  work itself only in repositories with no live session. For a repository
+  that has one, it messages that session with the SEOR id and the checklist
+  line, then ticks the line from the evidence that session reports back.
+- A question about another repository goes to that repository's session, not
+  to seor.
+- Check who is live before writing: `ListAgents` names each session and its
+  folder.
+
 ## Prose language
 
 Fleet prose is US English only (owner's rule, 2026-09-28; SEOR-kfiqpymb). Every
