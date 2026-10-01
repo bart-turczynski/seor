@@ -74,6 +74,11 @@ reasons a real package hits as it grows past this scaffold:
   legitimately call `library()`.
 - `undesirable_operator_linter`: configured to keep flagging `<<-`/`->>` but
   allow `:::`, which tests use to reach internal (unexported) functions.
+- `case_folding_linter`: an addition (fleet sweep SEOR-rxxuzhmc). It bans
+  `tolower()`, `toupper()` and `casefold()`, which follow `LC_CTYPE`: a Turkish
+  or Azeri locale maps `I` to a dotless `ı`. Map ASCII letters with `chartr()`
+  instead. Tests are not exempt: lintr 3.4 turns a directory key in
+  `exclusions` into a whole-file exclusion for every linter.
 
 `strings_as_factors_linter` is off, as in goodpractice, which dropped it in 1.2.0
 (ropensci-review-tools/goodpractice#321). It only guarded the pre-R-4.0
