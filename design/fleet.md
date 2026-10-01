@@ -224,13 +224,18 @@ self-hosted project runners don't draw on.
 | sitemapr   | dependency-audit | osv-audit, security-audit              | Wed 10:17     | Wed 11:00 | 4467474  | ~8 min      |
 | pagerankr  | dependency-audit | osv-audit, security-audit              | Wed 11:17     | Wed 12:00 | 4467475  | ~12 min     |
 | pagerankr  | deep-check       | check-oldrel                           | Wed 21:00     | Wed 21:00 | 4467476  | ~11 min     |
-| pslr       | dependency-audit | osv-audit, security-audit only         | Thu 10:17     | Thu 11:00 | 4467477  | ~3 min      |
-| seor       | dependency-audit | osv-audit, security-audit              | Thu 11:17     | Thu 12:00 | 4467483  | ~12 min     |
-| seor       | deep-check       | full-check (4.5.1, 4.4.3)              | Thu 21:00     | Thu 21:00 | 4467484  | ~15 min     |
+| pslr       | dependency-audit | osv-audit, security-audit only         | Thu 10:17     | Thu 11:00 | 4467477  | 2 min       |
+| seor       | dependency-audit | osv-audit, security-audit              | Thu 11:17     | Thu 12:00 | 4467483  | 19 min      |
+| seor       | deep-check       | full-check (4.5.1, 4.4.3)              | Thu 21:00     | Thu 21:00 | 4467484  | 18 min      |
 
 All thirteen are active; the eight from rurl down were created 2026-09-30.
+Rows without a `~` are a first run's measurement: pslr's audit (pipeline
+2900446410), seor's audit (2900664488) and seor's deep check (2902727359), all
+on 2026-10-01 and all green with only the intended jobs. seor's two audits
+took about 6 minutes each against the 100 s estimate, building their
+dependencies from source on a cold cache; a warm cache should shorten them.
 
-Total: about 2.6 runner-hours a week (about 11 a month); the five schedules
+Total: about 2.8 runner-hours a week (about 12 a month); the five schedules
 that predate 2026-09-30 are about 71 min of that. The host runs
 `concurrent = 4`, so this is a small share of its week; the constraint is when
 it is awake, not capacity.
