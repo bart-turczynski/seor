@@ -6,8 +6,8 @@ the steps in order.
 **Deltas live in each package's `CONTRIBUTING.md`.** Its "CRAN release
 checklist" section links here and lists only that package's extra or
 different steps. Read it before starting; where it disagrees with this file,
-it wins. punycoder, pslr and rurl still carry full checklists of their own;
-moving them to this shape is SEOR-wmeqnoqz.
+it wins. rurl still carries a full checklist of its own; moving it to this
+shape is SEOR-wmeqnoqz.
 
 Who runs each step:
 
@@ -36,6 +36,11 @@ Who runs each step:
    - `codemeta.json`'s version is edited by hand, not regenerated: it
      carries hand-set GitLab URLs.
 4. **agent** Rewrite `cran-comments.md` for this submission.
+   `devtools::submit_cran()` sends it verbatim, and the CRAN reviewer reads
+   all of it as plain text, HTML comments included. Keep it to what the
+   reviewer needs. Notes to ourselves (what was checked against which
+   tarball, what to re-run if the tree changes) go in the release's fp
+   issue.
 5. **agent** Check the exact tarball. Build it from a clean export of `main`
    (`git archive`), then run `R CMD check --as-cran` on it with
    `_R_CHECK_CRAN_INCOMING_=true` and `_R_CHECK_CRAN_INCOMING_REMOTE_=true`,
