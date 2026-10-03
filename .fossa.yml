@@ -1,0 +1,20 @@
+# .fossa.yml: FOSSA CLI configuration for seor.
+#
+# Pins the project id so `fossa analyze` keys the FOSSA project as
+# `git+gitlab.com/bart-turczynski/seor`, the form design/fleet-standard.md's
+# slot-17 badges expect (the CLI adds the account prefix, custom+62973/).
+# Without it the CLI derives the id from the git remote: ssrfr's first scan
+# (job 16915219089) landed under `gitlab.com/bart-turczynski/ssrfr`, while
+# rurl, which pins its id here, landed under the expected locator.
+version: 3
+
+project:
+  id: git+gitlab.com/bart-turczynski/seor
+  name: seor
+
+paths:
+  exclude:
+    # Rendered pkgdown site and R CMD check output: generated, never
+    # distributed as source.
+    - docs
+    - '**/*.Rcheck'
