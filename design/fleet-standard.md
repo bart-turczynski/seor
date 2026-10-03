@@ -242,8 +242,8 @@ URL answering exactly 404 (SEOR-ocbtrrnl).
   code or data the package ships keep their own `cph` entry, as raddr's
   web-platform-tests contributors do.
 - The `LICENSE` copyright holder is Bart Turczynski.
-- The `cph` rule waits on the employer answer in SEOR-tahlljtx; if that answer
-  changes it, this section and the per-package issues change with it.
+- No employer appears as copyright holder or funder (owner, 2026-10-03,
+  SEOR-tahlljtx), although some past commits used a work address.
 - `URL:` lists, in this order, the Pages site
   (`https://bart-turczynski.gitlab.io/<pkg>/`), the GitLab project
   (`https://gitlab.com/bart-turczynski/<pkg>`), the r-universe page
@@ -253,12 +253,16 @@ URL answering exactly 404 (SEOR-ocbtrrnl).
 
 ## Identities
 
-The owner's identity decisions are recorded in SEOR-tahlljtx. What the fleet
-uses, measured 2026-10-03:
+The owner decided these on 2026-10-03 (SEOR-tahlljtx):
 
-- **Maintainer email:** `bartek@turczynski.pl`, in every `DESCRIPTION`.
-- **Forge:** GitLab first. Account `bart-turczynski` on GitLab, and the same
-  name on GitHub for the read-only mirrors. One account per service.
+- **Email:** `bartek@turczynski.pl` is the public contact and the commit
+  address for new commits: `DESCRIPTION` Maintainer, `SECURITY.md`, the Code
+  of Conduct contact, and the global git `user.email`. There is no separate
+  security alias. Commit history stays as it is.
+- **Forge:** GitLab first. Account `bart-turczynski` on GitLab. GitHub, under
+  the same name, is used only for the read-only mirror, Zenodo (DOIs through
+  mirror releases) and the r-universe registry; no badge reads from it. One
+  account per service, reused for every package.
 - **ORCID:** 0000-0002-8788-7980. The Zenodo "all software" badge searches on
   it.
 - **Docs URL:** the GitLab Pages site, `https://bart-turczynski.gitlab.io/<pkg>/`.
