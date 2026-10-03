@@ -164,3 +164,7 @@
   accepts the British spelling. `design/fleet.md` states the fleet rule:
   prose is US English, and a British spelling is respelled, never added
   to the word list (SEOR-kfiqpymb).
+* The README badge row follows the fleet standard (`design/fleet-standard.md`):
+  r-universe in slot 1 instead of a CRAN badge that rendered an error for a
+  package not on CRAN, plus docs, repostatus, Zenodo, license, last-commit and
+  the FOSSA license and security badges (SEOR-kqcbgsfc).
