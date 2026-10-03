@@ -78,8 +78,10 @@ every scheduled job requires its kind). Its R version comes from its image tag,
 expanded through `parallel:matrix` and variables, and is compared by minor
 version with the current release and oldrel (api.r-hub.io) and the DESCRIPTION
 floor. What a job does is read textually, from the job and from every
-repository script it names (two levels deep, comment lines dropped, and R stage
-tables' `default = FALSE` entries dropped, since those stages are opt-in).
+repository R, shell or YAML script it names (two levels deep, comment lines
+dropped, and R stage tables' `default = FALSE` entries dropped, since those
+stages are opt-in). Python scripts are not followed: the citation scripts a job
+names quote `R CMD check --as-cran` in their prose.
 So a gate is "present" when its call appears in that text; a script that takes
 the call but skips it at run time reads as present. Not checked: whether a tag
 pipeline fails on "already on CRAN", whether the URL check fails on zero URLs
@@ -264,7 +266,10 @@ class GitLabSource:
         if path not in self._cache:
             quoted = urllib.parse.quote(path, safe="")
             command = ["glab", "api", f"projects/{self.project}/repository/files/{quoted}/raw?ref={self.ref}"]
-            result = subprocess.run(command, capture_output=True, timeout=120)  # noqa: S603
+            for _ in range(3):  # GitLab answers the odd TLS handshake timeout
+                result = subprocess.run(command, capture_output=True, timeout=120)  # noqa: S603
+                if not result.returncode:
+                    break
             if result.returncode:
                 raise ProbeError(f"reading {path}: {result.stderr.decode(errors='replace').strip()[:200]}")
             self._cache[path] = result.stdout.decode("utf-8", errors="replace")
@@ -452,7 +457,9 @@ def drop_opt_in_stages(text: str) -> str:
 
 
 PATH_TOKEN = re.compile(r"(?<![\w$/.-])((?:\.?[\w-]+/)+[\w.-]+)")
-SCRIPT_SUFFIXES = {"", ".R", ".r", ".sh", ".py", ".yml", ".yaml"}
+# Python is not followed: the seor-family scripts a job names (check-citation,
+# check-bugreports) quote `R CMD check --as-cran` in their prose.
+SCRIPT_SUFFIXES = {"", ".R", ".r", ".sh", ".yml", ".yaml"}
 
 
 def inline_scripts(text: str, source, depth: int = 2, seen: set[str] | None = None) -> list[tuple[str, str]]:
@@ -466,7 +473,10 @@ def inline_scripts(text: str, source, depth: int = 2, seen: set[str] | None = No
         if token == ".gitlab-ci.yml":
             continue
         seen.add(token)
-        body = source.read(token) or ""
+        try:
+            body = source.read(token) or ""
+        except ProbeError:
+            continue
         if len(body) > 400_000:
             continue
         body = strip_comment_lines(body)
@@ -792,7 +802,7 @@ class CI:
 
 CHECK_RE = re.compile(r"rcmdcheck::rcmdcheck\s*\(|\bR CMD check\b|\"CMD\",\s*\"check\"")
 AS_CRAN_RE = re.compile(r"--as-cran")
-ERROR_ON_RE = re.compile(r"error_on\s*=\s*[\"']warning[\"']")
+ERROR_ON_RE = re.compile(r"error_on\s*=\s*\\?[\"']warning\\?[\"']")
 INCOMING_OFF_RE = re.compile(r"_R_CHECK_CRAN_INCOMING_[\"']?\s*[=:]\s*[\"']?(?:false|FALSE|0)\b")
 INCOMING_REMOTE_OFF_RE = re.compile(r"_R_CHECK_CRAN_INCOMING_REMOTE_[\"']?\s*[=:]\s*[\"']?(?:false|FALSE|0)\b")
 URL_CHECK_RE = re.compile(r"check_url_db|url_db_from_package_sources|urlchecker::url_check|\burl_check\s*\(")
