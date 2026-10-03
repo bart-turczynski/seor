@@ -50,7 +50,9 @@ WHAT IT CHECKS, by section of the standard.
 * .gitlab-ci.yml. R CMD check with `--as-cran` and `error_on = "warning"` on
   every push to main, with CRAN incoming switched off only where ADR 0004
   allows; a coverage job on push with a `coverage:` regex, a cobertura report,
-  a threshold of at least 95 and no `allow_failure`; `pages` on push; the
+  a threshold of at least 95 and no `allow_failure`, which also runs in both
+  schedule pipelines (the coverage badge reads the latest successful pipeline
+  on main); `pages` on push; the
   cheap gates (README drift, news-version, citation-version, lint, spelling);
   deep-check legs for R release, oldrel, devel and the DESCRIPTION floor;
   ASAN/UBSAN legs for punycoder, pslr and robotstxtr; `osv-audit` and
@@ -1179,6 +1181,11 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
             report.gap("ci", f"{job.name}: no {COVERAGE_MIN:g}% coverage threshold")
         elif min(thresholds) < COVERAGE_MIN:
             report.gap("ci", f"{job.name}: coverage threshold {min(thresholds):g} is below {COVERAGE_MIN:g}")
+    # The coverage badge reads the latest successful pipeline on main, schedules included.
+    if coverage:
+        for kind in SCHEDULE_KINDS:
+            if not any(j.runs[kind] for j in coverage):
+                report.gap("ci", f"coverage job does not run on the {kind} schedule")
 
     if not any(j.name == "pages" or j.attrs.get("pages", ("", []))[0] == "true" for j in on_push):
         report.gap("ci", "pages does not deploy on a push to main")
@@ -1341,7 +1348,7 @@ workflow:
     - when: never
 .on-main:
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_PIPELINE_SOURCE == "web"
 .deep:
   rules:
@@ -1592,8 +1599,29 @@ def self_test() -> list[str]:
                     "URL: https://gitlab.com/bart-turczynski/punycoder, https://bart-turczynski.gitlab.io/punycoder/"),
                fixture_state())
 
-    # NEGATIVE: CI.
     ci = ".gitlab-ci.yml"
+    # POSITIVE: coverage named on each schedule by its own rules, the other push jobs not.
+    push_only = edit(cran, ci, "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n    - if: $CI_PIPELINE_SOURCE == \"web\"\n.deep:",
+                     "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != \"schedule\"\n"
+                     "    - if: $CI_PIPELINE_SOURCE == \"web\"\n.deep:")
+    expect_clean("coverage on both schedules by its own rules", "punycoder",
+                 edit(push_only, ci, "coverage:\n  extends: .on-main\n",
+                      "coverage:\n  rules:\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n"),
+                 fixture_state())
+
+    # NEGATIVE: CI.
+    report = expect_gap("coverage only on push", "coverage job does not run on the deep-check schedule", "punycoder",
+                        push_only, fixture_state())
+    if not any("coverage job does not run on the dependency-audit schedule" in t for _, t in report.gaps):
+        failures.append(f"coverage only on push: expected a dependency-audit schedule gap too, got {report.gaps}")
+    report = expect_gap("coverage off the audit schedule", "coverage job does not run on the dependency-audit schedule",
+                        "punycoder",
+                        edit(cran, ci, "coverage:\n  extends: .on-main\n",
+                             "coverage:\n  rules:\n    - if: $SCHEDULE_KIND == \"dependency-audit\"\n      when: never\n"
+                             "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n"),
+                        fixture_state())
+    if any("deep-check schedule" in t for _, t in report.gaps):
+        failures.append(f"coverage off the audit schedule: unexpected deep-check gap, got {report.gaps}")
     expect_gap("coverage threshold below 95", "coverage threshold 90 is below 95", "punycoder",
                edit(cran, ci, "pct < 95", "pct < 90"), fixture_state())
     expect_gap("coverage threshold absent", "no 95% coverage threshold", "punycoder",
