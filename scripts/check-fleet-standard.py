@@ -34,7 +34,8 @@ WHAT IT CHECKS, by section of the standard.
   live state: on CRAN (crandb), a GitLab Release (`releases` API), a concept
   DOI (CITATION.cff's top-level `doi:`, else the badge row; doi.org must
   resolve it and Zenodo must call it the concept DOI), and, for the FOSSA
-  slots, a FOSSA project under the `git+gitlab.com` locator. A badge shown
+  slots, a FOSSA project under the `custom+<org>/git+gitlab.com` locator
+  that fossa-cli uploads to (FOSSA_ORG_ID). A badge shown
   while its condition does not hold is a gap. r-universe is not conditional in
   the standard: a package missing from r-universe is a gap.
 * Badge images. Every image URL in the row answers 200 with an image whose
@@ -113,6 +114,10 @@ from typing import Callable
 OWNER = "bart-turczynski"
 FLEET = ("rurl", "pslr", "punycoder", "raddr", "ssrfr", "pagerankr", "sitemapr", "seor", "robotstxtr")
 FOSSA_PACKAGES = frozenset({"rurl", "ssrfr", "seor"})
+# The account's FOSSA organization. `fossa analyze` with the API key uploads to
+# `custom+<org>/git+gitlab.com/<owner>/<pkg>`; the bare `git+gitlab.com/...`
+# locator answers 404 (rurl's first upload, 2026-10-03).
+FOSSA_ORG_ID = "62973"
 SANITIZER_PACKAGES = frozenset({"punycoder", "pslr", "robotstxtr"})
 ORCID = "0000-0002-8788-7980"
 CONTACT = "bartek@turczynski.pl"
@@ -853,9 +858,17 @@ def leg_roles(image: str, state: State, floor: str | None) -> set[str]:
 # --- checks ------------------------------------------------------------------------
 
 
+def fossa_locator(pkg: str) -> str:
+    """The URL-encoded FOSSA project locator fossa-cli uploads `pkg` under."""
+    return f"custom%2B{FOSSA_ORG_ID}%2Fgit%2Bgitlab.com%2F{OWNER}%2F{pkg}"
+
+
 def fossa_image(pkg: str, issue: str) -> str:
-    return (f"https://app.fossa.com/api/projects/git%2Bgitlab.com%2F{OWNER}%2F{pkg}.svg"
-            f"?type=shield&issueType={issue}")
+    return f"https://app.fossa.com/api/projects/{fossa_locator(pkg)}.svg?type=shield&issueType={issue}"
+
+
+def fossa_link(pkg: str, issue: str) -> str:
+    return f"https://app.fossa.com/projects/{fossa_locator(pkg)}?ref=badge_shield&issueType={issue}"
 
 
 @dataclass
@@ -872,7 +885,6 @@ def badge_slots(pkg: str, concept_doi: str | None) -> list[Slot]:
     o = re.escape(OWNER)
     stage = "(?P<stage>" + "|".join(LIFECYCLE) + ")"
     doi = re.escape(concept_doi) if concept_doi else r"10\.5281/zenodo\.\d+"
-    fossa_link = rf"https://app\.fossa\.com/projects/git%2Bgitlab\.com%2F{o}%2F{p}\?ref=badge_shield&issueType="
 
     def k(pattern: str) -> re.Pattern:
         return re.compile(pattern, re.I)
@@ -917,9 +929,9 @@ def badge_slots(pkg: str, concept_doi: str | None) -> list[Slot]:
         Slot(16, "last commit", k(r"last-commit"),
              rf"https://img\.shields\.io/gitlab/last-commit/{o}%2F{p}", rf"https://gitlab\.com/{o}/{p}/-/commits/main"),
         Slot(17, "FOSSA license", k(r"fossa\.com/api/projects/.*issueType=license|fossa\.com/api/projects/[^?]*$"),
-             re.escape(fossa_image(pkg, "license")), fossa_link + "license"),
+             re.escape(fossa_image(pkg, "license")), re.escape(fossa_link(pkg, "license"))),
         Slot(18, "FOSSA security", k(r"fossa\.com/api/projects/.*issueType=security"),
-             re.escape(fossa_image(pkg, "security")), fossa_link + "security"),
+             re.escape(fossa_image(pkg, "security")), re.escape(fossa_link(pkg, "security"))),
     ]
 
 
@@ -1008,7 +1020,8 @@ def check_badges(pkg: str, source, state: State, report: Report) -> list[str]:
             report.gap("badges", f"missing slot {number}: {by_number[number].name}")
     reasons = {1: "not on CRAN", 2: "not on CRAN", 3: "not on CRAN", 15: "not on CRAN",
                8: "no GitLab Release", 11: "no concept DOI that doi.org resolves",
-               17: "no FOSSA project under git+gitlab.com yet", 18: "no FOSSA project under git+gitlab.com yet"}
+               17: "no FOSSA project under the custom+<org>/git+gitlab.com locator yet",
+               18: "no FOSSA project under the custom+<org>/git+gitlab.com locator yet"}
     unknown = set()
     if state.has_release is None:
         unknown.add(8)
@@ -1550,6 +1563,29 @@ def self_test() -> list[str]:
                fixture_state(on_cran=False, release=True, doi=False, fossa=False))
     expect_gap("FOSSA badges once the project exists", "missing slot 17: FOSSA license", "seor", seor,
                fixture_state(on_cran=False, release=False, doi=False, fossa=True))
+    # FOSSA locator, pinned as literals: rurl's first upload (job 16914055629, 2026-10-03) landed under
+    # custom+62973/git+gitlab.com/...; its badge answered 200, the bare git+gitlab.com form 404.
+    fossa_new = (
+        "[![FOSSA license](https://app.fossa.com/api/projects/custom%2B62973%2Fgit%2Bgitlab.com%2Fbart-turczynski"
+        "%2Fseor.svg?type=shield&issueType=license)](https://app.fossa.com/projects/custom%2B62973%2Fgit%2Bgitlab.com"
+        "%2Fbart-turczynski%2Fseor?ref=badge_shield&issueType=license)\n"
+        "[![FOSSA security](https://app.fossa.com/api/projects/custom%2B62973%2Fgit%2Bgitlab.com%2Fbart-turczynski"
+        "%2Fseor.svg?type=shield&issueType=security)](https://app.fossa.com/projects/custom%2B62973%2Fgit%2Bgitlab.com"
+        "%2Fbart-turczynski%2Fseor?ref=badge_shield&issueType=security)\n")
+    fossa_old = fossa_new.replace("custom%2B62973%2F", "")
+    expect_clean("FOSSA pair under the custom locator", "seor",
+                 edit(seor, "README.Rmd", "<!-- badges: end -->", fossa_new + "<!-- badges: end -->"),
+                 fixture_state(on_cran=False, release=False, doi=False, fossa=True))
+    old_report = expect_gap("FOSSA pair under the bare git+gitlab.com locator", "slot 17 FOSSA license: image URL differs",
+                            "seor", edit(seor, "README.Rmd", "<!-- badges: end -->", fossa_old + "<!-- badges: end -->"),
+                            fixture_state(on_cran=False, release=False, doi=False, fossa=True))
+    for needle in ("slot 17 FOSSA license: link differs", "slot 18 FOSSA security: image URL differs",
+                   "slot 18 FOSSA security: link differs"):
+        if not any(needle in text for _, text in old_report.gaps):
+            failures.append(f"FOSSA bare locator: expected a gap containing {needle!r}, got {old_report.gaps}")
+    if fossa_image("rurl", "license") != ("https://app.fossa.com/api/projects/custom%2B62973%2Fgit%2Bgitlab.com"
+                                          "%2Fbart-turczynski%2Frurl.svg?type=shield&issueType=license"):
+        failures.append(f"FOSSA probe URL is not the measured 200 form: {fossa_image('rurl', 'license')}")
     expect_gap("lifecycle stage outside the set", "slot 9 lifecycle: image URL differs", "punycoder",
                edit(cran, "README.Rmd", "lifecycle-stable-brightgreen", "lifecycle-maturing-blue"), fixture_state())
     expect_gap("static docs badge", "slot 7 docs: image URL differs", "punycoder",
