@@ -231,7 +231,7 @@ self-hosted project runners don't draw on.
 | pagerankr  | deep-check       | check-oldrel                           | Wed 21:00     | Wed 21:00 | 4467476  | ~11 min     |
 | pslr       | dependency-audit | osv-audit, security-audit only         | Thu 10:17     | Thu 11:00 | 4467477  | 2 min       |
 | seor       | dependency-audit | osv-audit, security-audit              | Thu 11:17     | Thu 12:00 | 4467483  | 19 min      |
-| seor       | deep-check       | full-check (4.5.1, 4.4.3)              | Thu 21:00     | Thu 21:00 | 4467484  | 18 min      |
+| seor       | deep-check       | full-check (3 legs), floor-check       | Thu 21:00     | Thu 21:00 | 4467484  | pending     |
 | robotstxtr | deep-check       | none yet (SEOR-thlzqzac adds the legs) | Mon 22:00     | Mon 22:00 | 4472810  | pending     |
 | sitemapr   | deep-check       | none yet (SEOR-dunwqfkj adds the legs) | Tue 22:00     | Tue 22:00 | 4472811  | pending     |
 | pslr       | deep-check       | none: workflow refuses (SEOR-twxjxogh) | Wed 22:00     | Wed 22:00 | 4472812  | pending     |
@@ -246,8 +246,10 @@ issue adds its scheduled jobs, those six run only the main-pipeline jobs, and
 pslr's creates no pipeline at all. Their runner time is measured at the first
 green run after that.
 Rows without a `~` are a first run's measurement: pslr's audit (pipeline
-2900446410), seor's audit (2900664488) and seor's deep check (2902727359), all
-on 2026-10-01 and all green with only the intended jobs. seor's two audits
+2900446410) and seor's audit (2900664488), both on 2026-10-01 and both green
+with only the intended jobs. seor's deep check measured 18 min on its old two
+legs (2902727359); SEOR-kqcbgsfc replaced them with release, oldrel, devel and
+floor legs, so its row waits for the first run of those. seor's two audits
 took about 6 minutes each against the 100 s estimate, building their
 dependencies from source on a cold cache; a warm cache should shorten them.
 

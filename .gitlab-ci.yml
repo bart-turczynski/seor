@@ -101,16 +101,14 @@ default:
     # lockfile, so this is the closest thing to one.
     #
     # The prefix is load-bearing, not decoration. Every job here extends `.r`,
-    # but `full-check` is a parallel matrix over R_VERSION 4.5.1 and 4.4.3
-    # while the rest run 4.5.1, so without it three jobs on two different R
-    # versions would share one entry and hand each other binaries built by the
+    # but `full-check` is a parallel matrix over R release, oldrel and devel
+    # and `floor-check` runs R 4.1 while the rest run 4.5.1, so without it jobs
+    # on different R versions would share one entry and hand each other binaries built by the
     # wrong interpreter. raddr hit exactly that between its release and devel
     # jobs and went red on `libxml2.so.2: cannot open shared object file`
-    # (SEOR-huidaviw). It has not fired here only because `full-check` is
-    # .scheduled-or-manual and this project has no deep-check schedule
-    # (SEOR-ihmntqzm), so it has never run -- a latent collision waiting on an
-    # owner action, not a safe configuration. $CI_JOB_NAME_SLUG expands per
-    # matrix leg.
+    # (SEOR-huidaviw). `full-check` and `floor-check` run on the weekly
+    # deep-check schedule (design/fleet.md), so the collision is live, not
+    # latent. $CI_JOB_NAME_SLUG expands per matrix leg.
     key:
       prefix: "$CI_JOB_NAME_SLUG"
       files:
@@ -210,7 +208,16 @@ default:
       libfontconfig1-dev libfreetype6-dev libharfbuzz-dev libfribidi-dev
       libpng-dev libtiff5-dev libjpeg-dev
       cmake libuv1-dev libglpk-dev libx11-dev
-    - Rscript -e 'if (!requireNamespace("pak", quietly = TRUE)) install.packages("pak", repos = "https://cloud.r-project.org")'
+    # pak from r-lib's own binary repository, not CRAN: rocker/r-ver:devel has
+    # no binaries, so a CRAN install builds pak from source and can fail with
+    # only a warning, and the next step dies on "no package called 'pak'"
+    # (punycoder's full-check R-devel, pipeline 2894951198). The r-lib repo
+    # serves a self-contained build for every R version.
+    - >
+      Rscript -e 'if (!requireNamespace("pak", quietly = TRUE))
+      install.packages("pak", repos = sprintf(
+      "https://r-lib.github.io/p/pak/stable/%s/%s/%s",
+      .Platform$pkgType, R.Version()$os, R.Version()$arch))'
 
 # --------------------------------------------------------------------------
 # workflow — keep only the pipeline on main
@@ -266,7 +273,7 @@ workflow:
 # rather than left as dead config. The `web` branch is NOT dead: without it
 # the escape hatch would open a pipeline in which the fast gate is the one
 # thing that cannot run, which is the whole reason to hand-start one. Kept as
-# a named template, extended by five jobs, rather than inlined identically
+# a named template, extended by every on-main job, rather than inlined identically
 # five times.
 .on-main:
   rules:
@@ -330,14 +337,15 @@ workflow:
 # development tooling rather than package dependencies. Without the extra line
 # the job reaches the verify chain with no linter installed and dies on
 # "there is no package called 'lintr'".
-# seor is a metapackage whose members `pagerankr`, `sitemapr` and `robotstxtr`
-# are not yet on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always
-# reports an ERROR: non-mainstream strong dependencies, the `Remotes:` field, and
-# the archived `seoR` name clash. That is a true statement about CRAN readiness
-# and a permanent one until the members are published, so running it as a
-# per-push gate encodes a known failure rather than catching a regression. The
-# step is disabled here and only here; every other `--as-cran` check still runs.
-# Re-enable it as part of the first CRAN submission, when `Remotes:` is dropped.
+# seor is a metapackage whose members `sitemapr` and `robotstxtr` are not yet
+# on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always reports an
+# ERROR: non-mainstream strong dependencies, the `Remotes:` field, and the
+# archived `seoR` name clash. That is a true statement about CRAN readiness and
+# a permanent one until the members are published, so running it as a per-push
+# gate encodes a known failure rather than catching a regression. The step is
+# disabled for seor alone (design/adr/0004); every other `--as-cran` check
+# still runs. Re-enable it as part of the first CRAN submission, when
+# `Remotes:` is dropped.
 verify:
   extends:
     - .r
@@ -351,40 +359,14 @@ verify:
     - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
     - Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'res <- rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false")); if (!identical(as.integer(res$status), 0L)) stop("R CMD check exited with status ", res$status, "; the run did not complete.", call. = FALSE)'
 
-# Lightweight guard against NEWS/DESCRIPTION version drift: the top NEWS.md
-# heading must be either "(development version)" or exactly the DESCRIPTION
-# Version, which catches a stale heading left in at release. Pure shell, so it
-# does not need the R image and runs in seconds.
-news-version:
-  extends: .on-main
-  stage: verify
-  image: alpine:3
-  before_script:
-    - apk add --no-cache grep sed
-  script:
-    - |
-      set -eu
-      version="$(grep -E '^Version:' DESCRIPTION | head -n1 | sed -E 's/^Version:[[:space:]]*//')"
-      # First top-level NEWS heading, e.g. "# seor 1.0.0" or
-      # "# seor (development version)". Strip the name prefix.
-      heading="$(grep -m1 -E '^# ' NEWS.md | sed -E 's/^#[[:space:]]+(seor[[:space:]]+)?//')"
-      echo "DESCRIPTION Version : '$version'"
-      echo "Top NEWS heading    : '$heading'"
-      if [ "$heading" = "(development version)" ] || [ "$heading" = "$version" ]; then
-        echo "OK: NEWS heading and version are consistent."
-      else
-        echo "Top NEWS.md heading ('$heading') is neither '(development version)' nor the DESCRIPTION Version ('$version'). Update NEWS.md before release."
-        exit 1
-      fi
-
 # CITATION.cff and .zenodo.json each duplicate the version and the project URLs
 # out of DESCRIPTION. Measured 2026-09-11, four of the seven repositories in
 # this fleet carrying those files disagreed with their own DESCRIPTION and one
 # disagreed with itself (SEOR-lreejxat); seor's two still named a Pages address
 # that returns 403. The rule is
 # design/adr/0001-citation-metadata-names-the-release.md. Offline, stdlib-only
-# Python, so it runs in seconds without the R image - same shape as
-# news-version above.
+# Python, so it runs in seconds without the R image, and stays out of `gates`
+# below because that image has no python3 (ADR 0005, condition 2).
 citation-version:
   extends: .on-main
   stage: verify
@@ -397,45 +379,28 @@ citation-version:
     - python3 scripts/check-bugreports.py --self-test
     - python3 scripts/check-bugreports.py
 
-# README.md is knit from README.Rmd, so a hand-edit to the markdown is silently
-# lost on the next render. devtools::build_readme() installs the package and
-# re-renders; any diff means the committed README is stale.
-readme:
+# The cheap gates in one job, per design/adr/0005: README drift, spelling and
+# news-version, run by scripts/gates.sh, which runs every gate and then names
+# every failure in one VERDICT line. `lint` stays in `verify` above, whose
+# chain mirrors the pre-push hook, and `citation-version` keeps its python
+# image (ADR 0005, condition 2). news-version was an alpine job; it is grep
+# and sed, which this image has, so folding it swaps no interpreter.
+#
+# Not `pak::pak(c("any::devtools", "local::."))`: handing `local::.` to pak
+# makes it build seor's tarball while solving, before the members are in the
+# job library, and the vignette (which attaches seor) fails the build, which
+# pak reports as `Failed to download seor` (SEOR-htoikrfd). So resolve the
+# package's own dependencies first, add the tools separately, and let
+# build_readme() install seor itself.
+gates:
   extends:
     - .r
     - .on-main
   stage: verify
   script:
-    # Deliberately NOT `pak::pak(c("any::devtools", "local::."))`. Handing
-    # `local::.` to pak makes it build seor's source tarball as part of solving
-    # the plan, and pak builds every source package before installing any of
-    # them -- so the tarball build runs while the members are still absent from
-    # the job library. seor declares `VignetteBuilder: knitr` and its vignette
-    # attaches the package, so vignette evaluation fails and takes the build
-    # with it. pak reports that as `Failed to download seor` with no underlying
-    # reason, because "download" is its term for producing a local package's
-    # tarball (SEOR-htoikrfd).
-    #
-    # So mirror the shape that already works in `verify`: resolve the
-    # package's own dependencies first, add devtools separately, and let
-    # build_readme() handle installing seor itself.
     - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
-    - Rscript -e 'pak::pak("any::devtools")'
-    - Rscript -e 'devtools::build_readme()'
-    # Blank-line-only differences don't count. pandoc versions disagree about
-    # the blank line after `<!-- badges: start -->`: a Mac's pandoc 3.10 adds
-    # one and the image's apt pandoc does not, so a README rendered locally
-    # passed pre-push and turned main red here (SEOR-oaqnafzs, !33). The test
-    # is on the diff's output, not `--exit-code`: the image's git 2.43 still
-    # exits 1 on a blank-only diff under --ignore-blank-lines (git 2.54
-    # exits 0) (SEOR-kaqtnovh).
-    - |
-      readme_diff=$(git diff --ignore-blank-lines -- README.md)
-      if [ -n "$readme_diff" ]; then
-        printf '%s\n' "$readme_diff"
-        echo "README.md is out of sync with README.Rmd. Run devtools::build_readme() and commit the result."
-        exit 1
-      fi
+    - Rscript -e 'pak::pak(c("any::devtools", "any::spelling"))'
+    - sh scripts/gates.sh
 
 # --------------------------------------------------------------------------
 # check — the slower passes
@@ -464,9 +429,19 @@ coverage:
     # (SEOR-htoikrfd).
     - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
     - Rscript -e 'pak::pak(c("any::covr", "any::xml2"))'
-    - Rscript -e 'cov <- covr::package_coverage(quiet = FALSE); print(cov); covr::to_cobertura(cov)'
+    # Fails below 95% total coverage, the fleet minimum
+    # (design/fleet-standard.md, ADR 0007). cobertura.xml is written first, so
+    # a failing run still annotates the diff. The threshold is never lowered:
+    # a package under it adds tests.
+    - >
+      Rscript -e 'cov <- covr::package_coverage(quiet = FALSE);
+      print(cov);
+      covr::to_cobertura(cov);
+      pct <- covr::percent_coverage(cov);
+      if (pct < 95) stop(sprintf("total coverage %.2f%% is below the fleet minimum of 95%%; add tests, never lower the threshold", pct), call. = FALSE)'
   coverage: '/Coverage:\s*(\d+\.\d+)%/'
   artifacts:
+    when: always
     reports:
       coverage_report:
         coverage_format: cobertura
@@ -480,6 +455,10 @@ coverage:
 # version axis on Linux and the rest moves to R-hub before a CRAN submission —
 # `rhub::rc_submit()` runs on R-hub's own infrastructure and needs no forge
 # account at all. docs/notes-r.md records that trade.
+#
+# The legs are the fleet standard's deep-check set (design/fleet-standard.md):
+# R release, oldrel and devel, here, plus the R floor in `floor-check` below.
+# Bump the pinned release and oldrel tags when a new minor R version ships.
 full-check:
   extends:
     - .r
@@ -488,11 +467,79 @@ full-check:
   image: rocker/r-ver:$R_VERSION
   parallel:
     matrix:
-      - R_VERSION: ["4.5.1", "4.4.3"]
+      - R_VERSION: ["4.6.1", "4.5.3", "devel"]
   script:
     - Rscript -e 'pak::pak(c("any::lintr", "any::rcmdcheck", "any::styler"))'
     - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
     - Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'res <- rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false")); if (!identical(as.integer(res$status), 0L)) stop("R CMD check exited with status ", res$status, "; the run did not complete.", call. = FALSE)'
+
+# The deep-check leg at the declared R floor, `Depends: R (>= 4.1.0)`.
+#
+# seor attaches every member, so its floor is the highest in the fleet
+# (design/fleet-standard.md): pslr, punycoder, sitemapr and robotstxtr declare
+# R 4.1. 4.1 is also the oldest minor with an arm64 rocker/r-ver image, which
+# this project's runner needs. punycoder's `floor-check` is the model; a
+# separate job rather than a full-check row, because old R needs old-enough
+# dependencies:
+#
+# - Packages come from one dated Posit Package Manager snapshot,
+#   FLOOR_SNAPSHOT, used in this job alone, so it cannot conflict with what
+#   full-check's release and devel legs install. punycoder's 2025-04-10 is too
+#   old here: seor's Imports are the members, which reached CRAN in 2026
+#   (pagerankr 0.1.0 on 2026-09-28), and raddr needs rlang >= 1.1.7 and
+#   vctrs >= 0.7.0 (January 2026). 2026-09-30 is the oldest date carrying all of
+#   them; every dependency there still declares R 4.1 or older.
+# - sitemapr is not on CRAN, so it comes from the r-universe, after the
+#   CRAN members and their dependencies are in place.
+# - Only what the check needs is installed: the members, the test Suggests and
+#   rcmdcheck. oysteR, rosv and robotstxtr serve the audits or are optional
+#   (the attach test skips them), so _R_CHECK_FORCE_SUGGESTS_=false lets
+#   --as-cran report them as a NOTE instead of stopping.
+# - Vignettes are neither built nor checked, and there is no manual, as in
+#   punycoder: the vignette attaches the same members the tests do.
+#
+# BEST EFFORT. Nothing here could be run before it merged: on R 4.1 every
+# dependency builds from source (igraph among them), and a dependency whose
+# declared R floor is wrong only shows up here. So the leg is allow_failure
+# until its first green run on the deep-check schedule; drop allow_failure
+# then (SEOR-kqcbgsfc).
+floor-check:
+  extends:
+    - .r
+    - .scheduled-or-manual
+  stage: check
+  image: rocker/r-ver:4.1.3
+  allow_failure: true
+  variables:
+    FLOOR_SNAPSHOT: "https://packagemanager.posit.co/cran/2026-09-30"
+    FLOOR_UNIVERSE: "https://bart-turczynski.r-universe.dev"
+    _R_CHECK_FORCE_SUGGESTS_: "false"
+  script:
+    - apt-get install -y -qq --no-install-recommends libidn2-0-dev pkg-config libgmp-dev libicu-dev
+    - >
+      Rscript -e 'snap <- Sys.getenv("FLOOR_SNAPSHOT");
+      install.packages(c("pagerankr", "pslr", "punycoder", "raddr", "rurl",
+      "testthat", "cucumber", "knitr", "rmarkdown", "rcmdcheck"),
+      repos = snap, Ncpus = 4L);
+      install.packages("sitemapr", repos = c(Sys.getenv("FLOOR_UNIVERSE"), snap), Ncpus = 4L);
+      need <- c("pagerankr", "pslr", "punycoder", "raddr", "rurl", "sitemapr", "testthat", "rcmdcheck");
+      stopifnot(all(vapply(need, requireNamespace, NA, quietly = TRUE)));
+      print(R.version.string)'
+    # rcmdcheck reads a check that halted partway as 0/0/0 and returns
+    # normally, so the guard also fails on R CMD check's own exit status
+    # (SEOR-maavnxdm). CRAN incoming stays off, as everywhere in seor
+    # (design/adr/0004).
+    - >
+      Rscript -e 'res <- rcmdcheck::rcmdcheck(args = c("--no-manual", "--as-cran", "--ignore-vignettes"),
+      build_args = c("--no-manual", "--no-build-vignettes"),
+      error_on = "warning", check_dir = "check",
+      env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false"));
+      if (!identical(as.integer(res$status), 0L)) stop("R CMD check exited with status ", res$status, "; the run did not complete.", call. = FALSE)'
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - check/
 
 # --------------------------------------------------------------------------
 # pages — the pkgdown site
@@ -594,10 +641,10 @@ pages:
 # maintenance — audits and metadata, scheduled or on demand
 #
 # GitLab keeps pipeline schedules in project settings (CI/CD > Schedules), not
-# in this file, so the weekly cadence the GitHub workflows declared with `cron:`
-# is gone until you add a schedule there. The two audits additionally need that
-# schedule to set SCHEDULE_KIND=dependency-audit (see `.dependency-audit`).
-# Nothing below runs on a merge request, and nothing below can turn one red.
+# in this file; design/fleet.md lists seor's (a weekly dependency-audit and a
+# weekly deep-check). The two audits need their schedule to set
+# SCHEDULE_KIND=dependency-audit (see `.dependency-audit`). `fossa` is the one
+# job here that runs on a push to main. Nothing below runs on a merge request.
 #
 # Nothing below pushes to the repository or needs a write token either. The
 # `renovate` job (and its renovate.json) was removed on 2026-09-24 by owner
@@ -671,12 +718,9 @@ osv-audit:
 # mask a value shorter than 8 characters. If either is missing, a scheduled run
 # of this job is red and says exactly why.
 #
-# Also outstanding, and also an owner gate: this project has no pipeline
-# schedules at all (measured 2026-09-11, `pipeline_schedules` returns `[]`), so
-# neither this job nor `osv-audit` has ever run unattended. Add one under
-# Settings > CI/CD > Schedules, with the variable SCHEDULE_KIND set to
-# `dependency-audit` -- without it neither audit job is created (see
-# `.dependency-audit`).
+# Both audits run on the weekly dependency-audit schedule (design/fleet.md),
+# which sets SCHEDULE_KIND=dependency-audit -- without it neither audit job is
+# created (see `.dependency-audit`).
 security-audit:
   extends:
     - .r
@@ -690,3 +734,25 @@ security-audit:
     - Rscript -e 'pak::pak(c("any::oysteR", "any::testthat"))'
     - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
     - Rscript -e 'testthat::test_local(filter = "security", stop_on_failure = TRUE)'
+
+# FOSSA license and security scan (design/fleet-standard.md, "FOSSA": seor is
+# one of the three FOSSA packages). Runs on a push to main, uploads to FOSSA
+# and feeds the README's slot-17 badges; the first run creates the project.
+# FOSSA_API_KEY is a masked CI/CD variable only the owner holds, so the job
+# fails, rather than skipping green, when it is missing. The CLI comes from
+# FOSSA's official install script, which ships linux/arm64 builds for this
+# runner. The pipeline is a detached checkout, so the branch and revision are
+# passed rather than inferred.
+fossa:
+  stage: maintenance
+  image: debian:bookworm-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - test -n "${FOSSA_API_KEY:-}" || { echo "FOSSA_API_KEY is not set on this project; fossa analyze cannot upload."; exit 1; }
+    - apt-get update -qq
+    - DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends curl ca-certificates git
+    - >
+      curl -fsSL -H 'Cache-Control: no-cache'
+      https://raw.githubusercontent.com/fossas/fossa-cli/master/install-latest.sh | sh
+    - fossa analyze --branch "$CI_COMMIT_BRANCH" --revision "$CI_COMMIT_SHA"

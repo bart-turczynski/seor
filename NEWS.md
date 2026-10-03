@@ -177,6 +177,13 @@
   sends member-package reports to the member. `CODE_OF_CONDUCT.md` names
   bartek@turczynski.pl as the enforcement contact (SEOR-kqcbgsfc).
 * The pre-push gate has a `check-urls` hook (`scripts/check-urls.R`, copied
-  from punycoder) that fetches every URL the package declares and fails on a
+  from `punycoder`) that fetches every URL the package declares and fails on a
   dead one. seor's `R CMD check` runs with CRAN incoming off, so nothing else
   in the gate fetched them (SEOR-kqcbgsfc).
+* CI meets the fleet standard. `readme` and `news-version` fold into one
+  `gates` job (`scripts/gates.sh`, per `design/adr/0005`) that also runs the
+  spelling gate; `coverage` fails below 95%; the deep-check schedule runs the
+  current R release (4.6.1), the previous one (4.5.3) and R-devel in
+  `full-check`, plus a best-effort R 4.1
+  floor leg, `floor-check`; and a `fossa` job uploads a FOSSA license and
+  security scan on every push to `main` (SEOR-kqcbgsfc).
