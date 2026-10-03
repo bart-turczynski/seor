@@ -11,6 +11,13 @@ the load-bearing choices went the way they did.
 This is a living reference. Edit it when a fact changes. A change to a choice
 ADR 0007 records needs a new ADR first.
 
+**Scope (owner, 2026-10-03).** These are single-maintainer hobby projects. The
+point is that all nine look and work the same; best effort is enough. Meet the
+standard and stop there: no extra process, no polish beyond it. Where the
+standard and a package's own habits differ, align the package; where meeting
+a rule would take disproportionate work, say so on the package's issue and
+move on.
+
 ## Operating rule
 
 Owner decision 1, 2026-10-03. An agent working on a package's fleet-standard
@@ -225,8 +232,15 @@ URL answering exactly 404 (SEOR-ocbtrrnl).
 ## Files every package carries
 
 - `README.Rmd`, knitted into `README.md`.
-- `CODE_OF_CONDUCT.md` and `CONTRIBUTING.md`.
-- `SECURITY.md`, with a real contact and a real process.
+- `CODE_OF_CONDUCT.md` and `CONTRIBUTING.md`. `CONTRIBUTING.md` opens with
+  seor's two opening paragraphs, the package name swapped in: where to report
+  bugs, security issues privately per `SECURITY.md`, changes as GitLab merge
+  requests (the GitHub copy is a read-only mirror), new code needs tests, a
+  `NEWS.md` bullet per user-facing change, and the verify command must pass.
+  The OpenSSF `contribution` criterion reads that paragraph.
+- `SECURITY.md`: ssrfr's, the package name swapped in (email
+  `bartek@turczynski.pl`, or a confidential GitLab issue). The same text in
+  every package; the OpenSSF vulnerability-reporting criteria read it.
 - `SECURITY-INSIGHTS.yml`.
 - `LICENSE` (the two-line CRAN stub) and `LICENSE.md` (the full MIT text, for
   the forge's license detector).
