@@ -11,6 +11,10 @@ _scratch/
 # instant — `sh scripts/clean-tmp.sh` empties it.
 tmp/
 
+# Python bytecode: importing a scripts/*.py module rewrites it on every run.
+__pycache__/
+*.py[cod]
+
 # Agent settings live at user level, as in the other fleet repositories.
 .claude/
 
