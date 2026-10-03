@@ -232,16 +232,27 @@ self-hosted project runners don't draw on.
 | pslr       | dependency-audit | osv-audit, security-audit only         | Thu 10:17     | Thu 11:00 | 4467477  | 2 min       |
 | seor       | dependency-audit | osv-audit, security-audit              | Thu 11:17     | Thu 12:00 | 4467483  | 19 min      |
 | seor       | deep-check       | full-check (4.5.1, 4.4.3)              | Thu 21:00     | Thu 21:00 | 4467484  | 18 min      |
+| robotstxtr | deep-check       | none yet (SEOR-thlzqzac adds the legs) | Mon 22:00     | Mon 22:00 | 4472810  | pending     |
+| sitemapr   | deep-check       | none yet (SEOR-dunwqfkj adds the legs) | Tue 22:00     | Tue 22:00 | 4472811  | pending     |
+| pslr       | deep-check       | none: workflow refuses (SEOR-twxjxogh) | Wed 22:00     | Wed 22:00 | 4472812  | pending     |
+| raddr      | dependency-audit | none yet (SEOR-lavybtkr adds the jobs) | Fri 10:17     | Fri 11:00 | 4472813  | pending     |
+| ssrfr      | dependency-audit | none yet (SEOR-rcpzfhgx adds the jobs) | Fri 11:17     | Fri 12:00 | 4472814  | pending     |
+| rurl       | deep-check       | none yet (SEOR-nxycpzlk adds the legs) | Fri 21:00     | Fri 21:00 | 4472809  | pending     |
 
-All thirteen are active; the eight from rurl down were created 2026-09-30.
+All nineteen are active. The eight from rurl's audit to seor's deep check were
+created 2026-09-30. The last six were created through the API on 2026-10-03
+for the fleet standard (SEOR-tahlljtx). Until each repository's fleet-standard
+issue adds its scheduled jobs, those six run only the main-pipeline jobs, and
+pslr's creates no pipeline at all. Their runner time is measured at the first
+green run after that.
 Rows without a `~` are a first run's measurement: pslr's audit (pipeline
 2900446410), seor's audit (2900664488) and seor's deep check (2902727359), all
 on 2026-10-01 and all green with only the intended jobs. seor's two audits
 took about 6 minutes each against the 100 s estimate, building their
 dependencies from source on a cold cache; a warm cache should shorten them.
 
-Total: about 2.8 runner-hours a week (about 12 a month); the five schedules
-that predate 2026-09-30 are about 71 min of that. The host runs
+Total: about 2.8 runner-hours a week (about 12 a month) for the first
+thirteen; the five schedules that predate 2026-09-30 are about 71 min of that. The host runs
 `concurrent = 4`, so this is a small share of its week; the constraint is when
 it is awake, not capacity.
 
