@@ -23,6 +23,11 @@
 * `pagerankr` is on CRAN (0.1.0), so `DESCRIPTION` no longer lists it in
   `Remotes:`; only `robotstxtr` and `sitemapr` still install from GitLab
   (SEOR-wnbjpydq).
+* `seor` now requires R 4.1.0 or later, up from 4.0.0. It attaches every
+  member, and `pslr`, `punycoder`, `sitemapr` and `robotstxtr` already require
+  R 4.1.0, so seor could never install on R 4.0 (SEOR-kqcbgsfc).
+* Bart Turczynski is the copyright holder, in `DESCRIPTION` (`cph` role),
+  `LICENSE` and `LICENSE.md`, which named "seor authors" (SEOR-kqcbgsfc).
 
 ## Internal
 
@@ -164,3 +169,21 @@
   accepts the British spelling. `design/fleet.md` states the fleet rule:
   prose is US English, and a British spelling is respelled, never added
   to the word list (SEOR-kfiqpymb).
+* The README badge row follows the fleet standard (`design/fleet-standard.md`):
+  r-universe in slot 1 instead of a CRAN badge that rendered an error for a
+  package not on CRAN, plus docs, repostatus, Zenodo, license, last-commit and
+  the FOSSA license and security badges (SEOR-kqcbgsfc).
+* `SECURITY.md` uses the fleet's shared policy text, with a seor scope that
+  sends member-package reports to the member. `CODE_OF_CONDUCT.md` names
+  bartek@turczynski.pl as the enforcement contact (SEOR-kqcbgsfc).
+* The pre-push gate has a `check-urls` hook (`scripts/check-urls.R`, copied
+  from `punycoder`) that fetches every URL the package declares and fails on a
+  dead one. seor's `R CMD check` runs with CRAN incoming off, so nothing else
+  in the gate fetched them (SEOR-kqcbgsfc).
+* CI meets the fleet standard. `readme` and `news-version` fold into one
+  `gates` job (`scripts/gates.sh`, per `design/adr/0005`) that also runs the
+  spelling gate; `coverage` fails below 95%; the deep-check schedule runs the
+  current R release (4.6.1), the previous one (4.5.3) and R-devel in
+  `full-check`, plus a best-effort R 4.1
+  floor leg, `floor-check`; and a `fossa` job uploads a FOSSA license and
+  security scan on every push to `main` (SEOR-kqcbgsfc).

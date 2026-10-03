@@ -101,7 +101,7 @@ repos:
         pass_filenames: false
         files: ^scripts/check-fleet-standard\.py$
         stages: [pre-push]
-      # seor is a metapackage whose members `pagerankr`, `sitemapr` and `robotstxtr`
+      # seor is a metapackage whose members `sitemapr` and `robotstxtr`
       # are not yet on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always
       # reports an ERROR: non-mainstream strong dependencies, the `Remotes:` field, and
       # the archived `seoR` name clash. That is a true statement about CRAN readiness
@@ -119,6 +119,21 @@ repos:
       - id: check-toolchain
         name: toolchain matches what this package pins
         entry: Rscript scripts/check-toolchain.R
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      # Fetches every URL the package declares (DESCRIPTION, man/,
+      # inst/CITATION, NEWS, README.md) and fails on a dead one: `verify` runs
+      # --as-cran with CRAN incoming OFF (ADR 0004), so nothing else in this
+      # gate fetches them at all. A URL that cannot be reached at all only
+      # warns, so a network blip never rejects a push; zero URLs checked
+      # fails; the only exemption is BugReports' /-/issues URL answering
+      # exactly 404 (SEOR-ocbtrrnl). The fleet standard's URL check, copied
+      # from punycoder's scripts/check-urls.R (sitemapr's `urls` stage).
+      - id: check-urls
+        name: declared URLs resolve
+        entry: Rscript scripts/check-urls.R
         language: system
         pass_filenames: false
         always_run: true

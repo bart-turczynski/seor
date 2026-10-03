@@ -1,6 +1,6 @@
 # MIT License
 
-Copyright (c) 2026 seor authors
+Copyright (c) 2026 Bart Turczynski
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

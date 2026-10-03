@@ -3,7 +3,7 @@ Type: Package
 Title: Easily Install and Load the 'seor' SEO and Developer Tools
 Version: 0.0.0.9000
 Authors@R:
-    person("Bart", "Turczynski", , "bartek@turczynski.pl", role = c("aut", "cre"),
+    person("Bart", "Turczynski", , "bartek@turczynski.pl", role = c("aut", "cre", "cph"),
            comment = c(ORCID = "0000-0002-8788-7980"))
 Description: The 'seor' suite bundles a set of focused R packages for search
     engine optimization and web-developer workflows: URL parsing, punycode and
@@ -20,7 +20,7 @@ Encoding: UTF-8
 Language: en-US
 Roxygen: list(markdown = TRUE)
 Depends:
-    R (>= 4.0.0)
+    R (>= 4.1.0)
 Imports:
     pagerankr,
     pslr,
