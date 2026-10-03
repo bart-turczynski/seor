@@ -491,6 +491,11 @@ full-check:
 #   them; every dependency there still declares R 4.1 or older.
 # - sitemapr is not on CRAN, so it comes from the r-universe, after the
 #   CRAN members and their dependencies are in place.
+# - punycoder and rurl come from the r-universe too, first: their R 4.1 fixes
+#   are on main but not yet on CRAN. CRAN punycoder 1.3.0 doesn't build on
+#   Ubuntu 20.04's libidn2 2.2 (punycoder !68 added the >= 2.3.5 configure
+#   check), and CRAN rurl 3.1.0 zero-pads IPv6 hex on R < 4.2 (rurl !164).
+#   Back to the snapshot once both releases reach CRAN.
 # - Only what the check needs is installed: the members, the test Suggests and
 #   rcmdcheck. oysteR, rosv and robotstxtr serve the audits or are optional
 #   (the attach test skips them), so _R_CHECK_FORCE_SUGGESTS_=false lets
@@ -517,11 +522,12 @@ floor-check:
   script:
     - apt-get install -y -qq --no-install-recommends libidn2-0-dev pkg-config libgmp-dev libicu-dev
     - >
-      Rscript -e 'snap <- Sys.getenv("FLOOR_SNAPSHOT");
-      install.packages(c("pagerankr", "pslr", "punycoder", "raddr", "rurl",
+      Rscript -e 'snap <- Sys.getenv("FLOOR_SNAPSHOT"); univ <- Sys.getenv("FLOOR_UNIVERSE");
+      install.packages(c("punycoder", "rurl"), repos = c(univ, snap), Ncpus = 4L);
+      install.packages(c("pagerankr", "pslr", "raddr",
       "testthat", "cucumber", "knitr", "rmarkdown", "rcmdcheck"),
       repos = snap, Ncpus = 4L);
-      install.packages("sitemapr", repos = c(Sys.getenv("FLOOR_UNIVERSE"), snap), Ncpus = 4L);
+      install.packages("sitemapr", repos = c(univ, snap), Ncpus = 4L);
       need <- c("pagerankr", "pslr", "punycoder", "raddr", "rurl", "sitemapr", "testthat", "rcmdcheck");
       stopifnot(all(vapply(need, requireNamespace, NA, quietly = TRUE)));
       print(R.version.string)'
