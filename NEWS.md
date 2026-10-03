@@ -176,3 +176,7 @@
 * `SECURITY.md` uses the fleet's shared policy text, with a seor scope that
   sends member-package reports to the member. `CODE_OF_CONDUCT.md` names
   bartek@turczynski.pl as the enforcement contact (SEOR-kqcbgsfc).
+* The pre-push gate has a `check-urls` hook (`scripts/check-urls.R`, copied
+  from punycoder) that fetches every URL the package declares and fails on a
+  dead one. seor's `R CMD check` runs with CRAN incoming off, so nothing else
+  in the gate fetched them (SEOR-kqcbgsfc).

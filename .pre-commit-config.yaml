@@ -123,6 +123,21 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # Fetches every URL the package declares (DESCRIPTION, man/,
+      # inst/CITATION, NEWS, README.md) and fails on a dead one: `verify` runs
+      # --as-cran with CRAN incoming OFF (ADR 0004), so nothing else in this
+      # gate fetches them at all. A URL that cannot be reached at all only
+      # warns, so a network blip never rejects a push; zero URLs checked
+      # fails; the only exemption is BugReports' /-/issues URL answering
+      # exactly 404 (SEOR-ocbtrrnl). The fleet standard's URL check, copied
+      # from punycoder's scripts/check-urls.R (sitemapr's `urls` stage).
+      - id: check-urls
+        name: declared URLs resolve
+        entry: Rscript scripts/check-urls.R
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       # R CMD check skips its DESCRIPTION spelling check on a machine with no
       # English aspell/hunspell dictionary, so a typo first shows up in
       # win-builder's incoming NOTE. spelling bundles its own hunspell
