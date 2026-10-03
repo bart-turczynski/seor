@@ -203,8 +203,7 @@ Schedules live in each project's settings (Build > Pipeline schedules), not in
 
 A schedule pipeline on `main` also runs every job that runs on a push to `main`
 (check, coverage, gates or verify, pages), because those jobs key on the branch,
-not the pipeline source. pslr is the exception: its `workflow:` admits only the
-two audits. So a schedule costs its own jobs plus one main pipeline.
+not the pipeline source. So a schedule costs its own jobs plus one main pipeline.
 
 ### The schedule table
 
