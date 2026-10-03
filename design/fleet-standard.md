@@ -11,6 +11,13 @@ the load-bearing choices went the way they did.
 This is a living reference. Edit it when a fact changes. A change to a choice
 ADR 0007 records needs a new ADR first.
 
+**Scope (owner, 2026-10-03).** These are single-maintainer hobby projects. The
+point is that all nine look and work the same; best effort is enough. Meet the
+standard and stop there: no extra process, no polish beyond it. Where the
+standard and a package's own habits differ, align the package; where meeting
+a rule would take disproportionate work, say so on the package's issue and
+move on.
+
 ## Operating rule
 
 Owner decision 1, 2026-10-03. An agent working on a package's fleet-standard
@@ -225,8 +232,15 @@ URL answering exactly 404 (SEOR-ocbtrrnl).
 ## Files every package carries
 
 - `README.Rmd`, knitted into `README.md`.
-- `CODE_OF_CONDUCT.md` and `CONTRIBUTING.md`.
-- `SECURITY.md`, with a real contact and a real process.
+- `CODE_OF_CONDUCT.md` and `CONTRIBUTING.md`. `CONTRIBUTING.md` opens with
+  seor's two opening paragraphs, the package name swapped in: where to report
+  bugs, security issues privately per `SECURITY.md`, changes as GitLab merge
+  requests (the GitHub copy is a read-only mirror), new code needs tests, a
+  `NEWS.md` bullet per user-facing change, and the verify command must pass.
+  The OpenSSF `contribution` criterion reads that paragraph.
+- `SECURITY.md`: ssrfr's, the package name swapped in (email
+  `bartek@turczynski.pl`, or a confidential GitLab issue). The same text in
+  every package; the OpenSSF vulnerability-reporting criteria read it.
 - `SECURITY-INSIGHTS.yml`.
 - `LICENSE` (the two-line CRAN stub) and `LICENSE.md` (the full MIT text, for
   the forge's license detector).
@@ -271,7 +285,59 @@ The owner decided these on 2026-10-03 (SEOR-tahlljtx):
 
 ## Checking conformance
 
-`scripts/check-fleet-standard.py` (SEOR-myokihrl, not yet written) will test a
-repository against this file. Until it exists, conformance is checked by hand
-against the sections above. What it checks, and how to run it, goes here when
-it lands.
+`scripts/check-fleet-standard.py` (SEOR-myokihrl) tests packages against this
+file and prints a gap table per package. Run it from seor:
+
+```sh
+python3 scripts/check-fleet-standard.py                  # all nine
+python3 scripts/check-fleet-standard.py --repo rurl      # one package
+python3 scripts/check-fleet-standard.py --repo rurl --local ~/Projects/rurl
+python3 scripts/check-fleet-standard.py --repo rurl --local ~/Projects/rurl --offline
+python3 scripts/check-fleet-standard.py --self-test      # offline fixtures
+```
+
+By default it reads each package's `main` on GitLab through `glab api`, since
+a local checkout may be stale. `--local` reads a checkout's files instead and
+still asks GitLab and the web for live state. `--offline` touches no network:
+the badge images, the conditional slots and the schedules are then listed as
+not judged. It exits 1 on any gap, and 2 when there is no gap but a probe
+failed, so the run is incomplete. A network failure is never a gap.
+
+What it checks, section by section:
+
+- **Badge row.** Every slot the package's live state calls for, in order, and
+  nothing else, with image and link URLs matched against the templates (the
+  per-package values as patterns). It reads the CRAN state from crandb, the
+  GitLab Release from the releases API, the DOI from `CITATION.cff` (doi.org
+  must resolve it and Zenodo must call it the concept DOI), and the FOSSA
+  project from its badge endpoint. A badge shown while its condition does not
+  hold is a gap. So is a package missing from r-universe.
+- **Badge images.** Each image answers 200 and does not read "unknown", "not
+  found", "invalid", "not set up", "inaccessible" or "no releases found".
+- **Files.** The list above. `LICENSE` names Bart Turczynski, `LICENSE.md` is
+  the MIT text, `SECURITY.md` and `CODE_OF_CONDUCT.md` name the public email,
+  and a `SECURITY.md` under ten non-blank lines counts as a stub.
+- **`DESCRIPTION`.** The aut, cre and cph roles, the ORCID, the email, `URL:`
+  in order, `Language: en-US` and a declared R floor.
+- **CI.** It evaluates `workflow:` and job `rules:` for a push to `main`, each
+  schedule kind and a tag. On a push it looks for `R CMD check --as-cran`
+  through `rcmdcheck` with `error_on = "warning"`, with incoming off only as
+  ADR 0004 allows. It also looks for a coverage job with a regex, a cobertura
+  report, a threshold of at least 95 and no `allow_failure`, for `pages`, and
+  for the cheap gates. On the `deep-check` schedule alone it wants release,
+  oldrel, devel and floor legs, read from image tags, plus sanitizer legs where
+  required. The audits run on the `dependency-audit` schedule alone, with
+  seor's disposition-row test files, and `fossa analyze` runs where FOSSA is
+  allocated. A job's commands are read as text, along with the R, shell and
+  YAML scripts it names, so a script that skips a gate it contains reads as
+  running it.
+- **Local gate.** The pre-commit config, or an R or shell script its hooks
+  call, runs a URL check.
+- **Schedules.** One active `deep-check` and one `dependency-audit` schedule,
+  on `main`, with `SCHEDULE_KIND` set on each schedule.
+
+It does not check whether a tag pipeline fails on "already on CRAN", how the
+URL check treats zero URLs or the `BugReports:` 404, how `security-audit`
+treats missing OSS Index credentials, the GitLab project badges, or employer
+names. Review those by hand. The pre-push hook runs `--self-test` whenever the
+script changes.
