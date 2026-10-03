@@ -196,11 +196,13 @@ where the public-project self-assessment is not an appropriate default.
        - fossa analyze
    ```
 
-3. The badge uses the git locator (`git+gitlab.com/OWNER/REPO`), already
-   URL-encoded in the README, so it resolves once the project is imported.
-   Note the locator carries the **host**: a project imported from GitLab is
-   `git+gitlab.com/...`, and reusing a `git+github.com/...` locator silently
-   points at nothing.
+3. The badge uses the project locator, URL-encoded. `fossa analyze` with an
+   API key uploads to `custom+<org-id>/git+gitlab.com/OWNER/REPO`, where
+   `<org-id>` is the account's FOSSA organization (62973 for this fleet;
+   rurl's first upload, 2026-10-03). The bare `git+gitlab.com/...` form
+   answers 404 for such a project. The locator also carries the **host**:
+   reusing a `git+github.com/...` locator points at the mirror's project, or
+   at nothing.
 - **Ecosystem note:** FOSSA's R analysis reads `DESCRIPTION` for direct
   dependencies (`Depends`, `Imports`, `Suggests`, `Enhances`, `LinkingTo`),
   ignoring version constraints, and finds deeper dependencies and the edges

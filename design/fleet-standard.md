@@ -89,8 +89,8 @@ bestpractices.dev project number).
 [![License](https://img.shields.io/gitlab/license/bart-turczynski%2F<pkg>)](https://gitlab.com/bart-turczynski/<pkg>/-/blob/main/LICENSE.md)
 [![Dependencies](https://tinyverse.netlify.app/badge/<pkg>)](https://CRAN.R-project.org/package=<pkg>)
 [![Last commit](https://img.shields.io/gitlab/last-commit/bart-turczynski%2F<pkg>)](https://gitlab.com/bart-turczynski/<pkg>/-/commits/main)
-[![FOSSA license](https://app.fossa.com/api/projects/git%2Bgitlab.com%2Fbart-turczynski%2F<pkg>.svg?type=shield&issueType=license)](https://app.fossa.com/projects/git%2Bgitlab.com%2Fbart-turczynski%2F<pkg>?ref=badge_shield&issueType=license)
-[![FOSSA security](https://app.fossa.com/api/projects/git%2Bgitlab.com%2Fbart-turczynski%2F<pkg>.svg?type=shield&issueType=security)](https://app.fossa.com/projects/git%2Bgitlab.com%2Fbart-turczynski%2F<pkg>?ref=badge_shield&issueType=security)
+[![FOSSA license](https://app.fossa.com/api/projects/custom%2B62973%2Fgit%2Bgitlab.com%2Fbart-turczynski%2F<pkg>.svg?type=shield&issueType=license)](https://app.fossa.com/projects/custom%2B62973%2Fgit%2Bgitlab.com%2Fbart-turczynski%2F<pkg>?ref=badge_shield&issueType=license)
+[![FOSSA security](https://app.fossa.com/api/projects/custom%2B62973%2Fgit%2Bgitlab.com%2Fbart-turczynski%2F<pkg>.svg?type=shield&issueType=security)](https://app.fossa.com/projects/custom%2B62973%2Fgit%2Bgitlab.com%2Fbart-turczynski%2F<pkg>?ref=badge_shield&issueType=security)
 ```
 
 ### Excluded, and why
@@ -132,11 +132,12 @@ What the conditions rest on:
   `no releases found`.
 - **The last-commit badge takes no branch segment.**
   `.../last-commit/bart-turczynski%2Frurl/main` renders `project not found`.
-- **The FOSSA template is unverified.** No project exists under a
-  `git+gitlab.com` locator yet: the API returns 404 for rurl, ssrfr and seor.
-  The same URL shape renders under the GitHub locators that exist today (rurl:
-  "license scan: failing"; pslr: "passing"). It is checked when the first
-  `fossa analyze` job uploads.
+- **The FOSSA locator carries the organization.** Measured 2026-10-03 on
+  rurl's first `fossa analyze` (job 16914055629, fossa-cli 3.20.0, green):
+  the upload landed under `custom+62973/git+gitlab.com/bart-turczynski/rurl`,
+  62973 being the account's FOSSA organization. The badge under that locator
+  answers 200; the bare `git+gitlab.com/...` form answers 404. ssrfr's and
+  seor's projects appear when their first `fossa analyze` job uploads.
 
 ## CI on every push to `main`
 
@@ -212,6 +213,8 @@ The free plan allows five projects per account. Owner allocation, 2026-10-03:
 2. Two slots held for the non-R repositories.
 3. raddr, then pslr, if a slot frees up.
 
+A project lives under `custom+62973/git+gitlab.com/bart-turczynski/<pkg>`,
+the locator `fossa analyze` uploads to with the account's API key.
 FOSSA's R analysis reads `DESCRIPTION` for direct dependencies and finds
 deeper ones only through `renv.lock` ([`badges.md`](badges.md)). The
 `FOSSA_API_KEY` CI/CD variable is a secret only the owner holds.
@@ -316,7 +319,7 @@ What it checks, section by section:
   per-package values as patterns). It reads the CRAN state from crandb, the
   GitLab Release from the releases API, the DOI from `CITATION.cff` (doi.org
   must resolve it and Zenodo must call it the concept DOI), and the FOSSA
-  project from its badge endpoint. A badge shown while its condition does not
+  project from its badge endpoint under the `custom+62973` locator. A badge shown while its condition does not
   hold is a gap. So is a package missing from r-universe.
 - **Badge images.** Each image answers 200 and does not read "unknown", "not
   found", "invalid", "not set up", "inaccessible" or "no releases found".
