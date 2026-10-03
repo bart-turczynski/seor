@@ -202,8 +202,9 @@ Schedules live in each project's settings (Build > Pipeline schedules), not in
   ref creates no pipeline.
 
 A schedule pipeline on `main` also runs every job that runs on a push to `main`
-(check, coverage, gates or verify, pages), because those jobs key on the branch,
-not the pipeline source. So a schedule costs its own jobs plus one main pipeline.
+(check, coverage, gates or verify, pages), because their rules admit any
+pipeline on the default branch. So a schedule costs its own jobs plus one main
+pipeline.
 
 ### The schedule table
 

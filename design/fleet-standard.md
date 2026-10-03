@@ -159,8 +159,7 @@ Every pipeline a schedule creates on `main`, `deep-check` and
 `dependency-audit` alike, runs the coverage job too. The coverage badge reads
 the latest successful pipeline on `main`, so a green schedule pipeline without
 it turns the badge "unknown" (pslr and raddr, 2026-10-03). The fleet runs the
-other push-to-`main` jobs there as well: their rules key on the branch, not
-the pipeline source.
+other push-to-`main` jobs there as well.
 
 A tag pipeline must not fail only because that version is already on CRAN.
 rurl's `v3.1.0` tag pipeline (#209, 2026-10-02) failed exactly that way: its
@@ -331,9 +330,9 @@ What it checks, section by section:
   through `rcmdcheck` with `error_on = "warning"`, with incoming off only as
   ADR 0004 allows. It also looks for a coverage job with a regex, a cobertura
   report, a threshold of at least 95 and no `allow_failure`, that runs on both
-  schedule kinds as well, for `pages`, and for the cheap gates. On the `deep-check` schedule alone it wants release,
-  oldrel, devel and floor legs, read from image tags, plus sanitizer legs where
-  required. The audits run on the `dependency-audit` schedule alone, with
+  schedule kinds as well, for `pages`, and for the cheap gates. On the
+  `deep-check` schedule alone it wants release, oldrel, devel and floor legs,
+  read from image tags, plus sanitizer legs where required. The audits run on the `dependency-audit` schedule alone, with
   seor's disposition-row test files, and `fossa analyze` runs where FOSSA is
   allocated. A job's commands are read as text, along with the R, shell and
   YAML scripts it names, so a script that skips a gate it contains reads as
