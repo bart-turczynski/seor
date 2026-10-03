@@ -20,6 +20,7 @@
 ^\.r-lib$
 ^\.pak-cache$
 ^\.bestpractices\.json$
+^\.fossa\.yml$
 ^cran-comments\.md$
 ^CRAN-SUBMISSION$
 ^doc$
