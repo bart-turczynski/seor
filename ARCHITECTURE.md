@@ -42,7 +42,10 @@ dependencies and (2) attach them all on `library(seor)`.
   seor-specific, because seor is where fleet decisions are recorded:
   [`design/github-mirror.md`](design/github-mirror.md), the procedure for
   mirroring a GitLab repo to GitHub as proven on the eight R packages, and
-  [`design/badges.md`](design/badges.md).
+  [`design/badges.md`](design/badges.md). What every member carries (badges,
+  CI, schedules, files, `DESCRIPTION` fields) is `design/fleet-standard.md`;
+  [ADR 0007](design/adr/0007-one-fleet-standard-for-badges-and-checks.md)
+  records its load-bearing choices.
 - `scripts/` — repository hygiene checks that run from the pre-push hook.
   `check-design.py` owns design-doc hygiene; `check-citation.py` owns the
   agreement between `CITATION.cff`, `.zenodo.json` and `DESCRIPTION`. Both are

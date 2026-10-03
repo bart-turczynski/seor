@@ -3,8 +3,9 @@
 This project ships a README badge suite that surfaces CI, security, and coverage
 status at a glance. The badges render on a **public** GitLab project; most need a
 one-time connection step. R packages use the OpenSSF Best Practices program.
-This file is the single source of truth — point an agent at it and it can wire
-everything up.
+This file is the single source of truth for setup — point an agent at it and it
+can wire everything up. Which badges the fleet's R packages carry, and in what
+order, is in [`fleet-standard.md`](fleet-standard.md).
 
 ## First, always: replace `OWNER`
 
@@ -45,12 +46,15 @@ repos or drop its badge from the others.
 Two badges the GitHub-era scaffold shipped have no GitLab equivalent and were
 removed rather than left to render broken:
 
-- **OpenSSF Scorecard.** The Scorecard project and the `scorecard.dev` viewer
-  ingest GitHub repositories only — the checks themselves are written against
-  the GitHub API (branch protection, required reviews, Dependabot, GitHub
-  Actions pinning). There is no GitLab-hosted equivalent to point the badge at.
-  Its closest substitute here is the OpenSSF **Best Practices** self-assessment,
-  which is forge-neutral and which the `r` template already wires up.
+- **OpenSSF Scorecard.** Scorecard has supported GitLab since v4.12 (announced
+  2023-08-28), and its CLI runs against a GitLab project with a
+  `GITLAB_AUTH_TOKEN`. But its public results for GitLab projects stopped on
+  2023-11-20, and the badge reads those. Checked 2026-10-03: the Scorecard
+  API's result for `gitlab.com/fdroid/fdroidclient`, the GitLab example in
+  Scorecard's own README, is dated 2023-11-20; for rurl the API returns 404
+  and the shields badge reads "invalid repo path". Its closest substitute here
+  is the OpenSSF **Best Practices** self-assessment, which is forge-neutral and
+  which the `r` template already wires up.
 - **Snyk's repo-form badge.** `snyk.io/test/github/OWNER/REPO/badge.svg`
   renders on demand for a public GitHub repo with no account or token. Snyk
   supports GitLab as an *import source*, but exposes no equivalent
@@ -121,6 +125,23 @@ scaffold ships this badge because it survives a move between forges.
    for `py` run `pytest --cov --cov-report=xml`; the `r` template wires
    covr → cobertura.
 
+### Docs (pkgdown on GitLab Pages)
+
+The docs badge reports whether the Pages site answers, not a fixed label. It
+uses the shields `website` badge, which fetches the URL and renders the up or
+down state:
+
+```markdown
+[![Docs](https://img.shields.io/website?url=https%3A%2F%2FOWNER.gitlab.io%2FREPO%2F&label=docs&logo=gitlab&logoColor=white&up_message=pkgdown&up_color=1f75cb)](https://OWNER.gitlab.io/REPO/)
+```
+
+`url=` takes the Pages URL percent-encoded. Up, it reads "docs | pkgdown" in
+GitLab blue; a URL that does not answer reads "docs | down" (both checked live
+on 2026-10-03, with rurl and a missing site). A static
+`img.shields.io/badge/docs-pkgdown-...` badge, which pslr and pagerankr carry
+today, stays blue when the site is gone. No setup beyond the `pages` job, which
+publishes on every push to `main`.
+
 ### OpenSSF Best Practices (R)
 
 The R scaffold includes `.bestpractices.json` with proposed answers for facts
@@ -180,8 +201,13 @@ where the public-project self-assessment is not an appropriate default.
    Note the locator carries the **host**: a project imported from GitLab is
    `git+gitlab.com/...`, and reusing a `git+github.com/...` locator silently
    points at nothing.
-- **Ecosystem note:** FOSSA's analysis of CRAN/R dependencies is limited; the
-  `r` template omits it.
+- **Ecosystem note:** FOSSA's R analysis reads `DESCRIPTION` for direct
+  dependencies (`Depends`, `Imports`, `Suggests`, `Enhances`, `LinkingTo`),
+  ignoring version constraints, and finds deeper dependencies and the edges
+  between them only through `renv.lock` (fossa-cli's `renv` strategy doc).
+  No fleet package has a root `renv.lock` on `main` (checked 2026-10-03), so
+  FOSSA sees their direct dependencies only. The fleet still runs it on rurl, ssrfr and seor
+  ([`fleet-standard.md`](fleet-standard.md)); the `r` template omits it.
 
 ## Optional: GitLab's own security scanning
 

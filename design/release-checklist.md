@@ -100,13 +100,18 @@ Who runs each step:
    `git merge-base --is-ancestor vX.Y.Z origin/main`.
 10. **agent+go** Create the GitLab release from the tag
     (`glab release create vX.Y.Z`), with that version's `NEWS.md` section as
-    the notes.
+    the notes. Every CRAN version gets one; the latest-release badge
+    ([`fleet-standard.md`](fleet-standard.md)) reads it.
 11. **agent** Diff the CRAN tarball
     (`https://cran.r-project.org/src/contrib/<pkg>_X.Y.Z.tar.gz`) against a
     build of the tag. Only the `DESCRIPTION` fields CRAN adds should differ.
 12. **agent** Post-release commit: `Version:` becomes `X.Y.Z.9000`, `NEWS.md`
     gets a fresh `(development version)` top heading, and after a first
     release `URL:` gains `https://CRAN.R-project.org/package=<pkg>`.
+    After a first release, the badge row changes too, in `README.Rmd` and in
+    the GitLab project badges: the r-universe badge in slot 1 becomes the
+    three CRAN badges (version, downloads, checks), r-universe moves to slot
+    4, and the dependencies badge appears ([`fleet-standard.md`](fleet-standard.md)).
 13. **agent** Downstream, through a seor cascade issue (`fleet.md`): drop this
     package's `Remotes:` entries in the other fleet packages (seor's
     `DESCRIPTION` and its `ARCHITECTURE.md` CRAN table; sitemapr's pin on
@@ -144,3 +149,7 @@ Who runs each step:
       `date-released` to this release. On a first archive, also add `doi:`
       with the concept DOI and its `identifiers:` entry. `python3
       scripts/check-citation.py` must still pass.
+    - **agent** When this release minted the package's first DOI, add the DOI
+      badge with the concept DOI, never the version DOI, to `README.Rmd` and
+      the GitLab project badges, in the same follow-up commit
+      ([`fleet-standard.md`](fleet-standard.md), slot 11).
