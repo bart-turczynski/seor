@@ -23,6 +23,11 @@
 * `pagerankr` is on CRAN (0.1.0), so `DESCRIPTION` no longer lists it in
   `Remotes:`; only `robotstxtr` and `sitemapr` still install from GitLab
   (SEOR-wnbjpydq).
+* `seor` now requires R 4.1.0 or later, up from 4.0.0. It attaches every
+  member, and `pslr`, `punycoder`, `sitemapr` and `robotstxtr` already require
+  R 4.1.0, so seor could never install on R 4.0 (SEOR-kqcbgsfc).
+* Bart Turczynski is the copyright holder, in `DESCRIPTION` (`cph` role),
+  `LICENSE` and `LICENSE.md`, which named "seor authors" (SEOR-kqcbgsfc).
 
 ## Internal
 
@@ -168,3 +173,6 @@
   r-universe in slot 1 instead of a CRAN badge that rendered an error for a
   package not on CRAN, plus docs, repostatus, Zenodo, license, last-commit and
   the FOSSA license and security badges (SEOR-kqcbgsfc).
+* `SECURITY.md` uses the fleet's shared policy text, with a seor scope that
+  sends member-package reports to the member. `CODE_OF_CONDUCT.md` names
+  bartek@turczynski.pl as the enforcement contact (SEOR-kqcbgsfc).
