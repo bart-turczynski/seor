@@ -46,7 +46,7 @@ dependencies and (2) attach them all on `library(seor)`.
   CI, schedules, files, `DESCRIPTION` fields) is `design/fleet-standard.md`;
   [ADR 0007](design/adr/0007-one-fleet-standard-for-badges-and-checks.md)
   records its load-bearing choices.
-- `scripts/` — repository hygiene checks that run from the pre-push hook.
+- `scripts/` — repository hygiene checks that run from the pre-push hook and CI.
   `check-design.py` owns design-doc hygiene; `check-citation.py` owns the
   agreement between `CITATION.cff`, `.zenodo.json` and `DESCRIPTION`. Both are
   offline and stdlib-only, so they also run as cheap CI jobs.
