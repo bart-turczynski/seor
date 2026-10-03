@@ -1341,7 +1341,7 @@ workflow:
     - when: never
 .on-main:
   rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_PIPELINE_SOURCE == "web"
 .deep:
   rules:
@@ -1592,8 +1592,17 @@ def self_test() -> list[str]:
                     "URL: https://gitlab.com/bart-turczynski/punycoder, https://bart-turczynski.gitlab.io/punycoder/"),
                fixture_state())
 
-    # NEGATIVE: CI.
     ci = ".gitlab-ci.yml"
+    # POSITIVE: coverage named on each schedule by its own rules, the other push jobs not.
+    expect_clean("coverage on both schedules by its own rules", "punycoder",
+                 edit(edit(cran, ci, "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n    - if: $CI_PIPELINE_SOURCE == \"web\"\n.deep:",
+                           "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != \"schedule\"\n"
+                           "    - if: $CI_PIPELINE_SOURCE == \"web\"\n.deep:"),
+                      ci, "coverage:\n  extends: .on-main\n",
+                      "coverage:\n  rules:\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n"),
+                 fixture_state())
+
+    # NEGATIVE: CI.
     expect_gap("coverage threshold below 95", "coverage threshold 90 is below 95", "punycoder",
                edit(cran, ci, "pct < 95", "pct < 90"), fixture_state())
     expect_gap("coverage threshold absent", "no 95% coverage threshold", "punycoder",
