@@ -19,6 +19,9 @@ mkdocs/sphinx/docusaurus, handwritten publisher docs in a browser extension.
   checks, git hooks and the pages `KEEP` list.
 - [`fleet.md`](fleet.md) — the fleet tracker convention, the per-repository
   instruction drift table and the pipeline schedule table.
+- [`fleet-standard.md`](fleet-standard.md) — what every fleet package
+  carries: the badge row, CI, schedules, files, `DESCRIPTION` fields and
+  identities.
 - [`badges.md`](badges.md) — the README badge suite and its one-time setup.
 - [`github-mirror.md`](github-mirror.md) — playbook for the read-only GitHub
   mirror.

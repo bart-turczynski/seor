@@ -7,6 +7,7 @@ decoupled from git (the `fp` skill's `references/decoupling.md`). This file
 holds what is neither in the skills nor in any one repository: where fleet work
 is tracked, which English the prose and exported names use, what actually
 differs between the repositories, and when each one's scheduled pipelines run.
+What every repository must carry is in [`fleet-standard.md`](fleet-standard.md).
 
 ## Tracker convention
 
@@ -44,6 +45,10 @@ fix while the punycoder session held a release queue.
   work itself only in repositories with no live session. For a repository
   that has one, it messages that session with the SEOR id and the checklist
   line, then ticks the line from the evidence that session reports back.
+- A seor `/burndown` run may write to every fleet repository (amended
+  2026-10-03, SEOR-plnwieyf). Before each wave it checks `ListAgents` and
+  skips any repository that has a live session, so the first rule above still
+  holds.
 - A question about another repository goes to that repository's session, not
   to seor.
 - Check who is live before writing: `ListAgents` names each session and its
