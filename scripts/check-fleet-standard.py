@@ -1,0 +1,1688 @@
+# check-fleet-standard v1
+"""Test fleet packages against design/fleet-standard.md and list each gap.
+
+WHY THIS EXISTS. The nine per-package "meets the fleet standard" issues run
+unattended, so their acceptance has to be a command, not a reading. Repositories
+have also drifted from fleet-level briefs before without anyone noticing
+(SEOR-tullzdwb). This reads one package, or all nine, and prints a gap table per
+package against the standard (SEOR-myokihrl).
+
+    python3 scripts/check-fleet-standard.py                   # all nine
+    python3 scripts/check-fleet-standard.py --repo rurl       # one package
+    python3 scripts/check-fleet-standard.py --repo rurl --local ~/Projects/rurl
+    python3 scripts/check-fleet-standard.py --repo rurl --local ~/Projects/rurl --offline
+    python3 scripts/check-fleet-standard.py --self-test       # offline fixtures
+
+Exit status: 0 when nothing is missing, 1 on any gap, 2 when there is no gap
+but a probe failed (a network error, glab refusing), so the run is incomplete.
+A probe that fails is reported under "not judged", never as a gap.
+
+WHERE IT READS. By default each package's `main` on GitLab, through `glab api`
+(the repository tree, raw files, releases and pipeline schedules), because a
+local checkout may be stale or on another branch. `--local PATH` reads the
+files from a checkout instead and still asks GitLab and the web for live state.
+`--offline` (needs `--local`) touches no network at all: the badge images, the
+conditional badge slots and the schedules are then listed as not judged.
+
+WHAT IT CHECKS, by section of the standard.
+
+* Badges. The block between `<!-- badges: start -->` and
+  `<!-- badges: end -->` in README.Rmd holds the standard's templates, in
+  order, and nothing else. Image and link URLs are matched against the
+  templates; `<stage>`/`<color>`, `<concept-doi>` and `<bp-id>` are matched as
+  patterns. Alt text is not compared. The conditional slots are judged from
+  live state: on CRAN (crandb), a GitLab Release (`releases` API), a concept
+  DOI (CITATION.cff's top-level `doi:`, else the badge row; doi.org must
+  resolve it and Zenodo must call it the concept DOI), and, for the FOSSA
+  slots, a FOSSA project under the `git+gitlab.com` locator. A badge shown
+  while its condition does not hold is a gap. r-universe is not conditional in
+  the standard: a package missing from r-universe is a gap.
+* Badge images. Every image URL in the row answers 200 with an image whose
+  text does not read "unknown", "not found", "invalid", "not set up",
+  "inaccessible" or "no releases found".
+* Files. The list in "Files every package carries", plus: LICENSE names Bart
+  Turczynski as holder, LICENSE.md is the full MIT text, SECURITY.md and
+  CODE_OF_CONDUCT.md name the public contact, and SECURITY.md is more than a
+  stub (fewer than 10 non-blank lines is a stub).
+* DESCRIPTION. Bart Turczynski with roles aut, cre and cph, the ORCID comment
+  and the public email; `URL:` in the standard's order (trailing slashes
+  ignored); `Language: en-US`; a declared R floor.
+* .gitlab-ci.yml. R CMD check with `--as-cran` and `error_on = "warning"` on
+  every push to main, with CRAN incoming switched off only where ADR 0004
+  allows; a coverage job on push with a `coverage:` regex, a cobertura report,
+  a threshold of at least 95 and no `allow_failure`; `pages` on push; the
+  cheap gates (README drift, news-version, citation-version, lint, spelling);
+  deep-check legs for R release, oldrel, devel and the DESCRIPTION floor;
+  ASAN/UBSAN legs for punycoder, pslr and robotstxtr; `osv-audit` and
+  `security-audit` on the dependency-audit schedule, with seor's
+  disposition-row test files; a `fossa analyze` job for rurl, ssrfr and seor.
+* Local gate. The pre-commit config, or a script its hooks call, runs a URL
+  check (`check_url_db`, `url_db_from_package_sources` or urlchecker).
+* Schedules. A `deep-check` and a `dependency-audit` schedule, each active,
+  on `main`, with `SCHEDULE_KIND` set on the schedule itself; no schedule
+  without a `SCHEDULE_KIND` or off `main`.
+
+HOW IT READS CI, AND WHERE THAT STOPS. seor's scripts are stdlib-only and read
+YAML with small fixed-shape readers rather than a YAML library (check-citation,
+bestpractices-url), so this does too. `.gitlab-ci.yml` is split into its
+top-level blocks; `extends:` is followed, a job's own `rules:` replace the
+template's, `variables:` merge, and YAML anchors (`*name`) pull in the block
+that defines them. `rules:if` and `workflow:rules` are evaluated for real (a
+small evaluator for `==`, `!=`, `=~`, `!~`, `&&`, `||`, presence and
+parentheses) in four pipelines: a push to main, a `deep-check` schedule, a
+`dependency-audit` schedule and a tag. A job "runs" in a pipeline when the
+workflow admits it and its first matching rule is not `never` or `manual`.
+A deep-check leg is an R CMD check job that runs in the deep-check schedule and
+in neither a push to main nor the dependency-audit schedule (design/fleet.md:
+every scheduled job requires its kind). Its R version comes from its image tag,
+expanded through `parallel:matrix` and variables, and is compared by minor
+version with the current release and oldrel (api.r-hub.io) and the DESCRIPTION
+floor. What a job does is read textually, from the job and from every
+repository script it names (two levels deep, comment lines dropped, and R stage
+tables' `default = FALSE` entries dropped, since those stages are opt-in).
+So a gate is "present" when its call appears in that text; a script that takes
+the call but skips it at run time reads as present. Not checked: whether a tag
+pipeline fails on "already on CRAN", whether the URL check fails on zero URLs
+and exempts only the BugReports 404, how security-audit treats missing OSS
+Index credentials, the GitLab project badges, and that no employer is named as
+copyright holder or funder. Those stay review items.
+
+Stdlib only. `glab` must be on PATH and authenticated unless `--offline`.
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable
+
+OWNER = "bart-turczynski"
+FLEET = ("rurl", "pslr", "punycoder", "raddr", "ssrfr", "pagerankr", "sitemapr", "seor", "robotstxtr")
+FOSSA_PACKAGES = frozenset({"rurl", "ssrfr", "seor"})
+SANITIZER_PACKAGES = frozenset({"punycoder", "pslr", "robotstxtr"})
+ORCID = "0000-0002-8788-7980"
+CONTACT = "bartek@turczynski.pl"
+COVERAGE_MIN = 95.0
+SECURITY_STUB_LINES = 10
+BAD_BADGE_TEXT = ("unknown", "not found", "invalid", "not set up", "inaccessible", "no releases found")
+LIFECYCLE = {"experimental": "orange", "stable": "brightgreen", "superseded": "blue", "deprecated": "orange"}
+SCHEDULE_KINDS = ("deep-check", "dependency-audit")
+USER_AGENT = "seor-check-fleet-standard"
+
+REQUIRED_FILES = (
+    "README.Rmd",
+    "README.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "SECURITY-INSIGHTS.yml",
+    "LICENSE",
+    "LICENSE.md",
+    "inst/CITATION",
+    "CITATION.cff",
+    ".zenodo.json",
+    "codemeta.json",
+    "ARCHITECTURE.md",
+    "NEWS.md",
+)
+REQUIRED_DIRS = (".gitlab/issue_templates", ".gitlab/merge_request_templates")
+AUDIT_TEST_FILES = (
+    "tests/testthat/helper-security.R",
+    "tests/testthat/test-osv.R",
+    "tests/testthat/test-security.R",
+)
+
+
+# --- results -------------------------------------------------------------------
+
+
+@dataclass
+class Report:
+    pkg: str
+    gaps: list[tuple[str, str]] = field(default_factory=list)
+    unjudged: list[tuple[str, str]] = field(default_factory=list)
+
+    def gap(self, area: str, text: str) -> None:
+        self.gaps.append((area, text))
+
+    def skip(self, area: str, text: str) -> None:
+        self.unjudged.append((area, text))
+
+    def render(self) -> str:
+        lines = [f"## {self.pkg}: {len(self.gaps)} gap(s)", ""]
+        if self.gaps:
+            lines += ["| area | gap |", "|------|-----|"]
+            lines += [f"| {area} | {text.replace('|', '/')} |" for area, text in self.gaps]
+        else:
+            lines.append("No gaps.")
+        if self.unjudged:
+            lines += ["", "Not judged:"]
+            lines += [f"- {area}: {text}" for area, text in self.unjudged]
+        return "\n".join(lines) + "\n"
+
+
+class ProbeError(Exception):
+    """A network or glab failure: reported as not judged, never as a gap."""
+
+
+# --- sources -------------------------------------------------------------------
+
+
+class DictSource:
+    """Files held in memory: the self-test's fixtures."""
+
+    def __init__(self, files: dict[str, str]):
+        self.files = dict(files)
+
+    def tree(self) -> set[str]:
+        return set(self.files)
+
+    def read(self, path: str) -> str | None:
+        return self.files.get(path)
+
+
+class LocalSource:
+    """A checkout on disk, read-only. Skips VCS and build directories."""
+
+    SKIP_DIRS = {".git", "node_modules", "renv", ".Rproj.user", "_scratch", "tmp", ".fp", ".r-lib"}
+
+    def __init__(self, root: Path):
+        self.root = root
+        self._tree: set[str] | None = None
+
+    def tree(self) -> set[str]:
+        if self._tree is None:
+            found = set()
+            for dirpath, dirnames, filenames in os.walk(self.root):
+                dirnames[:] = [d for d in dirnames if d not in self.SKIP_DIRS and not d.endswith(".Rcheck")]
+                rel = Path(dirpath).relative_to(self.root)
+                found.update((rel / name).as_posix() for name in filenames)
+            self._tree = {p[2:] if p.startswith("./") else p for p in found}
+        return self._tree
+
+    def read(self, path: str) -> str | None:
+        target = self.root / path
+        if not target.is_file():
+            return None
+        return target.read_text(encoding="utf-8", errors="replace")
+
+
+def glab_api(path: str, paginate: bool = False) -> object:
+    command = ["glab", "api", *(["--paginate"] if paginate else []), path]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120)  # noqa: S603
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ProbeError(f"glab api {path}: {error}") from error
+    if result.returncode:
+        raise ProbeError(f"glab api {path}: {result.stderr.strip()[:200]}")
+    if not paginate:
+        return json.loads(result.stdout)
+    decoder, text, items, at = json.JSONDecoder(), result.stdout.strip(), [], 0
+    while at < len(text):
+        chunk, at = decoder.raw_decode(text, at)
+        items.extend(chunk if isinstance(chunk, list) else [chunk])
+        while at < len(text) and text[at].isspace():
+            at += 1
+    return items
+
+
+def project_ref(pkg: str) -> str:
+    return urllib.parse.quote(f"{OWNER}/{pkg}", safe="")
+
+
+class GitLabSource:
+    """A package's `main` on GitLab, through glab api."""
+
+    def __init__(self, pkg: str, ref: str = "main"):
+        self.project = project_ref(pkg)
+        self.ref = ref
+        self._tree: set[str] | None = None
+        self._cache: dict[str, str | None] = {}
+
+    def tree(self) -> set[str]:
+        if self._tree is None:
+            entries = glab_api(
+                f"projects/{self.project}/repository/tree?ref={self.ref}&recursive=true&per_page=100",
+                paginate=True,
+            )
+            self._tree = {e["path"] for e in entries if e.get("type") == "blob"}
+        return self._tree
+
+    def read(self, path: str) -> str | None:
+        if path not in self.tree():
+            return None
+        if path not in self._cache:
+            quoted = urllib.parse.quote(path, safe="")
+            command = ["glab", "api", f"projects/{self.project}/repository/files/{quoted}/raw?ref={self.ref}"]
+            result = subprocess.run(command, capture_output=True, timeout=120)  # noqa: S603
+            if result.returncode:
+                raise ProbeError(f"reading {path}: {result.stderr.decode(errors='replace').strip()[:200]}")
+            self._cache[path] = result.stdout.decode("utf-8", errors="replace")
+        return self._cache[path]
+
+
+# --- live state ------------------------------------------------------------------
+
+
+@dataclass
+class State:
+    """What the conditional parts of the standard depend on. None = unknown."""
+
+    on_cran: bool | None = None
+    on_runiverse: bool | None = None
+    doi_resolves: bool | None = None
+    doi_is_concept: bool | None = None
+    has_release: bool | None = None
+    fossa_project: bool | None = None
+    schedules: list[dict] | None = None
+    r_release: str | None = None
+    r_oldrel: str | None = None
+    errors: list[tuple[str, str]] = field(default_factory=list)
+
+
+def http_get(url: str, timeout: int = 30) -> tuple[int, str, bytes]:
+    """(status, content type, body). HTTP errors return their status; others raise."""
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+            return response.status, response.headers.get("Content-Type", ""), response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.headers.get("Content-Type", "") if error.headers else "", error.read() or b""
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise ProbeError(f"{url}: {getattr(error, 'reason', error)}") from error
+
+
+def minor(version: str) -> str:
+    return ".".join(version.split(".")[:2])
+
+
+def probe_state(pkg: str, concept_doi: str | None) -> State:
+    state = State()
+
+    def attempt(area: str, func: Callable[[], None]) -> None:
+        try:
+            func()
+        except (ProbeError, ValueError, KeyError) as error:
+            state.errors.append((area, str(error)))
+
+    def cran() -> None:
+        status, _, body = http_get(f"https://crandb.r-pkg.org/{pkg}")
+        if status == 404:
+            state.on_cran = False
+        elif status == 200:
+            state.on_cran = not json.loads(body).get("archived", False)
+        else:
+            raise ProbeError(f"crandb answered {status}")
+
+    def runiverse() -> None:
+        status, _, _ = http_get(f"https://{OWNER}.r-universe.dev/api/packages/{pkg}")
+        if status not in (200, 404):
+            raise ProbeError(f"r-universe answered {status}")
+        state.on_runiverse = status == 200
+
+    def doi() -> None:
+        if not concept_doi:
+            return
+        status, _, _ = http_get(f"https://doi.org/api/handles/{concept_doi}")
+        if status not in (200, 404):
+            raise ProbeError(f"doi.org answered {status}")
+        state.doi_resolves = status == 200
+        m = re.fullmatch(r"10\.5281/zenodo\.(\d+)", concept_doi)
+        if state.doi_resolves and m:
+            status, _, body = http_get(f"https://zenodo.org/api/records/{m.group(1)}")
+            if status != 200:
+                raise ProbeError(f"Zenodo record {m.group(1)} answered {status}")
+            state.doi_is_concept = json.loads(body).get("conceptdoi", "").lower() == concept_doi.lower()
+
+    def release() -> None:
+        state.has_release = bool(glab_api(f"projects/{project_ref(pkg)}/releases?per_page=1"))
+
+    def fossa() -> None:
+        if pkg not in FOSSA_PACKAGES:
+            return
+        status, _, _ = http_get(fossa_image(pkg, "license"))
+        if status not in (200, 404):
+            raise ProbeError(f"FOSSA answered {status}")
+        state.fossa_project = status == 200
+
+    def schedules() -> None:
+        found = []
+        for item in glab_api(f"projects/{project_ref(pkg)}/pipeline_schedules", paginate=True):
+            found.append(glab_api(f"projects/{project_ref(pkg)}/pipeline_schedules/{item['id']}"))
+        state.schedules = found
+
+    def rversions() -> None:
+        for kind, attr in (("release", "r_release"), ("oldrel/1", "r_oldrel")):
+            status, _, body = http_get(f"https://api.r-hub.io/rversions/resolve/{kind}")
+            if status != 200:
+                raise ProbeError(f"rversions answered {status}")
+            setattr(state, attr, minor(json.loads(body)["version"]))
+
+    for area, func in (
+        ("badges", cran), ("badges", runiverse), ("badges", doi), ("badges", release),
+        ("badges", fossa), ("schedules", schedules), ("ci", rversions),
+    ):
+        attempt(area, func)
+    return state
+
+
+# --- small readers ----------------------------------------------------------------
+
+
+def read_dcf(text: str) -> dict[str, str]:
+    """Flat DCF fields, joining continuation lines."""
+    fields: dict[str, str] = {}
+    key = None
+    for line in text.splitlines():
+        if not line.strip():
+            key = None
+        elif line[0].isspace():
+            if key is not None:
+                fields[key] += " " + line.strip()
+        else:
+            name, sep, value = line.partition(":")
+            key = name.strip() if sep else None
+            if key:
+                fields[key] = value.strip()
+    return fields
+
+
+def cff_doi(text: str | None) -> str | None:
+    if not text:
+        return None
+    m = re.search(r"^doi:\s*[\"']?(10\.[^\s\"']+)", text, re.M)
+    return m.group(1) if m else None
+
+
+def strip_comment_lines(text: str) -> str:
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
+def r_spans(text: str) -> list[tuple[int, int, int]]:
+    """(open, close, depth) for each parenthesis pair, skipping strings and comments."""
+    spans, stack, i, n = [], [], 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch in "\"'":
+            i += 1
+            while i < n and text[i] != ch:
+                i += 2 if text[i] == "\\" else 1
+        elif ch == "#":
+            while i < n and text[i] != "\n":
+                i += 1
+        elif ch == "(":
+            stack.append(i)
+        elif ch == ")" and stack:
+            start = stack.pop()
+            spans.append((start, i, len(stack)))
+        i += 1
+    return spans
+
+
+def drop_opt_in_stages(text: str) -> str:
+    """Remove `name = list(...)` entries of an R stage table that say `default = FALSE`."""
+    spans = r_spans(text)
+    drop = []
+    for start, end, _ in spans:
+        head = re.search(r"[\w.]+\s*=\s*list\s*$", text[max(0, start - 80):start])
+        if not head:
+            continue
+        body = text[start + 1:end]
+        inner = [(s - start - 1, e - start - 1) for s, e, _ in spans if start < s and e < end]
+        flat = list(body)
+        for s, e in inner:
+            for k in range(s, e + 1):
+                flat[k] = " "
+        if re.search(r"\bdefault\s*=\s*FALSE\b", "".join(flat)):
+            drop.append((start - len(head.group(0)), end + 1))
+    for start, end in sorted(drop, reverse=True):
+        if not any(s <= start and end <= e and (s, e) != (start, end) for s, e in drop):
+            text = text[:start] + text[end:]
+    return text
+
+
+PATH_TOKEN = re.compile(r"(?<![\w$/.-])((?:\.?[\w-]+/)+[\w.-]+)")
+SCRIPT_SUFFIXES = {"", ".R", ".r", ".sh", ".py", ".yml", ".yaml"}
+
+
+def inline_scripts(text: str, source, depth: int = 2, seen: set[str] | None = None) -> list[tuple[str, str]]:
+    """(path, text) for each repository script `text` names, followed `depth` levels."""
+    seen = set() if seen is None else seen
+    out = []
+    tree = source.tree()
+    for token in PATH_TOKEN.findall(text):
+        if token in seen or token not in tree or Path(token).suffix not in SCRIPT_SUFFIXES:
+            continue
+        if token == ".gitlab-ci.yml":
+            continue
+        seen.add(token)
+        body = source.read(token) or ""
+        if len(body) > 400_000:
+            continue
+        body = strip_comment_lines(body)
+        if Path(token).suffix in (".R", ".r"):
+            body = drop_opt_in_stages(body)
+        out.append((token, body))
+        if depth > 1:
+            out += inline_scripts(body, source, depth - 1, seen)
+    return out
+
+
+# --- CI: blocks, extends, rules ---------------------------------------------------
+
+TOP_KEY = re.compile(r"^([^\s#-][^\n]*?):(?=\s|$)")
+RESERVED = {"stages", "default", "variables", "workflow", "include", "image", "services",
+            "cache", "before_script", "after_script"}
+
+
+def split_blocks(text: str) -> dict[str, list[str]]:
+    """Top-level key -> its lines (key line first), comment lines dropped."""
+    blocks: dict[str, list[str]] = {}
+    current = None
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        m = TOP_KEY.match(line)
+        if m:
+            current = m.group(1).strip().strip("\"'")
+            blocks[current] = [line]
+        elif current is not None:
+            blocks[current].append(line)
+    return blocks
+
+
+def children(lines: list[str]) -> dict[str, tuple[str, list[str]]]:
+    """Immediate child keys of a block: key -> (inline value, deeper lines)."""
+    out: dict[str, tuple[str, list[str]]] = {}
+    body = [line for line in lines[1:] if line.strip()]
+    if not body:
+        return out
+    indent = len(body[0]) - len(body[0].lstrip())
+    key = None
+    for line in body:
+        level = len(line) - len(line.lstrip())
+        if level == indent and not line.lstrip().startswith("- "):
+            m = re.match(r"\s*([\w.-]+):\s*(.*)$", line)
+            if m:
+                key = m.group(1)
+                out[key] = (m.group(2).strip(), [])
+                continue
+        if key is not None and level >= indent:
+            out[key][1].append(line)
+    return out
+
+
+def unquote(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        inner = value[1:-1]
+        return inner.replace("''", "'") if value[0] == "'" else inner
+    return value
+
+
+def list_values(inline: str, lines: list[str]) -> list[str]:
+    if inline.startswith("["):
+        return [unquote(v) for v in inline.strip("[]").split(",") if v.strip()]
+    if inline:
+        return [unquote(inline)]
+    return [unquote(line.strip()[2:]) for line in lines if line.strip().startswith("- ")]
+
+
+def parse_rules(lines: list[str]) -> list[dict[str, str]]:
+    rules: list[dict[str, str]] = []
+    body = [line for line in lines if line.strip()]
+    if not body:
+        return rules
+    item_indent = min(len(line) - len(line.lstrip()) for line in body if line.lstrip().startswith("- "))
+    for line in body:
+        level = len(line) - len(line.lstrip())
+        stripped = line.strip()
+        if level == item_indent and stripped.startswith("- "):
+            rules.append({})
+            stripped = stripped[2:]
+        if not rules:
+            continue
+        m = re.match(r"([\w-]+):\s*(.*)$", stripped)
+        if m and level <= item_indent + 2:
+            rules[-1][m.group(1)] = unquote(m.group(2))
+    return rules
+
+
+EXPR_TOKEN = re.compile(r"\s*(?:(\$\{?\w+\}?)|(\"[^\"]*\"|'[^']*')|(==|!=|=~|!~|&&|\|\||\(|\))|(null)\b)")
+
+
+def evaluate(expr: str, env: dict[str, str]) -> bool:
+    """Evaluate a GitLab `rules:if` expression against variables in `env`."""
+    tokens: list[tuple[str, str]] = []
+    i = 0
+    while i < len(expr):
+        if expr[i].isspace():
+            i += 1
+            continue
+        if tokens and tokens[-1] == ("op", "=~") or tokens and tokens[-1] == ("op", "!~"):
+            m = re.compile(r"/((?:\\.|[^/])*)/([a-z]*)").match(expr, i)
+            if not m:
+                raise ValueError(f"bad regex in {expr!r}")
+            tokens.append(("re", m.group(1) + ("\x00i" if "i" in m.group(2) else "")))
+            i = m.end()
+            continue
+        m = EXPR_TOKEN.match(expr, i)
+        if not m or m.end() == i:
+            raise ValueError(f"cannot read rule {expr!r}")
+        var, string, op, null = m.groups()
+        if var:
+            tokens.append(("var", var.strip("${}")))
+        elif string:
+            tokens.append(("str", string[1:-1]))
+        elif op:
+            tokens.append(("op", op))
+        else:
+            tokens.append(("null", ""))
+        i = m.end()
+
+    pos = 0
+
+    def value(token: tuple[str, str]) -> str | None:
+        kind, text = token
+        if kind == "var":
+            return env.get(text)
+        if kind == "str":
+            return text
+        return None
+
+    def atom() -> bool:
+        nonlocal pos
+        token = tokens[pos]
+        if token == ("op", "("):
+            pos += 1
+            result = disjunction()
+            pos += 1
+            return result
+        pos += 1
+        if pos < len(tokens) and tokens[pos][0] == "op" and tokens[pos][1] in ("==", "!=", "=~", "!~"):
+            op = tokens[pos][1]
+            right = tokens[pos + 1]
+            pos += 2
+            left = value(token)
+            if op in ("==", "!="):
+                equal = left == value(right)
+                return equal if op == "==" else not equal
+            pattern, _, flag = right[1].partition("\x00")
+            hit = left is not None and re.search(pattern, left, re.I if flag else 0) is not None
+            return hit if op == "=~" else not hit
+        return bool(value(token))
+
+    def conjunction() -> bool:
+        nonlocal pos
+        result = atom()
+        while pos < len(tokens) and tokens[pos] == ("op", "&&"):
+            pos += 1
+            right = atom()
+            result = result and right
+        return result
+
+    def disjunction() -> bool:
+        nonlocal pos
+        result = conjunction()
+        while pos < len(tokens) and tokens[pos] == ("op", "||"):
+            pos += 1
+            right = conjunction()
+            result = result or right
+        return result
+
+    return disjunction()
+
+
+def first_match(rules: list[dict[str, str]], env: dict[str, str]) -> str | None:
+    """The `when` of the first rule that matches, or None when none matches."""
+    for rule in rules:
+        if "if" not in rule or evaluate(rule["if"], env):
+            return rule.get("when", "on_success")
+    return None
+
+
+PIPELINES = {
+    "push": {"CI_PIPELINE_SOURCE": "push", "CI_COMMIT_BRANCH": "main", "CI_COMMIT_REF_NAME": "main"},
+    "deep-check": {"CI_PIPELINE_SOURCE": "schedule", "CI_COMMIT_BRANCH": "main",
+                   "CI_COMMIT_REF_NAME": "main", "SCHEDULE_KIND": "deep-check"},
+    "dependency-audit": {"CI_PIPELINE_SOURCE": "schedule", "CI_COMMIT_BRANCH": "main",
+                         "CI_COMMIT_REF_NAME": "main", "SCHEDULE_KIND": "dependency-audit"},
+    "tag": {"CI_PIPELINE_SOURCE": "push", "CI_COMMIT_TAG": "v9.9.9", "CI_COMMIT_REF_NAME": "v9.9.9"},
+}
+
+
+@dataclass
+class Job:
+    name: str
+    attrs: dict[str, tuple[str, list[str]]]
+    text: str
+    variables: dict[str, str]
+    runs: dict[str, bool] = field(default_factory=dict)
+    scripts: list[tuple[str, str]] = field(default_factory=list)
+
+    def full_text(self) -> str:
+        return "\n".join([self.text] + [body for _, body in self.scripts])
+
+    def chunks(self) -> list[str]:
+        return [self.text] + [body for _, body in self.scripts]
+
+
+def scalar_map(lines: list[str]) -> dict[str, str]:
+    out = {}
+    for line in lines:
+        m = re.match(r"\s*([\w.-]+):\s*(\S.*)$", line)
+        if m:
+            out[m.group(1)] = unquote(m.group(2))
+    return out
+
+
+class CI:
+    def __init__(self, text: str, source):
+        self.blocks = split_blocks(text)
+        self.source = source
+        self.global_vars = scalar_map(self.blocks.get("variables", [])[1:])
+        default = children(self.blocks.get("default", ["default:"]))
+        self.default_image = default.get("image", ("", []))[0]
+        if "image" in self.blocks:
+            self.default_image = self.blocks["image"][0].partition(":")[2].strip()
+        workflow = children(self.blocks.get("workflow", ["workflow:"]))
+        self.workflow_rules = parse_rules(workflow["rules"][1]) if "rules" in workflow else None
+        self.anchors = {}
+        for name, lines in self.blocks.items():
+            for line in lines:
+                for anchor in re.findall(r"&([\w-]+)", line.split("#")[0]):
+                    self.anchors.setdefault(anchor, name)
+        self.jobs = {name: self.job(name) for name in self.blocks
+                     if name not in RESERVED and not name.startswith(".")}
+
+    def env(self, pipeline: str) -> dict[str, str]:
+        env = dict(self.global_vars)
+        env.update({"CI_DEFAULT_BRANCH": "main"})
+        env.update(PIPELINES[pipeline])
+        return env
+
+    def admitted(self, pipeline: str) -> bool:
+        if self.workflow_rules is None:
+            return True
+        return first_match(self.workflow_rules, self.env(pipeline)) not in (None, "never")
+
+    def resolve(self, name: str, seen: set[str]) -> tuple[dict, list[str], dict[str, str]]:
+        """(attributes, text blocks, variables) of a block with its extends applied."""
+        lines = self.blocks.get(name)
+        if lines is None or name in seen:
+            return {}, [], {}
+        seen = seen | {name}
+        own = children(lines)
+        attrs: dict = {}
+        texts: list[str] = []
+        variables: dict[str, str] = {}
+        parents = list_values(*own["extends"]) if "extends" in own else []
+        for parent in parents:
+            p_attrs, p_texts, p_vars = self.resolve(parent, seen)
+            attrs.update(p_attrs)
+            texts += p_texts
+            variables.update(p_vars)
+        attrs.update(own)
+        variables.update(scalar_map(own.get("variables", ("", []))[1]))
+        texts.append("\n".join(lines))
+        for anchor in re.findall(r"\*([\w-]+)", "\n".join(lines)):
+            holder = self.anchors.get(anchor)
+            if holder and holder != name:
+                texts.append("\n".join(self.blocks[holder]))
+        return attrs, texts, variables
+
+    def job(self, name: str) -> Job:
+        attrs, texts, variables = self.resolve(name, set())
+        text = "\n".join(dict.fromkeys(texts))
+        job = Job(name, attrs, text, variables)
+        rules = parse_rules(attrs["rules"][1]) if "rules" in attrs else None
+        job_when = attrs.get("when", ("on_success", []))[0] or "on_success"
+        for pipeline in PIPELINES:
+            if not self.admitted(pipeline):
+                job.runs[pipeline] = False
+                continue
+            when = first_match(rules, self.env(pipeline)) if rules is not None else job_when
+            job.runs[pipeline] = when in ("on_success", "always", "delayed")
+        job.scripts = inline_scripts(text, self.source)
+        return job
+
+    def images(self, job: Job) -> list[str]:
+        """The job's image(s), expanded through parallel:matrix and variables."""
+        inline, lines = job.attrs.get("image", ("", []))
+        image = unquote(inline) if inline else ""
+        if not image:
+            name = scalar_map(lines).get("name", "")
+            image = name or self.default_image
+        image = unquote(image)
+        matrix: dict[str, list[str]] = {}
+        if "parallel" in job.attrs:
+            plines = job.attrs["parallel"][1]
+            current = None
+            for line in plines:
+                m = re.match(r"\s*(?:- )?([A-Z_][A-Z0-9_]*):\s*(.*)$", line)
+                if m:
+                    current = m.group(1)
+                    matrix.setdefault(current, []).extend(list_values(m.group(2), []) if m.group(2) else [])
+                elif current and line.strip().startswith("- "):
+                    matrix[current].append(unquote(line.strip()[2:]))
+        out = [image]
+        for _ in range(3):
+            expanded = []
+            for img in out:
+                m = re.search(r"\$\{?(\w+)\}?", img)
+                if not m:
+                    expanded.append(img)
+                    continue
+                var = m.group(1)
+                values = matrix.get(var) or [job.variables.get(var) or self.global_vars.get(var) or ""]
+                expanded += [img[:m.start()] + v + img[m.end():] for v in values]
+            out = expanded
+        return [img for img in out if img]
+
+
+CHECK_RE = re.compile(r"rcmdcheck::rcmdcheck\s*\(|\bR CMD check\b|\"CMD\",\s*\"check\"")
+AS_CRAN_RE = re.compile(r"--as-cran")
+ERROR_ON_RE = re.compile(r"error_on\s*=\s*[\"']warning[\"']")
+INCOMING_OFF_RE = re.compile(r"_R_CHECK_CRAN_INCOMING_[\"']?\s*[=:]\s*[\"']?(?:false|FALSE|0)\b")
+INCOMING_REMOTE_OFF_RE = re.compile(r"_R_CHECK_CRAN_INCOMING_REMOTE_[\"']?\s*[=:]\s*[\"']?(?:false|FALSE|0)\b")
+URL_CHECK_RE = re.compile(r"check_url_db|url_db_from_package_sources|urlchecker::url_check|\burl_check\s*\(")
+SANITIZER_IMAGE_RE = re.compile(r"-san\b|clang-asan|gcc-asan|r-debug|asan|ubsan", re.I)
+GATES = {
+    "README drift": (re.compile(r"build_readme\s*\(|render\(\s*[\"']README\.Rmd"),),
+    "news-version": (re.compile(r"NEWS\.md"), re.compile(r"development version", re.I)),
+    "citation-version": (re.compile(r"check-citation\.py"),),
+    "lint": (re.compile(r"lint_package\s*\(|lintr::lint\s*\(|lint_dir\s*\("),),
+    "spelling": (re.compile(r"spell_check_package\s*\(|spell_check_files\s*\(|check-spelling"),),
+}
+THRESHOLD_RES = (
+    re.compile(r"(?:percent_coverage\([^)]*\)|\b(?:pct|percent|coverage|cov|total)\w*)\s*(?:<=?|>=?)\s*(\d+(?:\.\d+)?)", re.I),
+    re.compile(r"(\d+(?:\.\d+)?)\s*(?:<=?|>=?)\s*(?:covr::)?(?:percent_coverage|pct|percent|coverage|total)", re.I),
+    re.compile(r"\b(?:\w*threshold|\w*fail_under|cov\w*_min\w*|min\w*_cov\w*|COVERAGE_MIN\w*)[\"']?\s*(?:[:=]|<-)\s*[\"']?(\d+(?:\.\d+)?)", re.I),
+)
+
+
+def coverage_thresholds(text: str) -> list[float]:
+    found = []
+    for pattern in THRESHOLD_RES:
+        found += [float(v) for v in pattern.findall(text)]
+    return [v for v in found if 1 <= v <= 100]
+
+
+def leg_roles(image: str, state: State, floor: str | None) -> set[str]:
+    """Which deep-check legs an image covers: release, oldrel, devel, floor."""
+    roles = set()
+    name, _, tag = image.rpartition(":") if ":" in image.split("/")[-1] else (image, "", "")
+    if "devel" in image.lower():
+        roles.add("devel")
+    if tag in ("latest", "release") or name.endswith("-release"):
+        roles.add("release")
+    if tag == "oldrel":
+        roles.add("oldrel")
+    if re.fullmatch(r"\d+\.\d+(?:\.\d+)?", tag):
+        if state.r_release and minor(tag) == state.r_release:
+            roles.add("release")
+        if state.r_oldrel and minor(tag) == state.r_oldrel:
+            roles.add("oldrel")
+        if floor and minor(tag) == floor:
+            roles.add("floor")
+    return roles
+
+
+# --- checks ------------------------------------------------------------------------
+
+
+def fossa_image(pkg: str, issue: str) -> str:
+    return (f"https://app.fossa.com/api/projects/git%2Bgitlab.com%2F{OWNER}%2F{pkg}.svg"
+            f"?type=shield&issueType={issue}")
+
+
+@dataclass
+class Slot:
+    number: int
+    name: str
+    kind: re.Pattern
+    image: str
+    link: str
+
+
+def badge_slots(pkg: str, concept_doi: str | None) -> list[Slot]:
+    p = re.escape(pkg)
+    o = re.escape(OWNER)
+    stage = "(?P<stage>" + "|".join(LIFECYCLE) + ")"
+    doi = re.escape(concept_doi) if concept_doi else r"10\.5281/zenodo\.\d+"
+    fossa_link = rf"https://app\.fossa\.com/projects/git%2Bgitlab\.com%2F{o}%2F{p}\?ref=badge_shield&issueType="
+
+    def k(pattern: str) -> re.Pattern:
+        return re.compile(pattern, re.I)
+
+    return [
+        Slot(1, "CRAN version", k(r"r-pkg\.org/badges/version"),
+             rf"https://www\.r-pkg\.org/badges/version/{p}", rf"https://CRAN\.R-project\.org/package={p}"),
+        Slot(2, "CRAN downloads", k(r"cranlogs|shields\.io/cran/d"),
+             rf"https://cranlogs\.r-pkg\.org/badges/{p}", rf"https://CRAN\.R-project\.org/package={p}"),
+        Slot(3, "CRAN checks", k(r"cranchecks|shields\.io/cran/checks"),
+             rf"https://badges\.cranchecks\.info/worst/{p}\.svg",
+             rf"https://cran\.r-project\.org/web/checks/check_results_{p}\.html"),
+        Slot(4, "r-universe", k(r"r-universe\.dev"),
+             rf"https://{o}\.r-universe\.dev/{p}/badges/version", rf"https://{o}\.r-universe\.dev/{p}"),
+        Slot(5, "GitLab pipeline", k(r"/pipeline\.svg"),
+             rf"https://gitlab\.com/{o}/{p}/badges/main/pipeline\.svg", rf"https://gitlab\.com/{o}/{p}/-/pipelines"),
+        Slot(6, "GitLab coverage", k(r"/coverage\.svg|codecov"),
+             rf"https://gitlab\.com/{o}/{p}/badges/main/coverage\.svg", rf"https://gitlab\.com/{o}/{p}/-/pipelines"),
+        Slot(7, "docs", k(r"shields\.io/website|badge/docs|label=docs"),
+             rf"https://img\.shields\.io/website\?url=https%3A%2F%2F{o}\.gitlab\.io%2F{p}%2F&label=docs"
+             rf"&logo=gitlab&logoColor=white&up_message=pkgdown&up_color=1f75cb",
+             rf"https://{o}\.gitlab\.io/{p}/"),
+        Slot(8, "latest release", k(r"/v/release|badges/release\.svg"),
+             rf"https://img\.shields\.io/gitlab/v/release/{o}%2F{p}", rf"https://gitlab\.com/{o}/{p}/-/releases"),
+        Slot(9, "lifecycle", k(r"lifecycle"),
+             rf"https://img\.shields\.io/badge/lifecycle-{stage}-(?P<color>\w+)\.svg",
+             r"https://lifecycle\.r-lib\.org/articles/stages\.html#(?P<lstage>\w+)"),
+        Slot(10, "repostatus", k(r"repostatus\.org"),
+             r"https://www\.repostatus\.org/badges/latest/active\.svg", r"https://www\.repostatus\.org/#active"),
+        Slot(11, "DOI", k(r"zenodo\.org/badge/(?:DOI|latestdoi)|doi\.org"),
+             rf"https://zenodo\.org/badge/DOI/{doi}\.svg", rf"https://doi\.org/{doi}"),
+        Slot(12, "Zenodo all software", k(r"badge/Zenodo"),
+             r"https://img\.shields\.io/badge/Zenodo-all_software-1682D4\?logo=zenodo&logoColor=white",
+             rf"https://zenodo\.org/search\?q=metadata\.creators\.person_or_org\.identifiers\.identifier:{ORCID}"),
+        Slot(13, "OpenSSF Best Practices", k(r"bestpractices\.dev"),
+             r"https://www\.bestpractices\.dev/projects/(?P<bp>\d+)/badge",
+             r"https://www\.bestpractices\.dev/projects/(?P<bplink>\d+)"),
+        Slot(14, "license", k(r"/license/|/l/|badge/license"),
+             rf"https://img\.shields\.io/gitlab/license/{o}%2F{p}", rf"https://gitlab\.com/{o}/{p}/-/blob/main/LICENSE\.md"),
+        Slot(15, "dependencies", k(r"tinyverse"),
+             rf"https://tinyverse\.netlify\.app/badge/{p}", rf"https://CRAN\.R-project\.org/package={p}"),
+        Slot(16, "last commit", k(r"last-commit"),
+             rf"https://img\.shields\.io/gitlab/last-commit/{o}%2F{p}", rf"https://gitlab\.com/{o}/{p}/-/commits/main"),
+        Slot(17, "FOSSA license", k(r"fossa\.com/api/projects/.*issueType=license|fossa\.com/api/projects/[^?]*$"),
+             re.escape(fossa_image(pkg, "license")), fossa_link + "license"),
+        Slot(18, "FOSSA security", k(r"fossa\.com/api/projects/.*issueType=security"),
+             re.escape(fossa_image(pkg, "security")), fossa_link + "security"),
+    ]
+
+
+BADGE_RE = re.compile(r"\[!\[([^\]]*)\]\(([^)\s]+)\)\]\(([^)\s]+)\)")
+
+
+def required_slots(pkg: str, state: State, concept_doi: str | None, report: Report) -> list[int] | None:
+    """Slot numbers in the order the README must show them, or None if unknowable."""
+    if state.on_cran is None:
+        report.skip("badges", "CRAN status unknown, so the CRAN slots and the order are not judged")
+        return None
+    order = [1, 2, 3, 4] if state.on_cran else [4]
+    order += [5, 6, 7]
+    if state.has_release is None:
+        report.skip("badges", "GitLab Release state unknown; slot 8 (latest release) not judged")
+    elif state.has_release:
+        order.append(8)
+    order += [9, 10]
+    if concept_doi:
+        if state.doi_resolves is None:
+            report.skip("badges", f"DOI {concept_doi} not resolved (offline or probe failed); slot 11 not judged")
+        elif state.doi_resolves:
+            order.append(11)
+    order += [12, 13, 14]
+    if state.on_cran:
+        order.append(15)
+    order.append(16)
+    if pkg in FOSSA_PACKAGES:
+        if state.fossa_project is None:
+            report.skip("badges", "FOSSA project state unknown; slot 17 not judged")
+        elif state.fossa_project:
+            order += [17, 18]
+    return order
+
+
+def check_badges(pkg: str, source, state: State, report: Report) -> list[str]:
+    """Badge row checks. Returns the image URLs found, for the image check."""
+    readme = source.read("README.Rmd")
+    if readme is None:
+        report.gap("badges", "no README.Rmd, so no badge row")
+        return []
+    m = re.search(r"<!-- badges: start -->(.*?)<!-- badges: end -->", readme, re.S)
+    if not m:
+        report.gap("badges", "README.Rmd has no badges: start/end markers")
+        return []
+    block = re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S)
+    concept_doi = cff_doi(source.read("CITATION.cff"))
+    badges = BADGE_RE.findall(block)
+    if not concept_doi:
+        for _, image, _ in badges:
+            dm = re.search(r"zenodo\.org/badge/DOI/(10\.[^/]+/[^/]+?)\.svg", image)
+            if dm:
+                concept_doi = dm.group(1)
+    if concept_doi and state.doi_is_concept is False:
+        report.gap("badges", f"DOI {concept_doi} is a version DOI; the badge takes the concept DOI")
+    slots = badge_slots(pkg, concept_doi)
+    by_number = {s.number: s for s in slots}
+    found: list[int] = []
+    for alt, image, link in badges:
+        slot = next((s for s in slots if s.kind.search(image)), None)
+        if slot is None:
+            report.gap("badges", f"badge not in the standard: [{alt}]({image})")
+            continue
+        if slot.number in (17, 18) and pkg not in FOSSA_PACKAGES:
+            report.gap("badges", f"FOSSA badge on a package outside the allocation: {image}")
+            continue
+        im, lm = re.fullmatch(slot.image, image), re.fullmatch(slot.link, link)
+        if not im:
+            report.gap("badges", f"slot {slot.number} {slot.name}: image URL differs from the template: {image}")
+        if not lm:
+            report.gap("badges", f"slot {slot.number} {slot.name}: link differs from the template: {link}")
+        if slot.number == 9 and im and lm:
+            if LIFECYCLE[im.group("stage")] != im.group("color") or lm.group("lstage") != im.group("stage"):
+                report.gap("badges", f"slot 9 lifecycle: stage, color and anchor disagree: {image} {link}")
+        if slot.number == 13 and im and lm and im.group("bp") != lm.group("bplink"):
+            report.gap("badges", "slot 13 OpenSSF: image and link name different projects")
+        if slot.number in found:
+            report.gap("badges", f"slot {slot.number} {slot.name}: shown twice")
+            continue
+        found.append(slot.number)
+    order = required_slots(pkg, state, concept_doi, report)
+    if order is None:
+        return [image for _, image, _ in badges]
+    for number in order:
+        if number not in found:
+            report.gap("badges", f"missing slot {number}: {by_number[number].name}")
+    reasons = {1: "not on CRAN", 2: "not on CRAN", 3: "not on CRAN", 15: "not on CRAN",
+               8: "no GitLab Release", 11: "no concept DOI that doi.org resolves",
+               17: "no FOSSA project under git+gitlab.com yet", 18: "no FOSSA project under git+gitlab.com yet"}
+    unknown = set()
+    if state.has_release is None:
+        unknown.add(8)
+    if concept_doi and state.doi_resolves is None:
+        unknown.add(11)
+    if state.fossa_project is None:
+        unknown |= {17, 18}
+    for number in found:
+        if number not in order and number not in unknown and (number not in (17, 18) or pkg in FOSSA_PACKAGES):
+            report.gap("badges", f"slot {number} {by_number[number].name} shown, but {reasons.get(number, 'not required')}")
+    shown = [n for n in found if n in order]
+    expected = [n for n in order if n in shown]
+    if shown != expected:
+        names = lambda seq: ", ".join(by_number[n].name for n in seq)  # noqa: E731
+        report.gap("badges", f"order: shown {names(shown)}; the standard's order is {names(expected)}")
+    if state.on_runiverse is False:
+        report.gap("badges", "package is not on r-universe, so the r-universe badge cannot render")
+    elif state.on_runiverse is None:
+        report.skip("badges", "r-universe presence unknown")
+    return [image for _, image, _ in badges]
+
+
+def badge_text(body: bytes) -> str:
+    text = body.decode("utf-8", errors="replace")
+    parts = re.findall(r">([^<>]+)<", text)
+    parts += re.findall(r"(?:aria-label|title)=\"([^\"]*)\"", text)
+    return " ".join(parts).lower()
+
+
+def check_images(images: list[str], fetch: Callable[[str], tuple[int, str, bytes]], report: Report) -> None:
+    def one(url: str):
+        try:
+            return url, fetch(url), None
+        except ProbeError as error:
+            return url, None, str(error)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(one, images))
+    for url, result, error in results:
+        if error is not None:
+            report.skip("badge images", f"network error fetching {url}: {error}")
+            continue
+        status, ctype, body = result
+        if status != 200:
+            report.gap("badge images", f"HTTP {status}: {url}")
+            continue
+        if "image" not in ctype and not body.lstrip().startswith((b"<svg", b"<?xml")):
+            report.gap("badge images", f"not an image ({ctype or 'no content type'}): {url}")
+            continue
+        text = badge_text(body)
+        bad = [word for word in BAD_BADGE_TEXT if word in text]
+        if bad:
+            report.gap("badge images", f"renders {bad[0]!r}: {url}")
+
+
+def check_files(source, report: Report) -> None:
+    tree = source.tree()
+    for path in REQUIRED_FILES:
+        if path not in tree:
+            report.gap("files", f"missing {path}")
+    for directory in REQUIRED_DIRS:
+        if not any(p.startswith(directory + "/") for p in tree):
+            report.gap("files", f"missing {directory}/ (no template in it)")
+    license_text = source.read("LICENSE")
+    if license_text is not None and not re.search(r"COPYRIGHT HOLDER:\s*Bart Turczynski\s*$", license_text, re.M):
+        report.gap("files", "LICENSE: copyright holder is not Bart Turczynski")
+    license_md = source.read("LICENSE.md")
+    if license_md is not None and "Permission is hereby granted" not in license_md:
+        report.gap("files", "LICENSE.md is not the full MIT text")
+    security = source.read("SECURITY.md")
+    if security is not None:
+        if CONTACT not in security:
+            report.gap("files", f"SECURITY.md does not name {CONTACT}")
+        if len([line for line in security.splitlines() if line.strip()]) < SECURITY_STUB_LINES:
+            report.gap("files", "SECURITY.md is a stub (no real process)")
+    conduct = source.read("CODE_OF_CONDUCT.md")
+    if conduct is not None and CONTACT not in conduct:
+        report.gap("files", f"CODE_OF_CONDUCT.md does not name {CONTACT} as the contact")
+
+
+def person_calls(text: str) -> list[str]:
+    out = []
+    for m in re.finditer(r"\bperson\s*\(", text):
+        depth, i = 0, m.end() - 1
+        while i < len(text):
+            depth += {"(": 1, ")": -1}.get(text[i], 0)
+            if depth == 0:
+                out.append(text[m.start():i + 1])
+                break
+            i += 1
+    return out
+
+
+def check_description(pkg: str, source, state: State, report: Report) -> str | None:
+    """DESCRIPTION checks. Returns the declared R floor as a minor version."""
+    text = source.read("DESCRIPTION")
+    if text is None:
+        report.gap("description", "no DESCRIPTION")
+        return None
+    fields = read_dcf(text)
+    bart = [p for p in person_calls(fields.get("Authors@R", "")) if "Turczynski" in p]
+    if not bart:
+        report.gap("description", "Authors@R has no Bart Turczynski person")
+    else:
+        person = bart[0]
+        rm = re.search(r"role\s*=\s*(c\([^)]*\)|\"[^\"]*\")", person)
+        roles = set(re.findall(r"\"(\w+)\"", rm.group(1))) if rm else set()
+        missing = [r for r in ("aut", "cre", "cph") if r not in roles]
+        if missing:
+            report.gap("description", f"Bart Turczynski lacks role(s) {', '.join(missing)}")
+        if not re.search(rf"ORCID\s*=\s*\"{ORCID}\"", person):
+            report.gap("description", f"Bart Turczynski has no ORCID {ORCID} comment")
+        if CONTACT not in person:
+            report.gap("description", f"maintainer email is not {CONTACT}")
+    expected = [f"https://{OWNER}.gitlab.io/{pkg}", f"https://gitlab.com/{OWNER}/{pkg}",
+                f"https://{OWNER}.r-universe.dev/{pkg}"]
+    if state.on_cran:
+        expected.append(f"https://CRAN.R-project.org/package={pkg}")
+    urls = [u.rstrip("/") for u in re.split(r"[,\s]+", fields.get("URL", "")) if u]
+    if state.on_cran is None:
+        report.skip("description", "URL: the CRAN entry is not judged (CRAN status unknown)")
+        urls = [u for u in urls if "CRAN.R-project.org" not in u]
+    if urls != expected:
+        report.gap("description", f"URL is {', '.join(urls) or '(empty)'}; the standard's is {', '.join(expected)}")
+    if fields.get("Language") != "en-US":
+        report.gap("description", f"Language is {fields.get('Language')!r}, not en-US")
+    fm = re.search(r"\bR\s*\(\s*>=\s*([\d.]+)\s*\)", fields.get("Depends", ""))
+    if not fm:
+        report.gap("description", "Depends declares no R floor")
+        return None
+    return minor(fm.group(1))
+
+
+def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) -> None:
+    text = source.read(".gitlab-ci.yml")
+    if text is None:
+        report.gap("ci", "no .gitlab-ci.yml")
+        return
+    ci = CI(text, source)
+    if not ci.admitted("push"):
+        report.gap("ci", "workflow: rules admit no push to main")
+    on_push = [j for j in ci.jobs.values() if j.runs["push"]]
+
+    checks = [j for j in on_push if CHECK_RE.search(j.full_text())]
+    if not checks:
+        report.gap("ci", "no R CMD check runs on a push to main")
+    else:
+        if not any(AS_CRAN_RE.search(j.full_text()) for j in checks):
+            report.gap("ci", f"R CMD check on push ({', '.join(j.name for j in checks)}) does not use --as-cran")
+        if not any(ERROR_ON_RE.search(j.full_text()) for j in checks):
+            report.gap("ci", "R CMD check on push is not rcmdcheck with error_on = \"warning\"")
+    for job in ci.jobs.values():
+        body = job.full_text()
+        if pkg != "seor" and INCOMING_OFF_RE.search(body):
+            report.gap("ci", f"{job.name}: turns CRAN incoming off (only seor may, ADR 0004)")
+        if pkg not in ("seor", "pslr") and INCOMING_REMOTE_OFF_RE.search(body):
+            report.gap("ci", f"{job.name}: turns remote CRAN incoming off (only pslr is grandfathered, ADR 0004)")
+
+    coverage = [j for j in on_push if j.attrs.get("coverage", ("", []))[0]]
+    if not coverage:
+        report.gap("ci", "no coverage job with a coverage: regex runs on a push to main")
+    for job in coverage:
+        body = job.full_text()
+        if not re.search(r"coverage_format:\s*cobertura", body):
+            report.gap("ci", f"{job.name}: no cobertura coverage_report artifact")
+        if job.attrs.get("allow_failure", ("", []))[0] == "true":
+            report.gap("ci", f"{job.name}: allow_failure: true, so coverage cannot fail the pipeline")
+        thresholds = coverage_thresholds(body)
+        if not thresholds:
+            report.gap("ci", f"{job.name}: no {COVERAGE_MIN:g}% coverage threshold")
+        elif min(thresholds) < COVERAGE_MIN:
+            report.gap("ci", f"{job.name}: coverage threshold {min(thresholds):g} is below {COVERAGE_MIN:g}")
+
+    if not any(j.name == "pages" or j.attrs.get("pages", ("", []))[0] == "true" for j in on_push):
+        report.gap("ci", "pages does not deploy on a push to main")
+
+    chunks = [chunk for j in on_push for chunk in j.chunks()]
+    for gate, patterns in GATES.items():
+        if not any(all(p.search(chunk) for p in patterns) for chunk in chunks):
+            report.gap("ci", f"no {gate} gate runs on a push to main")
+
+    legs = [j for j in ci.jobs.values()
+            if j.runs["deep-check"] and not j.runs["push"] and not j.runs["dependency-audit"]]
+    roles: set[str] = set()
+    for job in legs:
+        if CHECK_RE.search(job.full_text()):
+            for image in ci.images(job):
+                if not SANITIZER_IMAGE_RE.search(image):
+                    roles |= leg_roles(image, state, floor)
+    if state.r_release is None:
+        report.skip("ci", "current R release/oldrel unknown; numeric deep-check legs judged for the floor only")
+    for leg in ("release", "oldrel", "devel"):
+        if leg not in roles:
+            report.gap("ci", f"no deep-check leg for R {leg}")
+    if floor and "floor" not in roles:
+        report.gap("ci", f"no deep-check leg at the declared R floor ({floor})")
+    if pkg in SANITIZER_PACKAGES:
+        sanitized = [j for j in legs
+                     if any(SANITIZER_IMAGE_RE.search(i) for i in ci.images(j))
+                     or (re.search(r"fsanitize=address|\bASAN\b", j.full_text())
+                         and re.search(r"fsanitize=[\w,]*undefined|\bUBSAN\b", j.full_text()))]
+        if not sanitized:
+            report.gap("ci", "no ASAN/UBSAN sanitizer leg on the deep-check schedule")
+
+    for name in ("osv-audit", "security-audit"):
+        job = ci.jobs.get(name)
+        if job is None:
+            report.gap("ci", f"no {name} job")
+        elif not job.runs["dependency-audit"] or job.runs["push"] or job.runs["deep-check"]:
+            report.gap("ci", f"{name} does not run only on the dependency-audit schedule")
+    tree = source.tree()
+    missing = [p for p in AUDIT_TEST_FILES if p not in tree]
+    if missing:
+        report.gap("ci", f"audit jobs lack seor's disposition-row shape: missing {', '.join(missing)}")
+
+    if pkg in FOSSA_PACKAGES and not any(re.search(r"\bfossa analyze\b", j.full_text()) for j in ci.jobs.values()):
+        report.gap("ci", "no fossa analyze job")
+
+
+def check_local_gate(source, report: Report) -> None:
+    text = source.read(".pre-commit-config.yaml")
+    if text is None:
+        report.gap("local gate", "no .pre-commit-config.yaml")
+        return
+    body = strip_comment_lines(text)
+    # R and shell only: a Python script that merely names check_url_db (this
+    # one, check-bugreports.py's docstring) runs no URL check.
+    scripts = [s for path, s in inline_scripts(body, source, depth=3) if Path(path).suffix in ("", ".R", ".r", ".sh")]
+    if not any(URL_CHECK_RE.search(chunk) for chunk in [body] + scripts):
+        report.gap("local gate", "no URL check in the pre-push gate")
+
+
+def check_schedules(state: State, report: Report) -> None:
+    if state.schedules is None:
+        report.skip("schedules", "pipeline schedules not read")
+        return
+    kinds: dict[str, list[dict]] = {}
+    for schedule in state.schedules:
+        variables = {v.get("key"): v.get("value") for v in schedule.get("variables") or []}
+        kind = variables.get("SCHEDULE_KIND")
+        label = f"schedule {schedule.get('id')} ({schedule.get('description', '')})"
+        if not kind:
+            report.gap("schedules", f"{label} sets no SCHEDULE_KIND")
+            continue
+        if schedule.get("ref") not in ("main", "refs/heads/main"):
+            report.gap("schedules", f"{label} targets {schedule.get('ref')}, not main")
+        kinds.setdefault(kind, []).append(schedule)
+    for kind in SCHEDULE_KINDS:
+        found = kinds.get(kind, [])
+        if not found:
+            report.gap("schedules", f"no {kind} schedule")
+        elif not any(s.get("active") for s in found):
+            report.gap("schedules", f"the {kind} schedule is inactive")
+
+
+def check_repo(pkg: str, source, state: State,
+               fetch: Callable[[str], tuple[int, str, bytes]] | None = None) -> Report:
+    report = Report(pkg)
+    for area, error in state.errors:
+        report.skip(area, f"probe failed: {error}")
+    images = check_badges(pkg, source, state, report)
+    if fetch is None:
+        report.skip("badge images", "not fetched (--offline)")
+    elif images:
+        check_images(images, fetch, report)
+    check_files(source, report)
+    floor = check_description(pkg, source, state, report)
+    check_ci(pkg, source, state, floor, report)
+    check_local_gate(source, report)
+    check_schedules(state, report)
+    return report
+
+
+def run_one(pkg: str, local: Path | None, offline: bool) -> Report:
+    source = LocalSource(local) if local else GitLabSource(pkg)
+    try:
+        concept_doi = cff_doi(source.read("CITATION.cff"))
+        state = State() if offline else probe_state(pkg, concept_doi)
+        return check_repo(pkg, source, state, None if offline else http_get)
+    except ProbeError as error:
+        report = Report(pkg)
+        report.skip("source", f"could not read the repository: {error}")
+        return report
+
+
+# --- self-test (offline) -------------------------------------------------------------
+
+
+def fixture_badges(pkg: str, on_cran: bool, release: bool, doi: str | None) -> str:
+    o = OWNER
+    rows = {
+        1: f"[![CRAN status](https://www.r-pkg.org/badges/version/{pkg})](https://CRAN.R-project.org/package={pkg})",
+        2: f"[![CRAN downloads](https://cranlogs.r-pkg.org/badges/{pkg})](https://CRAN.R-project.org/package={pkg})",
+        3: f"[![CRAN checks](https://badges.cranchecks.info/worst/{pkg}.svg)]"
+           f"(https://cran.r-project.org/web/checks/check_results_{pkg}.html)",
+        4: f"[![r-universe](https://{o}.r-universe.dev/{pkg}/badges/version)](https://{o}.r-universe.dev/{pkg})",
+        5: f"[![Pipeline](https://gitlab.com/{o}/{pkg}/badges/main/pipeline.svg)](https://gitlab.com/{o}/{pkg}/-/pipelines)",
+        6: f"[![Coverage](https://gitlab.com/{o}/{pkg}/badges/main/coverage.svg)](https://gitlab.com/{o}/{pkg}/-/pipelines)",
+        7: f"[![Docs](https://img.shields.io/website?url=https%3A%2F%2F{o}.gitlab.io%2F{pkg}%2F&label=docs&logo=gitlab"
+           f"&logoColor=white&up_message=pkgdown&up_color=1f75cb)](https://{o}.gitlab.io/{pkg}/)",
+        8: f"[![Latest release](https://img.shields.io/gitlab/v/release/{o}%2F{pkg})](https://gitlab.com/{o}/{pkg}/-/releases)",
+        9: "[![Lifecycle: stable](https://img.shields.io/badge/lifecycle-stable-brightgreen.svg)]"
+           "(https://lifecycle.r-lib.org/articles/stages.html#stable)",
+        10: "[![Project Status: Active](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)",
+        11: f"[![DOI](https://zenodo.org/badge/DOI/{doi}.svg)](https://doi.org/{doi})",
+        12: "[![Zenodo](https://img.shields.io/badge/Zenodo-all_software-1682D4?logo=zenodo&logoColor=white)]"
+            f"(https://zenodo.org/search?q=metadata.creators.person_or_org.identifiers.identifier:{ORCID})",
+        13: "[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12345/badge)]"
+            "(https://www.bestpractices.dev/projects/12345)",
+        14: f"[![License](https://img.shields.io/gitlab/license/{o}%2F{pkg})](https://gitlab.com/{o}/{pkg}/-/blob/main/LICENSE.md)",
+        15: f"[![Dependencies](https://tinyverse.netlify.app/badge/{pkg})](https://CRAN.R-project.org/package={pkg})",
+        16: f"[![Last commit](https://img.shields.io/gitlab/last-commit/{o}%2F{pkg})](https://gitlab.com/{o}/{pkg}/-/commits/main)",
+    }
+    order = ([1, 2, 3, 4] if on_cran else [4]) + [5, 6, 7] + ([8] if release else []) + [9, 10]
+    order += ([11] if doi else []) + [12, 13, 14] + ([15] if on_cran else []) + [16]
+    return "\n".join(rows[n] for n in order)
+
+
+FIXTURE_CI = """\
+stages: [check, deploy, audit]
+default:
+  image: rocker/r-ver:4.6.1
+variables:
+  P3M_SNAPSHOT: "2026-09-01"
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: never
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - when: never
+.on-main:
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+.deep:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_KIND == "deep-check"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+.audit:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_KIND =~ /^dependency-audit$/'
+    - when: never
+.deps: &deps
+  - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
+gates:
+  extends: .on-main
+  script:
+    - *deps
+    - Rscript tools/gates.R
+check:
+  extends: .on-main
+  script:
+    - *deps
+    - Rscript -e 'res <- rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning")'
+coverage:
+  extends: .on-main
+  script:
+    - Rscript -e 'cov <- covr::package_coverage(); covr::to_cobertura(cov); pct <- covr::percent_coverage(cov); cat(sprintf("Coverage: %.2f%%\\n", pct)); if (pct < 95) quit(status = 1)'
+  coverage: '/Coverage: (\\d+\\.\\d+)%/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: cobertura.xml
+"check:deep":
+  extends: .deep
+  image: rocker/r-ver:$R_VERSION
+  parallel:
+    matrix:
+      - R_VERSION: ["4.6.1", "4.5.3", "devel", "4.1.3"]
+  script:
+    - Rscript -e 'rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning")'
+sanitizers:
+  extends: .deep
+  image: rocker/r-devel-san
+  script:
+    - RD CMD check --as-cran fixture.tar.gz
+fossa:
+  extends: .on-main
+  script:
+    - fossa analyze
+pages:
+  extends: .on-main
+  script:
+    - Rscript -e 'pkgdown::build_site()'
+osv-audit:
+  extends: .audit
+  script:
+    - Rscript -e 'testthat::test_local(filter = "osv")'
+security-audit:
+  extends: .audit
+  script:
+    - Rscript -e 'testthat::test_local(filter = "security")'
+"""
+
+FIXTURE_GATES_R = """\
+# Gates the CI runs.
+stages = list(
+  lint = list(default = TRUE, run = function() lintr::lint_package()),
+  spelling = list(default = TRUE, run = function() spelling::spell_check_package()),
+  readme = list(default = TRUE, run = function() devtools::build_readme()),
+  news = list(default = TRUE, run = function() {
+    h <- readLines("NEWS.md")[1]
+    stopifnot(grepl("(development version)", h, fixed = TRUE))
+  }),
+  citation = list(default = TRUE, run = function() system("python3 scripts/check-citation.py")),
+  coverage = list(default = FALSE, run = function() covr::package_coverage())
+)
+"""
+
+FIXTURE_PRECOMMIT = """\
+repos:
+  - repo: local
+    hooks:
+      - id: verify
+        entry: Rscript tools/verify.R
+        language: system
+        stages: [pre-push]
+"""
+
+
+def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str | None = "10.5281/zenodo.111") -> dict:
+    urls = [f"https://{OWNER}.gitlab.io/{pkg}/", f"https://gitlab.com/{OWNER}/{pkg}",
+            f"https://{OWNER}.r-universe.dev/{pkg}"] + ([f"https://CRAN.R-project.org/package={pkg}"] if on_cran else [])
+    files = {path: "x\n" for path in REQUIRED_FILES}
+    files.update({
+        "README.Rmd": "# fixture\n\n<!-- badges: start -->\n<!-- a comment is ignored -->\n"
+                      + fixture_badges(pkg, on_cran, release, doi) + "\n<!-- badges: end -->\n",
+        "DESCRIPTION": f"Package: {pkg}\nVersion: 1.0.0\n"
+                       f"Authors@R:\n    person(\"Bart\", \"Turczynski\", , \"{CONTACT}\", role = c(\"aut\", \"cre\", \"cph\"),\n"
+                       f"           comment = c(ORCID = \"{ORCID}\"))\n"
+                       f"Depends: R (>= 4.1.0)\nURL: {', '.join(urls)}\nLanguage: en-US\n",
+        "LICENSE": "YEAR: 2026\nCOPYRIGHT HOLDER: Bart Turczynski\n",
+        "LICENSE.md": "MIT License\n\nPermission is hereby granted, free of charge\n",
+        "SECURITY.md": "".join(f"line {i} {CONTACT}\n" for i in range(12)),
+        "CODE_OF_CONDUCT.md": f"Contact {CONTACT}.\n",
+        "CITATION.cff": f"cff-version: 1.2.0\ndoi: {doi}\n" if doi else "cff-version: 1.2.0\n",
+        ".gitlab-ci.yml": FIXTURE_CI,
+        "tools/gates.R": FIXTURE_GATES_R,
+        ".pre-commit-config.yaml": FIXTURE_PRECOMMIT,
+        "tools/verify.R": "db <- tools:::url_db_from_package_sources('.')\nbad <- tools:::check_url_db(db)\n",
+        "scripts/check-citation.py": "print('ok')\n",
+        ".gitlab/issue_templates/Bug.md": "x\n",
+        ".gitlab/merge_request_templates/Default.md": "x\n",
+    })
+    files.update({path: "x\n" for path in AUDIT_TEST_FILES})
+    return files
+
+
+def fixture_state(on_cran: bool = True, release: bool = True, doi: bool = True, fossa: bool = True) -> State:
+    return State(
+        on_cran=on_cran, on_runiverse=True, doi_resolves=True if doi else None, doi_is_concept=True if doi else None,
+        has_release=release, fossa_project=fossa, r_release="4.6", r_oldrel="4.5",
+        schedules=[
+            {"id": 1, "description": "deep", "ref": "refs/heads/main", "active": True,
+             "variables": [{"key": "SCHEDULE_KIND", "value": "deep-check"}]},
+            {"id": 2, "description": "audit", "ref": "main", "active": True,
+             "variables": [{"key": "SCHEDULE_KIND", "value": "dependency-audit"}]},
+        ],
+    )
+
+
+def self_test() -> list[str]:
+    failures: list[str] = []
+
+    def run(pkg: str, files: dict, state: State, fetch=None) -> Report:
+        return check_repo(pkg, DictSource(files), state, fetch)
+
+    def expect_clean(tag: str, pkg: str, files: dict, state: State, fetch=None) -> None:
+        report = run(pkg, files, state, fetch)
+        if report.gaps:
+            failures.append(f"{tag}: expected no gaps, got {report.gaps}")
+
+    def expect_gap(tag: str, needle: str, pkg: str, files: dict, state: State, fetch=None) -> Report:
+        report = run(pkg, files, state, fetch)
+        if not any(needle in text for _, text in report.gaps):
+            failures.append(f"{tag}: expected a gap containing {needle!r}, got {report.gaps}")
+        return report
+
+    def edit(files: dict, path: str, old: str, new: str) -> dict:
+        if old not in files[path]:
+            raise SystemExit(f"self-test fixture edit not applicable: {old!r} in {path}")
+        return dict(files, **{path: files[path].replace(old, new)})
+
+    # Rules evaluator.
+    env = {"CI_PIPELINE_SOURCE": "schedule", "SCHEDULE_KIND": "deep-check", "CI_COMMIT_BRANCH": "main",
+           "CI_DEFAULT_BRANCH": "main"}
+    for expr, want in (
+        ('$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_KIND == "deep-check"', True),
+        ('$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULE_KIND == "dependency-audit"', False),
+        ("$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH", True),
+        ("$CI_COMMIT_TAG", False),
+        ("$CI_COMMIT_TAG == null", True),
+        ('$CI_PIPELINE_SOURCE =~ /^(web|api|schedule)$/', True),
+        ('$CI_PIPELINE_SOURCE !~ /^sched/', False),
+        ('($CRAN_PREP == "1" || $SCHEDULE_KIND == "deep-check") && $CI_PIPELINE_SOURCE != "push"', True),
+    ):
+        if evaluate(expr, env) is not want:
+            failures.append(f"evaluate({expr!r}) should be {want}")
+
+    # Opt-in stages drop out; default ones stay.
+    dropped = drop_opt_in_stages(FIXTURE_GATES_R)
+    if "package_coverage" in dropped or "lint_package" not in dropped:
+        failures.append("drop_opt_in_stages: kept an opt-in stage or dropped a default one")
+
+    # POSITIVE: a conforming package on CRAN with a Release and a DOI.
+    cran = fixture_repo("punycoder")
+    expect_clean("conforming, on CRAN", "punycoder", cran, fixture_state())
+
+    # POSITIVE: a conforming FOSSA package off CRAN, no Release, no DOI, no FOSSA project yet.
+    seor = fixture_repo("seor", on_cran=False, release=False, doi=None)
+    expect_clean("conforming, off CRAN", "seor", seor, fixture_state(on_cran=False, release=False, doi=False, fossa=False))
+
+    # NEGATIVE: badges.
+    expect_gap("badge dropped", "missing slot 5: GitLab pipeline", "punycoder",
+               edit(cran, "README.Rmd", fixture_badges("punycoder", True, True, "10.5281/zenodo.111").splitlines()[4] + "\n", ""),
+               fixture_state())
+    rows = fixture_badges("punycoder", True, True, "10.5281/zenodo.111").splitlines()
+    swapped = rows[:]
+    swapped[4], swapped[5] = swapped[5], swapped[4]
+    expect_gap("badge order", "order: shown", "punycoder",
+               edit(cran, "README.Rmd", "\n".join(rows), "\n".join(swapped)), fixture_state())
+    expect_gap("CRAN badge off CRAN", "slot 1 CRAN version shown, but not on CRAN", "seor",
+               edit(seor, "README.Rmd", "<!-- badges: end -->",
+                    "[![CRAN status](https://www.r-pkg.org/badges/version/seor)](https://CRAN.R-project.org/package=seor)\n"
+                    "<!-- badges: end -->"),
+               fixture_state(on_cran=False, release=False, doi=False, fossa=False))
+    expect_gap("release badge required", "missing slot 8: latest release", "seor", seor,
+               fixture_state(on_cran=False, release=True, doi=False, fossa=False))
+    expect_gap("FOSSA badges once the project exists", "missing slot 17: FOSSA license", "seor", seor,
+               fixture_state(on_cran=False, release=False, doi=False, fossa=True))
+    expect_gap("lifecycle stage outside the set", "slot 9 lifecycle: image URL differs", "punycoder",
+               edit(cran, "README.Rmd", "lifecycle-stable-brightgreen", "lifecycle-maturing-blue"), fixture_state())
+    expect_gap("static docs badge", "slot 7 docs: image URL differs", "punycoder",
+               edit(cran, "README.Rmd", "https://img.shields.io/website?url=https%3A%2F%2Fbart-turczynski.gitlab.io%2Fpunycoder"
+                    "%2F&label=docs&logo=gitlab&logoColor=white&up_message=pkgdown&up_color=1f75cb",
+                    "https://img.shields.io/badge/docs-pkgdown-blue.svg"), fixture_state())
+    expect_gap("FOSSA on a GitHub locator, outside the allocation", "FOSSA badge on a package outside", "punycoder",
+               edit(cran, "README.Rmd", "<!-- badges: end -->",
+                    "[![FOSSA](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fx%2Fpunycoder.svg?type=shield"
+                    "&issueType=license)](https://app.fossa.com/projects/x)\n<!-- badges: end -->"), fixture_state())
+    expect_gap("version DOI", "is a version DOI", "punycoder", cran, State(**{**fixture_state().__dict__, "doi_is_concept": False}))
+    expect_gap("not on r-universe", "not on r-universe", "punycoder", cran,
+               State(**{**fixture_state().__dict__, "on_runiverse": False}))
+
+    # Badge images: a bad render is a gap; a network error is not.
+    def fetch_bad(url: str):
+        if "coverage" in url:
+            return 200, "image/svg+xml", b'<svg aria-label="coverage: unknown"><text>coverage</text><text>unknown</text></svg>'
+        if "cranchecks" in url:
+            return 200, "text/html", b"<html>not a badge</html>"
+        if "tinyverse" in url:
+            raise ProbeError("timed out")
+        if "r-pkg.org/badges/version" in url:
+            return 500, "text/plain", b""
+        return 200, "image/svg+xml", b"<svg><text>ok</text></svg>"
+
+    report = expect_gap("image renders unknown", "renders 'unknown'", "punycoder", cran, fixture_state(), fetch_bad)
+    if not any("HTTP 500" in t for _, t in report.gaps) or not any("not an image" in t for _, t in report.gaps):
+        failures.append(f"image checks: expected HTTP 500 and not-an-image gaps, got {report.gaps}")
+    if any("tinyverse" in t for _, t in report.gaps) or not any("tinyverse" in t for _, t in report.unjudged):
+        failures.append("image checks: a network error must be not judged, never a gap")
+
+    # NEGATIVE: files, DESCRIPTION.
+    no_arch = dict(cran)
+    del no_arch["ARCHITECTURE.md"]
+    expect_gap("missing file", "missing ARCHITECTURE.md", "punycoder", no_arch, fixture_state())
+    no_tpl = {k: v for k, v in cran.items() if not k.startswith(".gitlab/issue_templates/")}
+    expect_gap("missing templates", "missing .gitlab/issue_templates/", "punycoder", no_tpl, fixture_state())
+    expect_gap("LICENSE holder", "copyright holder is not Bart", "punycoder",
+               edit(cran, "LICENSE", "Bart Turczynski", "punycoder authors"), fixture_state())
+    expect_gap("SECURITY stub", "SECURITY.md is a stub", "punycoder", dict(cran, **{"SECURITY.md": f"{CONTACT}\n"}),
+               fixture_state())
+    expect_gap("cph role", "lacks role(s) cph", "punycoder",
+               edit(cran, "DESCRIPTION", '"aut", "cre", "cph"', '"aut", "cre"'), fixture_state())
+    expect_gap("URL order", "URL is", "punycoder",
+               edit(cran, "DESCRIPTION", "URL: https://bart-turczynski.gitlab.io/punycoder/, https://gitlab.com/bart-turczynski/punycoder",
+                    "URL: https://gitlab.com/bart-turczynski/punycoder, https://bart-turczynski.gitlab.io/punycoder/"),
+               fixture_state())
+
+    # NEGATIVE: CI.
+    ci = ".gitlab-ci.yml"
+    expect_gap("coverage threshold below 95", "coverage threshold 90 is below 95", "punycoder",
+               edit(cran, ci, "pct < 95", "pct < 90"), fixture_state())
+    expect_gap("coverage threshold absent", "no 95% coverage threshold", "punycoder",
+               edit(cran, ci, "; if (pct < 95) quit(status = 1)", ""), fixture_state())
+    expect_gap("coverage regex absent", "no coverage job with a coverage: regex", "punycoder",
+               edit(cran, ci, "  coverage: '/Coverage: (\\d+\\.\\d+)%/'\n", ""), fixture_state())
+    expect_gap("coverage allow_failure", "allow_failure: true", "punycoder",
+               edit(cran, ci, "coverage:\n  extends: .on-main\n", "coverage:\n  extends: .on-main\n  allow_failure: true\n"),
+               fixture_state())
+    expect_gap("check not --as-cran", "does not use --as-cran", "punycoder",
+               edit(cran, ci, 'rcmdcheck(args = "--as-cran", error_on = "warning")\'\ncoverage',
+                    'rcmdcheck(args = "--no-manual", error_on = "warning")\'\ncoverage'), fixture_state())
+    expect_gap("incoming off outside seor", "turns CRAN incoming off", "punycoder",
+               edit(cran, ci, 'error_on = "warning")\'\ncoverage',
+                    'error_on = "warning", env = c("_R_CHECK_CRAN_INCOMING_" = "false"))\'\ncoverage'), fixture_state())
+    expect_gap("check only on tags", "no R CMD check runs on a push to main", "punycoder",
+               edit(cran, ci, "check:\n  extends: .on-main\n", "check:\n  rules:\n    - if: $CI_COMMIT_TAG\n"),
+               fixture_state())
+    expect_gap("workflow shuts out main", "workflow: rules admit no push to main", "punycoder",
+               edit(cran, ci, "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n    - if: $CI_PIPELINE_SOURCE == \"web\"\n    - when: never",
+                    "    - if: $CI_PIPELINE_SOURCE == \"web\"\n    - when: never"), fixture_state())
+    expect_gap("pages off main", "pages does not deploy", "punycoder",
+               edit(cran, ci, "pages:\n  extends: .on-main\n", "pages:\n  rules:\n    - if: $CI_COMMIT_TAG\n"),
+               fixture_state())
+    expect_gap("opt-in readme stage", "no README drift gate", "punycoder",
+               edit(cran, "tools/gates.R", "readme = list(default = TRUE", "readme = list(default = FALSE"), fixture_state())
+    expect_gap("floor leg missing", "no deep-check leg at the declared R floor (4.1)", "punycoder",
+               edit(cran, ci, ', "4.1.3"]', "]"), fixture_state())
+    expect_gap("devel leg missing", "no deep-check leg for R devel", "punycoder",
+               edit(cran, ci, ', "devel"', ""), fixture_state())
+    expect_gap("deep leg also on push is not a leg", "no deep-check leg for R oldrel", "punycoder",
+               edit(cran, ci, '"check:deep":\n  extends: .deep', '"check:deep":\n  extends: .on-main'), fixture_state())
+    expect_gap("sanitizers missing", "no ASAN/UBSAN sanitizer leg", "punycoder",
+               edit(cran, ci, "  image: rocker/r-devel-san\n", "  image: rocker/r-ver:devel\n"), fixture_state())
+    expect_gap("audit on push", "osv-audit does not run only on the dependency-audit schedule", "punycoder",
+               edit(cran, ci, "osv-audit:\n  extends: .audit\n", "osv-audit:\n  extends: .on-main\n"), fixture_state())
+    expect_gap("audit job missing", "no security-audit job", "punycoder",
+               edit(cran, ci, "security-audit:\n  extends: .audit", "security-check:\n  extends: .audit"), fixture_state())
+    expect_gap("audit shape", "disposition-row shape", "punycoder",
+               {k: v for k, v in cran.items() if k != "tests/testthat/helper-security.R"}, fixture_state())
+    expect_gap("fossa job missing", "no fossa analyze job", "seor",
+               edit(seor, ci, "    - fossa analyze\n", "    - echo fossa\n"),
+               fixture_state(on_cran=False, release=False, doi=False, fossa=False))
+
+    # NEGATIVE: local gate and schedules.
+    expect_gap("URL check missing", "no URL check", "punycoder",
+               dict(cran, **{"tools/verify.R": "# check_url_db is only mentioned in a comment\nx <- 1\n"}), fixture_state())
+    no_deep = fixture_state()
+    no_deep.schedules = no_deep.schedules[1:]
+    expect_gap("deep-check schedule missing", "no deep-check schedule", "punycoder", cran, no_deep)
+    stray = fixture_state()
+    stray.schedules = stray.schedules + [{"id": 3, "description": "x", "ref": "dev", "active": True, "variables": []}]
+    expect_gap("schedule without kind", "sets no SCHEDULE_KIND", "punycoder", cran, stray)
+
+    # Unknown state is not judged, never a gap.
+    unknown = run("punycoder", cran, State())
+    if unknown.gaps and any(area in ("badges", "schedules") for area, _ in unknown.gaps):
+        failures.append(f"unknown state produced badge/schedule gaps: {unknown.gaps}")
+    return failures
+
+
+# --- main ----------------------------------------------------------------------------
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--repo", choices=FLEET, help="check one package (default: all nine)")
+    parser.add_argument("--local", type=Path, help="read a local checkout instead of GitLab main (needs --repo)")
+    parser.add_argument("--offline", action="store_true", help="no network at all (needs --local)")
+    parser.add_argument("--self-test", action="store_true", help="run the offline fixtures")
+    args = parser.parse_args(argv)
+
+    if args.self_test:
+        failures = self_test()
+        if failures:
+            print("check-fleet-standard self-test FAILED:", file=sys.stderr)
+            for failure in failures:
+                print(f"  - {failure}", file=sys.stderr)
+            return 1
+        print("check-fleet-standard self-test: all checks passed.")
+        return 0
+    if args.local and not args.repo:
+        parser.error("--local needs --repo")
+    if args.offline and not args.local:
+        parser.error("--offline needs --local")
+
+    reports = [run_one(pkg, args.local.expanduser() if args.local else None, args.offline)
+               for pkg in ([args.repo] if args.repo else FLEET)]
+    for report in reports:
+        print(report.render())
+    total = sum(len(r.gaps) for r in reports)
+    incomplete = sum(len(r.unjudged) for r in reports)
+    print(f"{total} gap(s) in {sum(1 for r in reports if r.gaps)} of {len(reports)} package(s); "
+          f"{incomplete} item(s) not judged.")
+    if total:
+        return 1
+    return 2 if any("probe failed" in t or "could not read" in t or "network error" in t
+                    for r in reports for _, t in r.unjudged) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
