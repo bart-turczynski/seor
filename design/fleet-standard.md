@@ -393,9 +393,11 @@ under the owner `gitlab-bart-turczynski`. Researched 2026-10-04
   `logo-480.png` and `logo-print.svg`, stays outside the repositories.
   The README heading's `<img>` carries an empty `alt=""`: it sits inside
   the `# <pkg>` heading, so any alt text joins the heading's accessible name
-  and repeats the package name next to it (WCAG technique H2). An empty alt
-  marks it decorative, as pkgdown does for its own copy; a missing alt would
-  make a screen reader read the file name (SEOR-wfleahtg).
+  and repeats the package name next to it. An empty alt with no `title`,
+  `aria-label` or `role` marks it decorative (WCAG technique H67), as pkgdown
+  does for its own copy; a missing alt would make a screen reader read the
+  file name. The logo is not wrapped in a link, which an empty alt would
+  leave unnamed (SEOR-wfleahtg).
   `man/figures/` ships in the tarball, so a package on hold for CRAN adds its
   logo only after the accepted release.
 
@@ -456,8 +458,9 @@ What it checks, section by section:
   config file.
 - **Logo.** `man/figures/logo.svg` and `man/figures/logo.png` exist, and the
   first level-1 heading of `README.Rmd` is `# <pkg>` with an `<img>` whose
-  `src` is `man/figures/logo.png` and whose `alt` is present and empty. The
-  artwork is not judged.
+  `src` is `man/figures/logo.png` and whose `alt` is present and empty, not
+  wrapped in a link and not named by `title`, `aria-label`,
+  `aria-labelledby` or `role`. The artwork is not judged.
 - **Files.** The list above. `LICENSE` names Bart Turczynski, `LICENSE.md` is
   the MIT text, `SECURITY.md` and `CODE_OF_CONDUCT.md` name the public email,
   and a `SECURITY.md` under ten non-blank lines counts as a stub.
