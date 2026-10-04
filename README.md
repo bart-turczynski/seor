@@ -5,10 +5,9 @@
 
 <!-- badges: start -->
 
-<!-- The row follows design/fleet-standard.md, "Badge row". seor is off CRAN
-     with no GitLab Release and no concept DOI yet, so r-universe takes slot 1
-     and the CRAN, latest-release, DOI and dependencies badges are left out
-     until each condition holds (design/release-checklist.md). The FOSSA pair
+<!-- The row follows design/fleet-standard.md, "Badge row". seor is off CRAN,
+     so r-universe takes slot 1 and the CRAN and dependencies badges are left
+     out until it is accepted (design/release-checklist.md). The FOSSA pair
      is slot 17: seor is one of the three FOSSA packages, and its project is
      created by the first `fossa analyze` run on main. Setup for OpenSSF Best
      Practices: design/badges.md. -->
@@ -17,10 +16,13 @@
 [![Pipeline](https://gitlab.com/bart-turczynski/seor/badges/main/pipeline.svg)](https://gitlab.com/bart-turczynski/seor/-/pipelines)
 [![Coverage](https://gitlab.com/bart-turczynski/seor/badges/main/coverage.svg)](https://gitlab.com/bart-turczynski/seor/-/pipelines)
 [![Docs](https://img.shields.io/website?url=https%3A%2F%2Fbart-turczynski.gitlab.io%2Fseor%2F&label=docs&logo=gitlab&logoColor=white&up_message=pkgdown&up_color=1f75cb)](https://bart-turczynski.gitlab.io/seor/)
+[![Latest
+release](https://img.shields.io/gitlab/v/release/bart-turczynski%2Fseor)](https://gitlab.com/bart-turczynski/seor/-/releases)
 [![Lifecycle:
 experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
 [![Project Status:
 Active](https://www.repostatus.org/badges/latest/active.svg)](https://www.repostatus.org/#active)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23136687.svg)](https://doi.org/10.5281/zenodo.23136687)
 [![Zenodo](https://img.shields.io/badge/Zenodo-all_software-1682D4?logo=zenodo&logoColor=white)](https://zenodo.org/search?q=metadata.creators.person_or_org.identifiers.identifier:0000-0002-8788-7980)
 [![OpenSSF Best
 Practices](https://www.bestpractices.dev/projects/14932/badge)](https://www.bestpractices.dev/projects/14932)
