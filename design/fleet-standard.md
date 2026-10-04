@@ -1,8 +1,8 @@
 # Fleet standard
 
-What every R package in the fleet carries: the README badge row, the CI and
-scheduled pipelines, the local gate, the files, the `DESCRIPTION` fields and
-the identities behind them. The owner asked on 2026-10-03 for the same badges
+What every R package in the fleet carries: the README badge row and contents,
+the CI and scheduled pipelines, the local gate, the files, the `DESCRIPTION`
+fields, the r-universe metadata and the identities behind them. The owner asked on 2026-10-03 for the same badges
 and checks in all nine packages (SEOR-plnwieyf). Each package's "meets the
 fleet standard" issue cites this file instead of restating it.
 [ADR 0007](adr/0007-one-fleet-standard-for-badges-and-checks.md) records why
@@ -139,6 +139,53 @@ What the conditions rest on:
   answers 200; the bare `git+gitlab.com/...` form answers 404. ssrfr's and
   seor's projects appear when their first `fossa analyze` job uploads.
 
+## README contents
+
+The README is for users, and for the agents that read it for them. pkgdown
+2.2 builds each site's `llms.txt` from the README, followed by the reference
+and article indexes, so whatever the README says reaches an agent asked to
+"install this" (SEOR-krxsaudb). Maintainer notes in it reach the agent too:
+raddr's `llms.txt` carried its Setup and Verification sections on 2026-10-04.
+
+`README.Rmd` carries, in this order:
+
+1. The badge row (above).
+2. A short what and why: what the package does and who it is for, in a
+   paragraph or two.
+3. `## Installation`, with copy-paste commands:
+   - `install.packages("<pkg>")` once the package is on CRAN;
+   - the r-universe command, always:
+
+     ```r
+     install.packages(
+       "<pkg>",
+       repos = c("https://bart-turczynski.r-universe.dev", "https://cloud.r-project.org")
+     )
+     ```
+
+   - the system requirements a source install needs, such as libidn2 for
+     punycoder's native backend or a C++17 toolchain for robotstxtr.
+4. A small example.
+5. Links to the vignettes or the pkgdown site.
+
+Other user-facing sections (how it compares, citation, code of conduct,
+license) may follow. A section repeating the reference index, such as a table
+of every exported function, adds nothing: `llms.txt` already appends that
+index.
+
+**Not in the README.** Maintainer content goes to `CONTRIBUTING.md`,
+`ARCHITECTURE.md`, `design/` or a vignette. The checker treats these headings,
+at any level, as maintainer content: Setup, Development, Verification,
+Project or Repository layout or structure, Current state, Status and
+Dependencies. A "Dependencies" section that a user needs belongs inside
+Installation as system requirements. A function index is a reference index
+under another name: Function overview and Key functions are banned too.
+
+**`llms.txt`.** It is the pkgdown site's job. No package keeps a hand-written
+`llms.txt` at its root, and the pkgdown config never turns `llm-docs` off.
+`https://bart-turczynski.gitlab.io/<pkg>/llms.txt` answered 200 for all nine
+packages on 2026-10-04.
+
 ## CI on every push to `main`
 
 Every push to `main` runs:
@@ -273,6 +320,27 @@ URL answering exactly 404 (SEOR-ocbtrrnl).
   (`https://bart-turczynski.r-universe.dev/<pkg>`), and
   `https://CRAN.R-project.org/package=<pkg>` once the package is on CRAN.
 - `Language: en-US`.
+- `X-schema.org-keywords` (see r-universe, below).
+
+## r-universe
+
+The fleet builds on `https://bart-turczynski.r-universe.dev` from GitLab,
+under the owner `gitlab-bart-turczynski`. Researched 2026-10-04
+(SEOR-rpklojdh, <https://docs.r-universe.dev/publish/metadata.html>):
+
+- **The `URL:` entry is load-bearing.** Packages built from GitLab appear in
+  the universe's search only because `DESCRIPTION` `URL:` names
+  `https://bart-turczynski.r-universe.dev/<pkg>`. Dropping that entry hides
+  the package, even though it still builds.
+- **Keywords come only from `X-schema.org-keywords`.** GitHub topics apply
+  only to GitHub-hosted packages, and the read-only mirror is not where the
+  registry builds from. Every package declares the field: at least five
+  specific, comma-separated tokens, five to ten being the aim. r-universe drops
+  `r`, `rstats`, `r-stats` and `r-package`, so none of them counts and none is
+  listed. Writing R Extensions §1.1.1 allows extra `DESCRIPTION` fields, and
+  the CRAN copies of rurl, punycoder, pslr and raddr already carry this one.
+  An edit reaches CRAN only with that package's next release.
+- **Logo.** Waits on the owner's decision in SEOR-wxjuxbtu. No rule until then.
 
 ## Identities
 
@@ -323,11 +391,19 @@ What it checks, section by section:
   hold is a gap. So is a package missing from r-universe.
 - **Badge images.** Each image answers 200 and does not read "unknown", "not
   found", "invalid", "not set up", "inaccessible" or "no releases found".
+- **README.** `README.Rmd` has an `## Installation` section that holds the
+  r-universe command (an `install.packages()` call naming
+  `bart-turczynski.r-universe.dev`) and, on CRAN only,
+  `install.packages("<pkg>")`. No heading outside code chunks is one of the
+  banned ones. No root `llms.txt`, and `llm-docs` is not off in any pkgdown
+  config file.
 - **Files.** The list above. `LICENSE` names Bart Turczynski, `LICENSE.md` is
   the MIT text, `SECURITY.md` and `CODE_OF_CONDUCT.md` name the public email,
   and a `SECURITY.md` under ten non-blank lines counts as a stub.
 - **`DESCRIPTION`.** The aut, cre and cph roles, the ORCID, the email, `URL:`
-  in order, `Language: en-US` and a declared R floor.
+  in order, `Language: en-US`, a declared R floor, and
+  `X-schema.org-keywords` with at least five tokens besides the four
+  r-universe drops, and none of those four.
 - **CI.** It evaluates `workflow:` and job `rules:` for a push to `main`, each
   schedule kind and a tag. On a push it looks for `R CMD check --as-cran`
   through `rcmdcheck` with `error_on = "warning"`, with incoming off only as
