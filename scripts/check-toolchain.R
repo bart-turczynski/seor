@@ -58,11 +58,13 @@
 #    Once Homebrew's pandoc moves past the pin, a local build_readme() knits a
 #    README that CI's readme gate reports as drift, after the push passed.
 #    This check reads the pin from `PANDOC_VERSION` in .gitlab-ci.yml, the
-#    value CI installs. Unlike check 1's field, it is not the only place the
-#    version lives: a bump also moves the two sha256 digests beside it, a
-#    re-knit of README.md, and the fleet's PANDOC_PIN in
-#    check-fleet-standard.py. A repository whose CI records no pin is not
-#    checked here.
+#    value CI installs; two different values there are reported, not
+#    resolved. Its reader is the fleet's only one: check-fleet-standard.py
+#    runs `--pandoc-assignments` (below) instead of parsing the pin itself.
+#    Unlike check 1's field, it is not the only place the version lives: a
+#    bump also moves the two sha256 digests beside it, a re-knit of
+#    README.md, and the fleet's PANDOC_PIN in check-fleet-standard.py. A
+#    repository whose CI records no pin is not checked here.
 #
 # WHAT IT DELIBERATELY DOES NOT DO.
 #
@@ -78,6 +80,7 @@
 #
 #   Rscript scripts/check-toolchain.R              # exit 1 on drift
 #   Rscript scripts/check-toolchain.R --self-test  # positive/negative cases
+#   Rscript scripts/check-toolchain.R --pandoc-assignments < .gitlab-ci.yml
 
 package_root <- function() {
   args <- commandArgs(trailingOnly = FALSE)
@@ -282,14 +285,18 @@ run_stale_check <- function(root) {
 
 # --- Check 4: pandoc matches the CI pin ---------------------------------------
 
-# The pin's spellings, read exactly as check-fleet-standard.py reads them
-# (PANDOC_SHELL_PIN_RE and yaml_scalar() there), so a repository the fleet
-# checker passes never makes this check find no pin and skip. Comment lines
-# are dropped, as the fleet checker drops them; then a pin is either
+# The pin's spellings. This is the only reader of them: check-fleet-standard.py
+# runs this script with --pandoc-assignments and judges what it prints, so the
+# fleet checker and this check cannot disagree on a pin (SEOR-xhyrogfm).
+# Comment lines are dropped; then a pin is either
 #   * a YAML entry, `PANDOC_VERSION: "3.10"`, quoted or not, with or without
 #     a trailing `# comment`, or
 #   * a shell assignment anywhere on the line, `PANDOC_VERSION=3.10`,
 #     `export PANDOC_VERSION="3.10"`, with or without a trailing comment.
+# Every line of .gitlab-ci.yml counts, whichever job it is in. A shell
+# assignment overrides `variables:` at run time, so which value a job installs
+# depends on where each one sits; the rule is therefore one value, and a second
+# distinct value anywhere is reported rather than resolved.
 pandoc_yaml_re <- "^\\s*(?:-\\s+)?PANDOC_VERSION:\\s*(\\S.*)$"
 pandoc_shell_re <- "\\bPANDOC_VERSION=[\"']?([\\w.-]+)"
 
@@ -315,16 +322,42 @@ yaml_scalar <- function(raw) {
   value
 }
 
-# Every distinct PANDOC_VERSION value .gitlab-ci.yml assigns, in any spelling
-# above. Empty when it assigns none.
+# Each PANDOC_VERSION assignment in `lines`, in any spelling above: a data
+# frame of the line number and the value, in file order. It reads line by
+# line, and a line that does not name PANDOC_VERSION assigns nothing:
+# check-fleet-standard.py sends only the lines that name it.
+pandoc_assignments <- function(lines) {
+  per_line <- lapply(seq_along(lines), function(i) {
+    line <- lines[[i]]
+    if (grepl("^\\s*#", line)) {
+      return(character())
+    }
+    yaml <- regmatches(line, regexec(pandoc_yaml_re, line, perl = TRUE))[[1L]]
+    shell <- regmatches(line, gregexpr(pandoc_shell_re, line, perl = TRUE))[[
+      1L
+    ]]
+    values <- c(
+      if (length(yaml)) yaml_scalar(yaml[[2L]]),
+      sub(pandoc_shell_re, "\\1", shell, perl = TRUE)
+    )
+    values[nzchar(values)]
+  })
+  data.frame(
+    line = rep(seq_along(lines), lengths(per_line)),
+    value = as.character(unlist(per_line)),
+    stringsAsFactors = FALSE
+  )
+}
+
+# What --pandoc-assignments prints: `<line>\t<value>`, one per assignment.
+format_pandoc_assignments <- function(found) {
+  sprintf("%d\t%s", found$line, found$value)
+}
+
+# Every distinct PANDOC_VERSION value .gitlab-ci.yml assigns. Empty when it
+# assigns none; more than one is reported by check_pandoc().
 pinned_pandoc <- function(lines) {
-  lines <- lines[!grepl("^\\s*#", lines)]
-  yaml <- regmatches(lines, regexec(pandoc_yaml_re, lines, perl = TRUE))
-  yaml <- vapply(Filter(length, yaml), `[[`, character(1), 2L)
-  shell <- regmatches(lines, gregexpr(pandoc_shell_re, lines, perl = TRUE))
-  shell <- sub(pandoc_shell_re, "\\1", unlist(shell), perl = TRUE)
-  values <- c(vapply(yaml, yaml_scalar, character(1), USE.NAMES = FALSE), shell)
-  unique(values[nzchar(values)])
+  unique(pandoc_assignments(lines)$value)
 }
 
 read_pandoc_pin <- function(root) {
@@ -554,20 +587,61 @@ self_test <- function() {
     check_pandoc(c("3.10", "3.9"), "3.10"),
     "more than once"
   )
-
-  cat(paste0(
-    "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 19 pandoc cases)\n"
+  # A shell assignment overrides `variables:` at run time, so a second value is
+  # a second pin whichever one CI would install (SEOR-xhyrogfm).
+  both <- c("  PANDOC_VERSION: \"3.10\"", "    - PANDOC_VERSION=3.9")
+  flagged(
+    "pandoc-variables-and-shell",
+    check_pandoc(pinned_pandoc(both), "3.10"),
+    "more than once"
+  )
+  expect(
+    "pandoc-same-pin-twice",
+    identical(pinned_pandoc(c(both[[1L]], "    - PANDOC_VERSION=3.10")), "3.10")
+  )
+  # check-fleet-standard.py reads the pin through --pandoc-assignments: these
+  # lines, numbered as in the file, are what it judges.
+  found <- pandoc_assignments(c(
+    "variables:",
+    "  PANDOC_VERSION: \"3.10\"",
+    "  # PANDOC_VERSION=9.9",
+    "    - export PANDOC_VERSION=3.9"
   ))
+  expect("pandoc-assignment-lines", identical(found$line, c(2L, 4L)))
+  expect("pandoc-assignment-values", identical(found$value, c("3.10", "3.9")))
+  expect(
+    "pandoc-assignment-output",
+    identical(format_pandoc_assignments(found), c("2\t3.10", "4\t3.9"))
+  )
+  expect(
+    "pandoc-assignment-none",
+    !length(format_pandoc_assignments(pandoc_assignments(ci[3:5])))
+  )
+
+  paste0(
+    "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
+    "cases, 9 CRAN-version cases, 25 pandoc cases)\n"
+  )
 }
 
 # The self-test runs on EVERY invocation, not only under --self-test. It is
 # pure and instant -- no I/O, no network, no library scan -- and a check whose
 # negative cases only run when someone remembers to ask for them is a check
 # nobody is running. The flag remains for running it alone.
+#
+# --pandoc-assignments reads a .gitlab-ci.yml on stdin and prints each pin it
+# assigns as `<line>\t<value>`, nothing else on stdout: check-fleet-standard.py
+# reads the pin this way rather than with a parser of its own.
 main <- function() {
-  self_test()
-  if ("--self-test" %in% commandArgs(trailingOnly = TRUE)) {
+  args <- commandArgs(trailingOnly = TRUE)
+  passed <- self_test()
+  if ("--pandoc-assignments" %in% args) {
+    lines <- readLines(file("stdin"), warn = FALSE, encoding = "UTF-8")
+    writeLines(format_pandoc_assignments(pandoc_assignments(lines)))
+    return(0L)
+  }
+  cat(passed)
+  if ("--self-test" %in% args) {
     return(0L)
   }
   if (report(run_checks(package_root()))) 0L else 1L
