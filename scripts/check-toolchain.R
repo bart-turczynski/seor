@@ -292,9 +292,10 @@ run_stale_check <- function(root) {
 #   * a YAML entry, `PANDOC_VERSION: "3.10"`, quoted or not, or
 #   * a shell assignment where sh reads one, as a command: at the start of the
 #     line or of a list item, after `;`, `&&`, `||`, `(` or `{`, after
-#     `then`, `do` or `else`, or after `export`: `PANDOC_VERSION=3.10`,
-#     `export PANDOC_VERSION="3.10"`. `echo PANDOC_VERSION=3.9` assigns
-#     nothing.
+#     `then`, `do` or `else`, or after `export` or other assignments:
+#     `PANDOC_VERSION=3.10`, `export R_X=1 PANDOC_VERSION="3.10"`.
+#     `echo PANDOC_VERSION=3.9` assigns nothing, and neither does text in a
+#     quoted argument to a command, `echo "a; PANDOC_VERSION=3.9"`.
 # Every line of .gitlab-ci.yml counts, whichever job it is in. A shell
 # assignment overrides `variables:` at run time, so which value a job installs
 # depends on where each one sits; the rule is therefore one value, and a second
@@ -302,8 +303,24 @@ run_stale_check <- function(root) {
 pandoc_yaml_re <- "^\\s*(?:-\\s+)?PANDOC_VERSION:\\s*(\\S.*)$"
 pandoc_shell_re <- paste0(
   "(?:^\\s*(?:-\\s+)?|[;&|({\\[,]\\s*|\\b(?:then|do|else|export)\\s+)",
-  "[\"']?PANDOC_VERSION=[\"']?([\\w.-]+)"
+  "(?:\\w+=\\S*\\s+)*[\"']?PANDOC_VERSION=[\"']?([\\w.-]+)"
 )
+
+# `line` with each quoted argument to a command blanked: a quoted word after
+# another word, as in `echo "…"`. A YAML-quoted list item and a quoted value
+# after `=` keep their text.
+mask_quoted_args <- function(line) {
+  m <- gregexpr(
+    "\\w\\s+\\K(?:\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*')",
+    line,
+    perl = TRUE
+  )
+  regmatches(line, m) <- lapply(
+    regmatches(line, m),
+    function(s) strrep("_", nchar(s))
+  )
+  line
+}
 
 # A one-line YAML scalar's value: quotes removed, a trailing comment dropped.
 yaml_scalar <- function(raw) {
@@ -333,7 +350,8 @@ pandoc_assignments <- function(lines) {
   lines <- sub("(^|\\s)#.*$", "", lines, perl = TRUE)
   per_line <- lapply(lines, function(line) {
     yaml <- regmatches(line, regexec(pandoc_yaml_re, line, perl = TRUE))[[1L]]
-    shell <- regmatches(line, gregexpr(pandoc_shell_re, line, perl = TRUE))[[
+    code <- mask_quoted_args(line)
+    shell <- regmatches(code, gregexpr(pandoc_shell_re, code, perl = TRUE))[[
       1L
     ]]
     values <- c(
@@ -613,7 +631,11 @@ self_test <- function() {
     "    - PANDOC_VERSION=3.10  # was PANDOC_VERSION=3.9",
     "    - echo \"PANDOC_VERSION=3.9 is gone\"; PANDOC_VERSION=3.10",
     "    - printf 'PANDOC_VERSION=%s\\n' 3.9 && export PANDOC_VERSION=3.10",
-    "  before_script: [PANDOC_VERSION=3.10, echo PANDOC_VERSION=3.9]"
+    "  before_script: [PANDOC_VERSION=3.10, echo PANDOC_VERSION=3.9]",
+    "    - echo \"pinned; PANDOC_VERSION=3.9 was old\" && PANDOC_VERSION=3.10",
+    "    - echo \"use export PANDOC_VERSION=3.9\"; PANDOC_VERSION=3.10",
+    "    - export R_X=1 PANDOC_VERSION=3.10",
+    "  before_script: ['PANDOC_VERSION=3.10', 'echo hi']"
   )) {
     expect(paste("pandoc-pin:", line), identical(pinned_pandoc(line), "3.10"))
   }

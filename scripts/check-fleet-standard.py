@@ -141,7 +141,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import itertools
 import json
 import os
 import re
@@ -1115,7 +1114,7 @@ def install_steps(entries: list[str]) -> list[list[Shell]]:
     """The (download, check, install) candidates in a job's script items, in
     the standard's two shapes, each step one pipeline that runs only when the
     one before it succeeded: `if A && B && C; then …; else …; fi` inside one
-    item, or three items in that order, since a failing item ends the job.
+    item, or three consecutive items, since a failing item ends the job.
     Nothing else is read as an install, `set -e` included (SEOR-xhyrogfm)."""
     shells = [Shell(entry) for entry in entries]
     found = []
@@ -1124,8 +1123,19 @@ def install_steps(entries: list[str]) -> list[list[Shell]]:
             steps = Shell(sh.text[m.start(1):m.end(1)], sh.mask[m.start(1):m.end(1)]).split(r"&&")
             if len(steps) == 3 and all(step.simple() for step in steps):
                 found.append(steps)
-    items = [sh for sh in shells if sh.simple()]
-    return found + [list(steps) for steps in itertools.combinations(items, 3)]
+    triples = zip(shells, shells[1:], shells[2:])
+    return found + [list(steps) for steps in triples if all(step.simple() for step in steps)]
+
+
+def dpkg_installs(entries: list[str], path: str) -> int:
+    """How many commands in the script items run `dpkg -i` on `path`."""
+    count = 0
+    for entry in entries:
+        for piece in Shell(entry).split(r"&&|\|\||[;\n]|(?<![<>|])&(?!>)"):
+            command = re.sub(r"^(?:(?:if|then|else|elif|do|!)\s+|[{(]\s*)*", "", piece.text.strip())
+            if DPKG_STAGE_RE.match(command) and path in path_tokens(command):
+                count += 1
+    return count
 
 
 def shell_path(text: str) -> str:
@@ -1193,9 +1203,10 @@ def pandoc_install_state(entries: list[str]) -> str:
     `installed` needs one of install_steps()' shapes whose download saves the
     release to a file, whose `sha256sum -c` (or `shasum -a 256 -c`) names that
     file or reads its digest from stdin beside it, and whose `dpkg -i`
-    installs it. Paths compare as whole words. That shape with a download that
-    sets no time limit is `unbounded`; anything else is `noncanonical`
-    (SEOR-egfbijyi, SEOR-xhyrogfm).
+    installs it, and no other command installs that file. Paths compare as
+    whole words. That shape with a download that sets no time limit is
+    `unbounded`; anything else is `noncanonical` (SEOR-egfbijyi,
+    SEOR-xhyrogfm).
     """
     url_vars = set(re.findall(r"\b(\w+)=[\"']?https?://github\.com/jgm/pandoc/releases/download/", "\n".join(entries)))
     best = "noncanonical"
@@ -1203,7 +1214,8 @@ def pandoc_install_state(entries: list[str]) -> str:
         download, check, install = (step.last_stage() for step in steps)
         saved = download_target(download, url_vars)
         if (saved and SHA256_STAGE_RE.match(check) and saved[1] in path_tokens(steps[1].text)
-                and DPKG_STAGE_RE.match(install) and saved[1] in path_tokens(install)):
+                and DPKG_STAGE_RE.match(install) and saved[1] in path_tokens(install)
+                and dpkg_installs(entries, saved[1]) == 1):
             if download_bounded(saved[0], download):
                 return "installed"
             best = "unbounded"
@@ -2517,6 +2529,15 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
         "        echo \"WARNING: pandoc ${PANDOC_VERSION} not installed\"\n"
         "      fi\n")
     expect_clean("pandoc installed in seor's shape", "punycoder", edit(cran, ci, pin_lines, seor_shape), fixture_state())
+    # Nothing installs the .deb outside the canonical shape, and the three items
+    # are consecutive: a second download between them replaces the checked file.
+    expect_gap("an unchecked install beside seor's shape", noncanonical, "punycoder",
+               edit(cran, ci, pin_lines, seor_shape + "    - dpkg -i --force-all /tmp/pandoc.deb\n"), fixture_state())
+    expect_gap("an unchecked install beside the three items", noncanonical, "punycoder",
+               edit(cran, ci, install_line, install_line + install_line), fixture_state())
+    expect_gap("a second download between the check and the install", noncanonical, "punycoder",
+               edit(cran, ci, check_line, check_line + "    - curl -m 60 -o /tmp/pandoc.deb https://example.org/x.deb\n"),
+               fixture_state())
     expect_clean("pandoc saved under its release name", "punycoder",
                  edit(edit(edit(cran, ci, "-o /tmp/pandoc.deb \"https", "-O \"https"), ci,
                            "  /tmp/pandoc.deb\" | sha256sum -c -",
