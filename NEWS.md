@@ -1,5 +1,8 @@
-# seor 0.0.0.9000
+# seor 0.1.0
 
+* First release. It is not on CRAN: `robotstxtr` and `sitemapr` still
+  install from GitLab. Its Zenodo archive and DOI come from a GitHub
+  Release on the mirror (SEOR-dvbdsvuq).
 * Initial metapackage scaffold.
 * `library(seor)` installs and attaches the member packages `rurl`,
   `punycoder`, `pslr`, `sitemapr` and `pagerankr`; the planned member
