@@ -6,8 +6,7 @@ the steps in order.
 **Deltas live in each package's `CONTRIBUTING.md`.** Its "CRAN release
 checklist" section links here and lists only that package's extra or
 different steps. Read it before starting; where it disagrees with this file,
-it wins. rurl still carries a full checklist of its own; moving it to this
-shape is SEOR-wmeqnoqz.
+it wins.
 
 Who runs each step:
 
