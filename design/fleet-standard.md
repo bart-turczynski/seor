@@ -176,13 +176,13 @@ index.
 **Not in the README.** Maintainer content goes to `CONTRIBUTING.md`,
 `ARCHITECTURE.md`, `design/` or a vignette. The checker treats these headings,
 at any level, as maintainer content: Setup, Development, Verification,
-Project layout or structure, Repository layout, Current state, Status and
+Project or Repository layout or structure, Current state, Status and
 Dependencies. A "Dependencies" section that a user needs belongs inside
 Installation as system requirements. A function index is a reference index
 under another name: Function overview and Key functions are banned too.
 
 **`llms.txt`.** It is the pkgdown site's job. No package keeps a hand-written
-`llms.txt` at its root, and `_pkgdown.yml` never sets `llm-docs: false`.
+`llms.txt` at its root, and the pkgdown config never turns `llm-docs` off.
 `https://bart-turczynski.gitlab.io/<pkg>/llms.txt` answered 200 for all nine
 packages on 2026-10-04.
 
@@ -392,9 +392,11 @@ What it checks, section by section:
 - **Badge images.** Each image answers 200 and does not read "unknown", "not
   found", "invalid", "not set up", "inaccessible" or "no releases found".
 - **README.** `README.Rmd` has an `## Installation` section that holds the
-  r-universe command (`bart-turczynski.r-universe.dev` in it) and, on CRAN,
+  r-universe command (an `install.packages()` call naming
+  `bart-turczynski.r-universe.dev`) and, on CRAN only,
   `install.packages("<pkg>")`. No heading outside code chunks is one of the
-  banned ones. No root `llms.txt`, and no `llm-docs: false` in `_pkgdown.yml`.
+  banned ones. No root `llms.txt`, and `llm-docs` is not off in any pkgdown
+  config file.
 - **Files.** The list above. `LICENSE` names Bart Turczynski, `LICENSE.md` is
   the MIT text, `SECURITY.md` and `CODE_OF_CONDUCT.md` name the public email,
   and a `SECURITY.md` under ten non-blank lines counts as a stub.

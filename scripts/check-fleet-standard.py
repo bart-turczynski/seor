@@ -46,7 +46,7 @@ WHAT IT CHECKS, by section of the standard.
   `install.packages("<pkg>")`. No heading outside fenced code and chunks, at
   any level, is maintainer content (BANNED_HEADING_RE, matched against the
   whole heading, so "Development version" passes and "Setup (development)"
-  does not). No root `llms.txt`, and no `llm-docs: false` in `_pkgdown.yml`.
+  does not). No root `llms.txt`, and `llm-docs` not off in any pkgdown config.
 * Files. The list in "Files every package carries", plus: LICENSE names Bart
   Turczynski as holder, LICENSE.md is the full MIT text, SECURITY.md and
   CODE_OF_CONDUCT.md name the public contact, and SECURITY.md is more than a
@@ -1094,19 +1094,24 @@ def check_images(images: list[str], fetch: Callable[[str], tuple[int, str, bytes
 
 
 def readme_headings(text: str) -> list[tuple[int, str, int]]:
-    """(level, title, line index) for each ATX heading outside fenced code and chunks."""
+    """(level, title, line index) for each ATX heading that renders: outside the YAML
+    front matter, HTML comments, fenced code and chunks. Setext headings are not read."""
+    fm = re.match(r"---\n.*?\n---[ \t]*\n", text, re.S)
+    if fm:  # blank the front matter and comments out, keeping line numbers
+        text = "\n" * fm.group(0).count("\n") + text[fm.end():]
+    text = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), text, flags=re.S)
     out, fence = [], None
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        fm = re.match(r"\s*(`{3,}|~{3,})", line)
-        if fm:
-            mark = fm.group(1)
+    for i, line in enumerate(text.splitlines()):
+        cm = re.match(r" {0,3}(`{3,}|~{3,})(.*)$", line)
+        # A backtick fence's info string holds no backtick: ```x``` is inline code.
+        if cm and not (cm.group(1)[0] == "`" and "`" in cm.group(2)):
+            mark, rest = cm.groups()
             if fence is None:
                 fence = mark
-            elif mark[0] == fence[0] and len(mark) >= len(fence) and not line.strip()[len(mark):].strip():
+            elif mark[0] == fence[0] and len(mark) >= len(fence) and not rest.strip():
                 fence = None
             continue
-        hm = re.match(r"(#{1,6})\s+(.*?)\s*#*\s*$", line)
+        hm = re.match(r" {0,3}(#{1,6})\s+(.*?)\s*#*\s*$", line)
         if fence is None and hm:
             out.append((len(hm.group(1)), hm.group(2), i))
     return out
@@ -1115,6 +1120,14 @@ def readme_headings(text: str) -> list[tuple[int, str, int]]:
 def heading_key(title: str) -> str:
     title = re.sub(r"\s*\([^)]*\)\s*$", "", title.replace("`", ""))
     return re.sub(r"\s+", " ", title).strip().rstrip(":.").lower()
+
+
+# An install.packages() call whose arguments (one level of nested calls, such as
+# repos = c(...)) name the fleet's r-universe.
+RUNIVERSE_INSTALL_RE = re.compile(rf"install\.packages\((?:[^()]|\([^()]*\))*(?:\([^()]*)?{re.escape(OWNER)}\.r-universe\.dev")
+# pkgdown's config locations, and the YAML 1.1 false values its yaml parser reads.
+PKGDOWN_CONFIGS = ("_pkgdown.yml", "_pkgdown.yaml", "pkgdown/_pkgdown.yml", "pkgdown/_pkgdown.yaml", "inst/_pkgdown.yml")
+LLM_DOCS_OFF_RE = re.compile(r"^llm-docs:\s*[\"']?(?:false|no|off|n)[\"']?\s*(?:#.*)?$", re.M | re.I)
 
 
 def check_readme(pkg: str, source, state: State, report: Report) -> None:
@@ -1132,19 +1145,21 @@ def check_readme(pkg: str, source, state: State, report: Report) -> None:
             n, start = install[0]
             end = next((i for level, _, i in headings[n + 1:] if level <= 2), None)
             section = "\n".join(text.splitlines()[start:end])
-            if f"{OWNER}.r-universe.dev" not in section or "install.packages(" not in section:
+            if not RUNIVERSE_INSTALL_RE.search(section):
                 report.gap("readme", "Installation has no r-universe install.packages() command")
+            cran_command = re.search(rf"install\.packages\(\s*[\"']{pkg}[\"']\s*\)", section)
             if state.on_cran is None:
                 report.skip("readme", "Installation: the CRAN command is not judged (CRAN status unknown)")
-            elif state.on_cran and not re.search(rf"install\.packages\(\s*[\"']{pkg}[\"']\s*\)", section):
+            elif state.on_cran and not cran_command:
                 report.gap("readme", f'Installation has no install.packages("{pkg}") for CRAN')
-    tree = source.tree()
-    if "llms.txt" in tree:
+            elif not state.on_cran and cran_command:
+                report.gap("readme", f'Installation shows install.packages("{pkg}"), but not on CRAN')
+    if source.read("llms.txt") is not None:
         report.gap("readme", "a hand-written root llms.txt; the pkgdown site builds it")
-    for path in ("_pkgdown.yml", "pkgdown/_pkgdown.yml"):
-        config = source.read(path) if path in tree else None
-        if config and re.search(r"^llm-docs:\s*(?:false|no)\b", config, re.M | re.I):
-            report.gap("readme", f"{path} sets llm-docs: false")
+    for path in PKGDOWN_CONFIGS:
+        config = source.read(path)
+        if config and LLM_DOCS_OFF_RE.search(config):
+            report.gap("readme", f"{path} sets llm-docs off")
 
 
 def check_files(source, report: Report) -> None:
@@ -1223,8 +1238,9 @@ def check_description(pkg: str, source, state: State, report: Report) -> str | N
         dropped = [k for k in keywords if k.lower() in DROPPED_KEYWORDS]
         if dropped:
             report.gap("description", f"X-schema.org-keywords lists {', '.join(dropped)}, which r-universe drops")
-        if len(keywords) - len(dropped) < MIN_KEYWORDS:
-            report.gap("description", f"X-schema.org-keywords has {len(keywords) - len(dropped)} usable "
+        usable = len({k.lower() for k in keywords} - DROPPED_KEYWORDS)
+        if usable < MIN_KEYWORDS:
+            report.gap("description", f"X-schema.org-keywords has {usable} distinct usable "
                                       f"token(s); the standard wants at least {MIN_KEYWORDS}")
     if fields.get("Language") != "en-US":
         report.gap("description", f"Language is {fields.get('Language')!r}, not en-US")
@@ -1754,15 +1770,29 @@ def self_test() -> list[str]:
         failures.append("Installation: unknown CRAN status must be not judged, never a gap")
     expect_gap("root llms.txt", "hand-written root llms.txt", "punycoder", dict(cran, **{"llms.txt": "# x\n"}),
                fixture_state())
-    expect_gap("llm-docs off", "_pkgdown.yml sets llm-docs: false", "punycoder",
-               dict(cran, **{"_pkgdown.yml": "url: https://example.org/\nllm-docs: false\n"}), fixture_state())
+    expect_gap("llm-docs off", "_pkgdown.yaml sets llm-docs off", "punycoder",
+               dict(cran, **{"_pkgdown.yaml": "url: https://example.org/\nllm-docs: off\n"}), fixture_state())
+    expect_gap("duplicate keywords", "has 3 distinct usable token(s)", "punycoder",
+               edit(cran, "DESCRIPTION", "unicode,\n    domain-names\n", "IDNA, Punycode\n"), fixture_state())
+    expect_gap("r-universe only in prose", "no r-universe install.packages()", "punycoder",
+               edit(cran, "README.Rmd", f'repos = c("https://{OWNER}.r-universe.dev", ',
+                    f'repos = NULL)\n# see https://{OWNER}.r-universe.dev\nc('), fixture_state())
+    expect_gap("CRAN command off CRAN", 'shows install.packages("seor"), but not on CRAN', "seor",
+               edit(seor, "README.Rmd", "```r\n", '```r\ninstall.packages("seor")\n'),
+               fixture_state(on_cran=False, release=False, doi=False, fossa=False))
+    expect_gap("indented heading after inline triple backticks", "heading ## Verification is maintainer content",
+               "punycoder", edit(cran, "README.Rmd", "See the vignettes.\n",
+                                 "See ```x``` inline.\n\n   ## Verification\n"), fixture_state())
+    hidden = edit(cran, "README.Rmd", "# fixture\n", "---\noutput: github_document\n# Setup: knit it\n---\n\n# fixture\n")
+    hidden = edit(hidden, "README.Rmd", "See the vignettes.\n", "See the vignettes.\n\n<!--\n## Development\n-->\n")
+    expect_clean("headings in front matter and comments do not render", "punycoder", hidden, fixture_state())
     expect_gap("no keywords", "no X-schema.org-keywords", "punycoder",
                edit(cran, "DESCRIPTION", "X-schema.org-keywords:", "X-keywords:"), fixture_state())
     report = expect_gap("dropped keywords", "lists r, rstats, which r-universe drops", "punycoder",
                         edit(cran, "DESCRIPTION", "domain-names\n", "domain-names, r, rstats\n"), fixture_state())
     if any("usable" in t for _, t in report.gaps):
         failures.append(f"dropped keywords: five usable tokens remain, got {report.gaps}")
-    expect_gap("too few keywords", "has 4 usable token(s)", "punycoder",
+    expect_gap("too few keywords", "has 4 distinct usable token(s)", "punycoder",
                edit(cran, "DESCRIPTION", "unicode,\n    domain-names\n", "unicode, R-package\n"), fixture_state())
 
     ci = ".gitlab-ci.yml"
