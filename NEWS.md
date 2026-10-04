@@ -1,5 +1,10 @@
 # seor (development version)
 
+* The README is for users now: an Installation section with the r-universe
+  command, and each member's site and `llms.txt` link. The development setup
+  and verify command live in `CONTRIBUTING.md`, the layout in
+  `ARCHITECTURE.md`. `DESCRIPTION` declares `X-schema.org-keywords` for
+  r-universe (SEOR-kqmqosji, SEOR-nplcfbib).
 * seor 0.1.0 is archived on Zenodo. `citation("seor")`, `CITATION.cff` and
   `codemeta.json` carry the concept DOI (`10.5281/zenodo.23136687`), `CITATION.cff` also
   carries the 0.1.0 version DOI, and the README shows the DOI and
