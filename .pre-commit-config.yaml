@@ -93,13 +93,14 @@ repos:
       # check-fleet-standard.py tests a fleet package against
       # design/fleet-standard.md and reads GitLab and the web, so the hook runs
       # only its offline self-test (fixtures inline), and only when the script
-      # changes (SEOR-myokihrl).
+      # changes (SEOR-myokihrl), or check-toolchain.R, whose reader of the
+      # pandoc pin it runs (SEOR-xhyrogfm).
       - id: check-fleet-standard-self-test
         name: check-fleet-standard self-test
         entry: python3 scripts/check-fleet-standard.py --self-test
         language: system
         pass_filenames: false
-        files: ^scripts/check-fleet-standard\.py$
+        files: ^scripts/check-(fleet-standard\.py|toolchain\.R)$
         stages: [pre-push]
       # seor is a metapackage whose members `sitemapr` and `robotstxtr`
       # are not yet on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always

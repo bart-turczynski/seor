@@ -4,7 +4,12 @@
   download is checked against its published digest and bounded in time. The
   pre-push gate (`scripts/check-toolchain.R`) fails when the local pandoc
   differs from the pin, and the fleet standard and
-  `scripts/check-fleet-standard.py` require both (SEOR-egfbijyi).
+  `scripts/check-fleet-standard.py` require both (SEOR-egfbijyi). The
+  checker accepts one install shape, the download, the digest check and
+  `dpkg -i` chained in one `if` with a warning branch, or as three
+  consecutive script items. Both checkers read the pin through
+  `scripts/check-toolchain.R`, so they cannot disagree on it
+  (SEOR-xhyrogfm).
 * seor has a logo, the fleet's black hex, in `man/figures/logo.svg` and
   `logo.png`. r-universe shows it on the package card and pkgdown in the site
   header, and the README heading carries it (SEOR-wxjuxbtu).

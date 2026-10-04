@@ -222,24 +222,47 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   the install needs Debian, `dpkg` and `curl`, and `default:` hands it to
   every job, including ones on other images (seor's `citation-version` runs
   on `python:3.13-alpine`).
-- The version is recorded once, as the `PANDOC_VERSION` CI variable.
+- The version is recorded once, as the `PANDOC_VERSION` CI variable. A
+  second assignment with another value, in any job, is a defect even where it
+  would win: a shell assignment overrides `variables:` at run time, so which
+  value a job installs would depend on where each sits.
 - The `.deb` comes from the pandoc GitHub release
   (`https://github.com/jgm/pandoc/releases/download/<version>/pandoc-<version>-1-<arch>.deb`),
   and `sha256sum -c` checks it against the release's published digest before
-  `dpkg -i` installs it over apt's `pandoc`. A failed or mismatched download
-  may warn and leave apt's pandoc in place, so every gate still runs and
+  `dpkg -i` installs it over apt's `pandoc`. The install has one of two
+  shapes, and each step runs only when the one before it succeeded:
+
+  - one script item holding `if <download to FILE> && <sha256sum -c of FILE>
+    && dpkg -i FILE; then …; else <warn>; fi`, on one line or in a `- |`
+    block, as seor's `.r` does; or
+  - three script items in that order: the download, the `sha256sum -c`, the
+    `dpkg -i`. GitLab ends the job when an item fails, so a mismatch stops
+    it before the install.
+
+  Each step is one command or one pipeline, read by its last command, whose
+  exit status is the pipeline's: `… | sha256sum -c -` is a check, `sha256sum
+  -c … | tee log` is not. The check names FILE, or reads on stdin the digest
+  line that names it (`echo "<digest>  FILE" | sha256sum -c -`). Nothing else
+  counts, however it is chained: not `|| true`, `;` or a newline inside one
+  item, and not `set -e`, so the rule does not depend on how the runner
+  starts the shell. In the first shape a failed or mismatched download
+  warns and leaves apt's pandoc in place, so every gate still runs and
   reports ([ADR 0005](adr/0005-cheap-ci-jobs-fold-into-one-gates-job.md)), but
   nothing unverified is installed, and README drift reported after that
-  warning is suspect. The download has a time limit (curl `--max-time`,
-  wget `--timeout`), so a stalled CDN reaches that warning instead of hanging
-  every R job. A limit of 0 means none and does not count. seor's also
-  retries, with the retries bounded too (`--retry 3 --retry-delay 5
-  --retry-max-time 300 --connect-timeout 20 --max-time 120`).
+  warning is suspect; in the second it fails the job. The download has a time
+  limit (curl `--max-time`, wget `--timeout` with `--tries` of 5 or fewer,
+  or `timeout`), so a stalled CDN reaches that warning instead of hanging
+  every R job. A limit of 0 means none and does not count, and wget's own
+  default of 20 tries makes its `--timeout` a limit per try, not on the
+  download. seor's curl also retries, with the retries bounded too
+  (`--retry 3 --retry-delay 5 --retry-max-time 300 --connect-timeout 20
+  --max-time 120`).
 - Locally, `scripts/check-toolchain.R` reads `PANDOC_VERSION` from
   `.gitlab-ci.yml` and fails the pre-push gate when
   `rmarkdown::pandoc_version()` differs. rmarkdown takes the newest pandoc on
   `RSTUDIO_PANDOC`, `PATH` and `~/opt/pandoc`, so a Homebrew upgrade past the
-  pin otherwise knits a README that CI then reports as drift.
+  pin otherwise knits a README that CI then reports as drift. Reading the
+  variable from the environment is not that check: nothing sets it locally.
 
 A bump moves together, in one change per repository: `PANDOC_VERSION`, the
 two sha256 digests (amd64, arm64), a re-knit of `README.md`, and, once for
@@ -480,21 +503,29 @@ What it checks, section by section:
   allocated. Every job that runs R on a push downloads pandoc from its GitHub
   release at `$PANDOC_VERSION`, which `.gitlab-ci.yml` sets to 3.10 in a
   `variables:` entry or a shell assignment, quoted or not, with or without a
-  trailing comment (the spellings `check-toolchain.R` reads too). It saves
-  the `.deb` to a file with curl or wget, a `sha256sum -c` (or
-  `shasum -a 256 -c`) names that file, and a later `dpkg -i` installs that
-  same file; a checksum of some other download, or a checked `.deb` never
-  installed, does not count, and neither does a download with no time
-  limit. The install counts only in the `before_script` or
+  trailing comment, one value wherever it is assigned, in a line the job
+  sees, and never in a `parallel: matrix` entry, which pins per leg. An
+  assignment is one sh would run, not the same text in a comment or an
+  `echo`. The pin is read by running `check-toolchain.R`'s own reader
+  (`--pandoc-assignments`), so the two scripts cannot disagree on it; that
+  needs `Rscript`. The install has one of the two shapes above, read from the
+  job's script items (a `- |` block, a folded or plain item, or a flow
+  sequence `[a, b]`): curl or wget saves the `.deb` to a file, a `sha256sum
+  -c` (or `shasum -a 256 -c`) names that file, and `dpkg -i` installs that
+  same file, paths compared as whole words; a checksum of some other
+  download, a checked `.deb` never installed, a step that goes on when the
+  one before it failed, and a download with no time
+  limit do not count. The install counts only in the `before_script` or
   `script` the job ends up with, its own or its template's; one only in
   `default: before_script` is reported, to move into the template. A job's
   commands are read as text, along with the R, shell and YAML scripts it
   names, so a script that skips a gate it contains reads as running it.
 - **Local gate.** The pre-commit config, or an R or shell script its hooks
   call, runs a URL check, and one such script both calls
-  `rmarkdown::pandoc_version()` and reads `PANDOC_VERSION`: the comparison
-  with the CI pin. A `pandoc_version()` call alone, such as a minimum-version
-  check, is not it.
+  `rmarkdown::pandoc_version()` and reads `PANDOC_VERSION` from
+  `.gitlab-ci.yml`: the comparison with the CI pin. A `pandoc_version()` call
+  alone, such as a minimum-version check, is not it, and neither is
+  `Sys.getenv("PANDOC_VERSION", …)`.
 - **Schedules.** One active `deep-check` and one `dependency-audit` schedule,
   on `main`, with `SCHEDULE_KIND` set on each schedule.
 
