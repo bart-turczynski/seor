@@ -222,7 +222,7 @@ self-hosted project runners don't draw on.
 |------------|------------------|----------------------------------------------|---------------|-----------|---------|-------------|
 | pagerankr  | rurl-devel       | rurl-devel                                   | Mon 05:00 UTC | Mon 07:00 | 4466631 | 11 min      |
 | punycoder  | dependency-audit | osv-audit, security-audit                    | Mon 10:17     | Mon 11:00 | 4427280 | 6 min       |
-| ssrfr      | deep-check       | full-check (3 legs), floor-check, renovate   | Mon 12:00     | Mon 12:00 | 4459714 | pending     |
+| ssrfr      | deep-check       | full-check (3 legs), floor-check, renovate   | Mon 12:00     | Mon 12:00 | 4459714 | 49 min      |
 | punycoder  | deep-check       | full-check (3 legs), floor-check, sanitizers | Mon 21:00     | Mon 21:00 | 4466444 | 26 min      |
 | raddr      | deep-check       | deep-check: release, oldrel, devel, floor    | Tue 21:00     | Tue 21:00 | 4467064 | 17 min      |
 | rurl       | dependency-audit | osv-audit, security-audit                    | Tue 10:17     | Tue 11:00 | 4467472 | 19 min      |
@@ -232,7 +232,7 @@ self-hosted project runners don't draw on.
 | pagerankr  | deep-check       | full-check (3 legs), floor-check             | Wed 21:00     | Wed 21:00 | 4467476 | 18 min      |
 | pslr       | dependency-audit | osv-audit, security-audit                    | Thu 10:17     | Thu 11:00 | 4467477 | 13 min      |
 | seor       | dependency-audit | osv-audit, security-audit                    | Thu 11:17     | Thu 12:00 | 4467483 | 33 min      |
-| seor       | deep-check       | full-check (3 legs), floor-check             | Thu 21:00     | Thu 21:00 | 4467484 | pending     |
+| seor       | deep-check       | full-check (3 legs), floor-check             | Thu 21:00     | Thu 21:00 | 4467484 | 16 min      |
 | robotstxtr | deep-check       | full-check (3 legs), floor-check, sanitizers | Mon 22:00     | Mon 22:00 | 4472810 | 35 min      |
 | sitemapr   | deep-check       | deep-check (3 legs), floor-check             | Tue 22:00     | Tue 22:00 | 4472811 | 31 min      |
 | pslr       | deep-check       | full-check (4 legs), sanitizers              | Wed 22:00     | Wed 22:00 | 4472812 | 29 min      |
@@ -245,17 +245,17 @@ created 2026-09-30. The last six were created through the API on 2026-10-03
 for the fleet standard (SEOR-tahlljtx), whose run that day and the next gave
 every repository its deep-check and dependency-audit jobs.
 Each runner time includes the push-to-`main` jobs the schedule also runs, not
-only the jobs in the third column. A `~` marks an estimate. Every row is now
-either a measurement (method below) or "pending": a schedule with no green run
-of its current jobs yet, measured at its first one. seor's deep check had a
-green pipeline (2909772809), but its floor-check failed there under
-`allow_failure`, before affb75d fixed that job, so the row waits. seor's
-audit jobs take 5 to 6 minutes each, building their dependencies from source.
+only the jobs in the third column. A `~` marks an estimate. Every row is a
+measurement (method below); ssrfr's and seor's deep checks come from their
+first runs with a green, blocking floor-check (2909933319 and 2909936469,
+2026-10-04). seor's audit jobs take 5 to 6 minutes each, building their
+dependencies from source.
 
-Total: about 5.4 runner-hours a week (about 23 a month) for the seventeen
-measured rows; the two pending rows add to it. The host runs
-`concurrent = 4`, so this is a small share of its week; the constraint is when
-it is awake, not capacity.
+Total: about 6.5 runner-hours a week (about 28 a month) for the nineteen
+rows. The host runs `concurrent = 6`, with `limit = 4` on `seor-local-docker`,
+the runner seven of the nine repositories share (both raised 2026-10-03 to
+clear the fleet-standard queue), so this is a small share of its week; the
+constraint is when it is awake, not capacity.
 
 **The stagger.** One schedule per slot. Audits go in weekday working hours,
 when the Mac is most likely awake. Deep checks go at 21:00 on distinct
