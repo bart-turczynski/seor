@@ -461,8 +461,10 @@ What it checks, section by section:
   read from image tags, plus sanitizer legs where required. The audits run on the `dependency-audit` schedule alone, with
   seor's disposition-row test files, and `fossa analyze` runs where FOSSA is
   allocated. Every job that runs R on a push downloads pandoc from its GitHub
-  release at version 3.10 (`PANDOC_VERSION` expanded through `variables:` or
-  a shell assignment) and checks it with `sha256sum -c`; a
+  release at `$PANDOC_VERSION`, which `.gitlab-ci.yml` sets to 3.10 in a
+  `variables:` entry or a shell assignment, quoted or not, with or without a
+  trailing comment (the spellings `check-toolchain.R` reads too), and checks
+  it with `sha256sum -c`; a
   `default: before_script` counts for each job that inherits it. A job's
   commands are read as text, along with the R, shell and YAML scripts it
   names, so a script that skips a gate it contains reads as running it.

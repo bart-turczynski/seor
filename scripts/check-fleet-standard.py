@@ -72,9 +72,11 @@ WHAT IT CHECKS, by section of the standard.
   disposition-row test files; a `fossa analyze` job for rurl, ssrfr and seor;
   the pandoc pin (PANDOC_PIN, SEOR-egfbijyi): every job that runs R on a
   push to main downloads pandoc from its GitHub release
-  (`github.com/jgm/pandoc/releases/download/<version>/pandoc-`), that version
-  is PANDOC_PIN once `$VAR` is expanded through `variables:` or a shell
-  assignment, and a `sha256sum -c` (or `shasum -a 256 -c`) checks it. Where
+  (`github.com/jgm/pandoc/releases/download/<version>/pandoc-`), names that
+  version as `$PANDOC_VERSION`, which .gitlab-ci.yml sets to PANDOC_PIN in a
+  `variables:` entry or a shell assignment (the spellings check-toolchain.R
+  reads too, so the two never disagree on the pin), and a `sha256sum -c` (or
+  `shasum -a 256 -c`) checks it. Where
   the download sits is not judged, only that every R job carries it, which is
   what shared setup gives.
 * Local gate. The pre-commit config, or a script its hooks call, runs a URL
@@ -728,12 +730,25 @@ class Job:
         return [self.text] + [body for _, body in self.scripts]
 
 
+def yaml_scalar(raw: str) -> str:
+    """A one-line YAML scalar's value: quotes removed, a trailing `# comment` dropped.
+
+    check-toolchain.R's `yaml_scalar()` reads PANDOC_VERSION the same way, so
+    the two scripts agree on the pin (SEOR-egfbijyi).
+    """
+    raw = raw.strip()
+    quoted = re.match(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'", raw)
+    if quoted:
+        return unquote(quoted.group(0))
+    return re.sub(r"\s+#.*$", "", raw)
+
+
 def scalar_map(lines: list[str]) -> dict[str, str]:
     out = {}
     for line in lines:
         m = re.match(r"\s*([\w.-]+):\s*(\S.*)$", line)
         if m:
-            out[m.group(1)] = unquote(m.group(2))
+            out[m.group(1)] = yaml_scalar(m.group(2))
     return out
 
 
@@ -871,6 +886,14 @@ URL_CHECK_RE = re.compile(r"check_url_db|url_db_from_package_sources|urlchecker:
 SANITIZER_IMAGE_RE = re.compile(r"-san\b|clang-asan|gcc-asan|r-debug|asan|ubsan", re.I)
 R_JOB_RE = re.compile(r"\bRscript\b|\bR CMD\b")
 PANDOC_URL_RE = re.compile(r"github\.com/jgm/pandoc/releases/download/([^/\s\"']+)/pandoc-")
+# The pin's spellings, which check-toolchain.R reads identically from
+# .gitlab-ci.yml (`pandoc_shell_re`; SEOR-egfbijyi): a `variables:` entry
+# `PANDOC_VERSION: <value>`, read by yaml_scalar(), or a shell assignment
+# anywhere on a non-comment line (`PANDOC_VERSION=3.10`,
+# `export PANDOC_VERSION="3.10"`, a trailing `# comment`). The download must
+# name its version through this variable, the one check-toolchain.R reads.
+PANDOC_SHELL_PIN_RE = re.compile(r"\bPANDOC_VERSION=[\"']?([\w.-]+)")
+PANDOC_VAR_TOKEN_RE = re.compile(r"\$\{?PANDOC_VERSION\}?")
 SHA256_CHECK_RE = re.compile(r"\bsha256sum\b[^\n]*\s(?:-c|--check)\b|\bshasum\b[^\n]*-a\s*256[^\n]*\s(?:-c|--check)\b")
 PANDOC_LOCAL_RE = re.compile(r"\bpandoc_version\s*\(")
 GATES = {
@@ -894,46 +917,48 @@ def coverage_thresholds(text: str) -> list[float]:
     return [v for v in found if 1 <= v <= 100]
 
 
-def pandoc_pins(job: Job, ci: CI) -> set[str]:
-    """Versions of the pandoc release a job downloads, `$VAR` expanded.
-
-    The variable is looked up in the job's `variables:` (extends merged), the
-    global ones, then a shell assignment (`PANDOC_VERSION=3.10`) in its text.
-    An unresolvable variable reads as `$VAR`, which is never the pin.
-    """
-    text = job.full_text()
-    found = set()
-    for token in PANDOC_URL_RE.findall(text):
-        m = re.fullmatch(r"\$\{?(\w+)\}?", token)
-        if m:
-            var = m.group(1)
-            value = job.variables.get(var) or ci.global_vars.get(var)
-            if not value:
-                assigned = re.search(rf"\b{var}=[\"']?([\w.-]+)", text)
-                value = assigned.group(1) if assigned else token
-            token = value
-        found.add(token)
-    return found
+def pandoc_version_value(job: Job, ci: CI) -> str | None:
+    """PANDOC_VERSION as the job sees it: its `variables:` (extends merged), the
+    global ones, then a shell assignment in its .gitlab-ci.yml text. The scripts
+    a job names are not read: check-toolchain.R reads .gitlab-ci.yml alone."""
+    value = job.variables.get("PANDOC_VERSION") or ci.global_vars.get("PANDOC_VERSION")
+    if not value:
+        assigned = PANDOC_SHELL_PIN_RE.search(job.text)
+        value = assigned.group(1) if assigned else None
+    return value
 
 
 def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     """Every R job on push installs PANDOC_PIN from the release, sha256-checked."""
-    unpinned, other, unchecked = [], {}, []
+    unpinned, unrecorded, other, unchecked = [], {}, {}, []
     for job in on_push:
         if not R_JOB_RE.search(job.full_text()):
             continue
-        pins = pandoc_pins(job, ci)
-        if not pins:
+        tokens = set(PANDOC_URL_RE.findall(job.full_text()))
+        if not tokens:
             unpinned.append(job.name)
-        elif pins != {PANDOC_PIN}:
-            other.setdefault(", ".join(sorted(pins - {PANDOC_PIN}) or sorted(pins)), []).append(job.name)
+            continue
+        literal = sorted(t for t in tokens if not PANDOC_VAR_TOKEN_RE.fullmatch(t))
+        if literal:
+            unrecorded.setdefault(", ".join(literal), []).append(job.name)
+            continue
+        value = pandoc_version_value(job, ci)
+        if value != PANDOC_PIN:
+            other.setdefault(value, []).append(job.name)
         elif not SHA256_CHECK_RE.search(job.full_text()):
             unchecked.append(job.name)
     if unpinned:
         report.gap("ci", f"pandoc {PANDOC_PIN} is not installed from the pandoc release in the setup of "
                          f"{', '.join(unpinned)} (README.md is byte-stable only under the pinned pandoc)")
-    for pins, names in other.items():
-        report.gap("ci", f"{', '.join(names)}: pins pandoc {pins}, not the fleet's {PANDOC_PIN}")
+    for tokens, names in unrecorded.items():
+        report.gap("ci", f"{', '.join(names)}: downloads pandoc at {tokens}, not at $PANDOC_VERSION, the variable "
+                         "check-toolchain.R compares the local pandoc with")
+    for value, names in other.items():
+        if value is None:
+            report.gap("ci", f"{', '.join(names)}: downloads pandoc at $PANDOC_VERSION, "
+                             "which .gitlab-ci.yml never assigns")
+        else:
+            report.gap("ci", f"{', '.join(names)}: pins pandoc {value}, not the fleet's {PANDOC_PIN}")
     if unchecked:
         report.gap("ci", f"{', '.join(unchecked)}: downloads pandoc {PANDOC_PIN} without a sha256 check")
 
@@ -2035,8 +2060,28 @@ def self_test() -> list[str]:
                     "/tmp/pandoc.deb\" | sha256sum -c -\n", ""), fixture_state())
     expect_gap("pandoc pin at another version", "pins pandoc 3.9, not the fleet's 3.10", "punycoder",
                edit(cran, ci, "PANDOC_VERSION=3.10", "PANDOC_VERSION=3.9"), fixture_state())
-    expect_gap("pandoc version never recorded", "pins pandoc ${PANDOC_VERSION}, not the fleet's 3.10", "punycoder",
-               edit(cran, ci, "    - PANDOC_VERSION=3.10\n", ""), fixture_state())
+    expect_gap("pandoc version never recorded", "downloads pandoc at $PANDOC_VERSION, which .gitlab-ci.yml never assigns",
+               "punycoder", edit(cran, ci, "    - PANDOC_VERSION=3.10\n", ""), fixture_state())
+    # Every spelling of the pin passes here, and check-toolchain.R's self-test
+    # reads the same list: a repository this script passes is never one whose
+    # local pandoc check silently finds no pin.
+    for spelling in ('PANDOC_VERSION="3.10"', "export PANDOC_VERSION=3.10", "PANDOC_VERSION=3.10  # the fleet pin",
+                     "export PANDOC_VERSION='3.10' # pinned"):
+        expect_clean(f"pandoc pin spelled {spelling!r}", "punycoder",
+                     edit(cran, ci, "    - PANDOC_VERSION=3.10\n", f"    - {spelling}\n"), fixture_state())
+    for spelling in ('PANDOC_VERSION: "3.10"', "PANDOC_VERSION: '3.10'", "PANDOC_VERSION: 3.10",
+                     'PANDOC_VERSION: "3.10"  # the fleet pin', "PANDOC_VERSION: 3.10 # pinned"):
+        expect_clean(f"pandoc pin spelled {spelling!r}", "punycoder",
+                     edit(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", ""), ci, "variables:\n",
+                          f"variables:\n  {spelling}\n"), fixture_state())
+    expect_gap("pandoc version written into the URL", "downloads pandoc at 3.10, not at $PANDOC_VERSION", "punycoder",
+               edit(cran, ci, "download/${PANDOC_VERSION}/", "download/3.10/"), fixture_state())
+    expect_gap("pandoc version in another variable", "downloads pandoc at ${PV}, not at $PANDOC_VERSION", "punycoder",
+               edit(edit(cran, ci, "download/${PANDOC_VERSION}/", "download/${PV}/"), ci, "variables:\n",
+                    "variables:\n  PV: \"3.10\"\n"), fixture_state())
+    expect_gap("pandoc version assigned only in a script", "which .gitlab-ci.yml never assigns", "punycoder",
+               dict(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "    - . tools/pin.sh\n"),
+                    **{"tools/pin.sh": "PANDOC_VERSION=3.10\n"}), fixture_state())
     # seor before SEOR-egfbijyi: only `gates` pinned it.
     report = expect_gap("pandoc pin in one job only", "in the setup of check, coverage, pages", "punycoder",
                         edit(no_pin, ci, "gates:\n  extends: .on-main\n  script:\n",

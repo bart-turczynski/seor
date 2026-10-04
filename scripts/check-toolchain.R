@@ -279,17 +279,41 @@ run_stale_check <- function(root) {
 
 # --- Check 4: pandoc matches the CI pin ---------------------------------------
 
-pandoc_pin_re <- paste0(
-  "^\\s*(?:-\\s*)?PANDOC_VERSION\\s*[:=]\\s*",
-  "[\"']?([0-9][0-9.]*)[\"']?\\s*$"
-)
+# The pin's spellings, read exactly as check-fleet-standard.py reads them
+# (PANDOC_SHELL_PIN_RE and yaml_scalar() there), so a repository the fleet
+# checker passes never makes this check find no pin and skip. Comment lines
+# are dropped, as the fleet checker drops them; then a pin is either
+#   * a YAML entry, `PANDOC_VERSION: "3.10"`, quoted or not, with or without
+#     a trailing `# comment`, or
+#   * a shell assignment anywhere on the line, `PANDOC_VERSION=3.10`,
+#     `export PANDOC_VERSION="3.10"`, with or without a trailing comment.
+pandoc_yaml_re <- "^\\s*(?:-\\s+)?PANDOC_VERSION:\\s*(\\S.*)$"
+pandoc_shell_re <- "\\bPANDOC_VERSION=[\"']?([\\w.-]+)"
 
-# Every distinct PANDOC_VERSION value .gitlab-ci.yml assigns, as a YAML
-# variable (`PANDOC_VERSION: "3.10"`) or a shell assignment
-# (`- PANDOC_VERSION=3.10`). Empty when it assigns none.
+# A one-line YAML scalar's value: quotes removed, a trailing comment dropped.
+yaml_scalar <- function(raw) {
+  raw <- trimws(raw)
+  quoted <- regmatches(
+    raw,
+    regexpr("^(?:\"(?:[^\"\\\\]|\\\\.)*\"|'(?:[^']|'')*')", raw, perl = TRUE)
+  )
+  if (length(quoted)) {
+    inner <- substr(quoted, 2L, nchar(quoted) - 1L)
+    return(if (startsWith(quoted, "'")) gsub("''", "'", inner) else inner)
+  }
+  sub("\\s+#.*$", "", raw, perl = TRUE)
+}
+
+# Every distinct PANDOC_VERSION value .gitlab-ci.yml assigns, in any spelling
+# above. Empty when it assigns none.
 pinned_pandoc <- function(lines) {
-  hits <- regmatches(lines, regexec(pandoc_pin_re, lines, perl = TRUE))
-  unique(vapply(Filter(length, hits), `[[`, character(1), 2L))
+  lines <- lines[!grepl("^\\s*#", lines)]
+  yaml <- regmatches(lines, regexec(pandoc_yaml_re, lines, perl = TRUE))
+  yaml <- vapply(Filter(length, yaml), `[[`, character(1), 2L)
+  shell <- regmatches(lines, gregexpr(pandoc_shell_re, lines, perl = TRUE))
+  shell <- sub(pandoc_shell_re, "\\1", unlist(shell), perl = TRUE)
+  values <- c(vapply(yaml, yaml_scalar, character(1), USE.NAMES = FALSE), shell)
+  unique(values[nzchar(values)])
 }
 
 read_pandoc_pin <- function(root) {
@@ -484,14 +508,27 @@ self_test <- function() {
     "  variables:",
     "    PANDOC_VERSION: \"3.10\"",
     "    - curl \"https://example.org/${PANDOC_VERSION}/pandoc.deb\"",
-    "    # PANDOC_VERSION: \"9.9\" in a comment is not a pin"
+    "    # PANDOC_VERSION: \"9.9\" in a comment is not a pin",
+    "    #   - PANDOC_VERSION=9.9 neither"
   )
   expect("pandoc-pin-yaml", identical(pinned_pandoc(ci), "3.10"))
-  expect(
-    "pandoc-pin-shell",
-    identical(pinned_pandoc("    - PANDOC_VERSION=3.10"), "3.10")
+  expect("pandoc-pin-none", !length(pinned_pandoc(ci[3:5])))
+  # The spellings check-fleet-standard.py's self-test passes, one by one.
+  spellings <- c(
+    "    - PANDOC_VERSION=3.10",
+    "    - PANDOC_VERSION=\"3.10\"",
+    "    - export PANDOC_VERSION=3.10",
+    "    - PANDOC_VERSION=3.10  # the fleet pin",
+    "    - export PANDOC_VERSION='3.10' # pinned",
+    "  PANDOC_VERSION: \"3.10\"",
+    "  PANDOC_VERSION: '3.10'",
+    "  PANDOC_VERSION: 3.10",
+    "  PANDOC_VERSION: \"3.10\"  # the fleet pin",
+    "  PANDOC_VERSION: 3.10 # pinned"
   )
-  expect("pandoc-pin-none", !length(pinned_pandoc(ci[3:4])))
+  for (line in spellings) {
+    expect(paste("pandoc-pin:", line), identical(pinned_pandoc(line), "3.10"))
+  }
   expect("pandoc-match", !length(check_pandoc("3.10", "3.10")))
   expect("pandoc-unpinned", !length(check_pandoc(character(), "3.11")))
   flagged("pandoc-skew", check_pandoc("3.10", "3.11"), "rmarkdown uses 3.11")
@@ -506,7 +543,7 @@ self_test <- function() {
 
   cat(paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 10 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, 19 pandoc cases)\n"
   ))
 }
 
