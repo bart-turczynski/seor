@@ -481,8 +481,10 @@ What it checks, section by section:
   config file.
 - **Logo.** `man/figures/logo.svg` and `man/figures/logo.png` exist, and the
   first level-1 heading of `README.Rmd` is `# <pkg>` with an `<img>` whose
-  `src` is `man/figures/logo.png` and whose `alt` is `hex logo, white on
-  black`. The artwork is not judged.
+  `src` is `man/figures/logo.png` (bare, or inside a link as
+  `usethis::use_logo()` writes it) and whose `alt` is `hex logo, white on
+  black`, with no `aria-label`, `aria-labelledby`, `aria-hidden` or `role`
+  that replaces or hides it. The artwork is not judged.
 - **Files.** The list above. `LICENSE` names Bart Turczynski, `LICENSE.md` is
   the MIT text, `SECURITY.md` and `CODE_OF_CONDUCT.md` name the public email,
   and a `SECURITY.md` under ten non-blank lines counts as a stub.
