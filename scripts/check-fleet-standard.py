@@ -49,11 +49,11 @@ WHAT IT CHECKS, by section of the standard.
   does not). No root `llms.txt`, and `llm-docs` not off in any pkgdown config.
 * Logo. `man/figures/logo.svg` and `man/figures/logo.png` are in the tree, and
   README.Rmd's first level-1 heading is `# <pkg>` followed by an `<img>` whose
-  `src` is `man/figures/logo.png` and whose `alt` is present and empty, with no
-  title, aria-label, aria-labelledby or role that names it again: the <img>
-  sits inside the heading, so a name would repeat the package name in the
-  heading's accessible name. A link-wrapped <img> is a gap, since an empty alt
-  leaves the link unnamed. The artwork itself is not judged.
+  `src` is `man/figures/logo.png` and whose `alt` is "hex logo, white on black"
+  (LOGO_ALT), without the package name the heading already says, and no
+  aria-label, aria-labelledby, aria-hidden or role replaces or hides it. The
+  link-wrapped form usethis::use_logo() writes is accepted. The artwork itself
+  is not judged.
 * Files. The list in "Files every package carries", plus: LICENSE names Bart
   Turczynski as holder, LICENSE.md is the full MIT text, SECURITY.md and
   CODE_OF_CONDUCT.md name the public contact, and SECURITY.md is more than a
@@ -1643,6 +1643,7 @@ def check_readme(pkg: str, source, state: State, report: Report) -> None:
 
 # What r-universe and pkgdown look for, and the README header that shows it.
 LOGO_FILES = ("man/figures/logo.svg", "man/figures/logo.png")
+LOGO_ALT = "hex logo, white on black"
 
 
 def tag_attrs(tag: str) -> dict[str, str | None]:
@@ -1669,23 +1670,22 @@ def check_logo(pkg: str, source, report: Report) -> None:
     if text is None:
         return
     title = next((title for level, title, _ in readme_headings(text) if level == 1), None)
-    # The bare <img> only: inside a link (usethis::use_logo()) an empty alt would
-    # leave the link without a name. Its attributes are read as a browser reads
-    # them (tag_attrs), not by pattern.
-    m = title and re.fullmatch(rf"{re.escape(pkg)}\s+(<img\s[^>]*>)", title)
-    attrs = tag_attrs(m.group(1)) if m else {}
+    # The bare <img>, or the link-wrapped one usethis::use_logo() writes, which
+    # the alt names. Its attributes are read as a browser reads them
+    # (tag_attrs), not by pattern, and the alt with its whitespace collapsed.
+    img = r"<img\s[^>]*>"
+    m = title and re.fullmatch(rf"{re.escape(pkg)}\s+(?:({img})|<a\s[^>]*>\s*({img})\s*</a>)", title)
+    attrs = tag_attrs(m.group(1) or m.group(2)) if m else {}
+    alt = " ".join((attrs.get("alt") or "").split())
+    # Each of these replaces or hides the alt as the image's name.
+    overriding = [name for name in ("aria-label", "aria-labelledby", "aria-hidden", "role") if name in attrs]
     if attrs.get("src") != "man/figures/logo.png":
         report.gap("logo", f'README.Rmd: the first heading is not "# {pkg}" with the man/figures/logo.png <img>')
-    elif "alt" not in attrs or attrs["alt"]:  # a bare `alt` is empty to a browser (None here)
-        found = "no alt" if "alt" not in attrs else f"alt={attrs['alt']!r}"
-        report.gap("logo", f'README.Rmd: the logo <img> lacks an empty alt="" ({found})')
-    else:
-        # Each of these names the image again, so it is no longer decorative (WCAG H67).
-        naming = [name for name in ("title", "aria-label", "aria-labelledby") if name in attrs]
-        if attrs.get("role") not in (None, "presentation", "none"):
-            naming.append("role")
-        if naming:
-            report.gap("logo", f"README.Rmd: the logo <img> has an empty alt but is named by {', '.join(naming)}")
+    elif alt != LOGO_ALT:
+        found = "no alt" if "alt" not in attrs else f"alt={alt!r}"
+        report.gap("logo", f'README.Rmd: the logo <img> lacks alt="{LOGO_ALT}" ({found})')
+    elif overriding:
+        report.gap("logo", f"README.Rmd: the logo <img>'s {', '.join(overriding)} replaces or hides its alt")
 
 
 def check_files(source, report: Report) -> None:
@@ -2089,7 +2089,7 @@ stages = list(
 """
 
 def fixture_h1(pkg: str) -> str:
-    return f'# {pkg} <img src="man/figures/logo.png" align="right" height="139" alt="" />'
+    return f'# {pkg} <img src="man/figures/logo.png" align="right" height="139" alt="{LOGO_ALT}" />'
 
 
 def fixture_readme_body(pkg: str, on_cran: bool) -> str:
@@ -2398,34 +2398,36 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                edit(cran, "README.Rmd", fixture_h1("punycoder") + "\n", ""), fixture_state())
     expect_clean("single-quoted logo src", "punycoder",
                  edit(cran, "README.Rmd", 'src="man/figures/logo.png"', "src='man/figures/logo.png'"), fixture_state())
-    expect_gap("the use_logo() link-wrapped heading", "the first heading is not", "punycoder",
-               edit(cran, "README.Rmd", fixture_h1("punycoder"),
-                    '# punycoder <a href="https://bart-turczynski.gitlab.io/punycoder/"><img src="man/figures/logo.png" '
-                    'align="right" height="138" alt="" /></a>'), fixture_state())
-    alt = ' alt=""'
-    expect_gap("logo without alt", 'lacks an empty alt=""', "punycoder",
+    expect_clean("the use_logo() link-wrapped heading", "punycoder",
+                 edit(cran, "README.Rmd", fixture_h1("punycoder"),
+                      '# punycoder <a href="https://bart-turczynski.gitlab.io/punycoder/"><img src="man/figures/logo.png" '
+                      f'align="right" height="138" alt="{LOGO_ALT}" /></a>'), fixture_state())
+    alt = f' alt="{LOGO_ALT}"'
+    expect_gap("logo without alt", f'lacks alt="{LOGO_ALT}" (no alt)', "punycoder",
                edit(cran, "README.Rmd", alt, ""), fixture_state())
-    expect_gap("logo with descriptive alt text", "lacks an empty alt=", "punycoder",
-               edit(cran, "README.Rmd", alt, ' alt="punycoder hex logo, white on black"'), fixture_state())
-    expect_gap("empty alt only in data-alt", "lacks an empty alt=", "punycoder",
-               edit(cran, "README.Rmd", alt, ' data-alt=""'), fixture_state())
-    expect_gap("an empty alt only inside another attribute", "lacks an empty alt=", "punycoder",
+    for empty in (' alt=""', " alt"):
+        expect_gap(f"logo with {empty.strip()!r}", "(alt='')", "punycoder",
+                   edit(cran, "README.Rmd", alt, empty), fixture_state())
+    expect_gap("logo alt repeating the package name", "lacks alt=", "punycoder",
+               edit(cran, "README.Rmd", alt, f' alt="punycoder {LOGO_ALT}"'), fixture_state())
+    expect_gap("logo alt only in data-alt", "lacks alt=", "punycoder",
+               edit(cran, "README.Rmd", alt, f' data-alt="{LOGO_ALT}"'), fixture_state())
+    expect_gap("alt text only inside another attribute", "lacks alt=", "punycoder",
                edit(cran, "README.Rmd", alt, " title='x" + alt + "'"), fixture_state())
-    expect_gap("a whitespace alt, entity-encoded", "(alt=' ')", "punycoder",
-               edit(cran, "README.Rmd", alt, ' alt="&#32;"'), fixture_state())
-    for naming in (' title="punycoder logo"', ' aria-label="punycoder"', ' role="img"'):
-        expect_gap(f"an empty alt with {naming.strip()}", "but is named by", "punycoder",
-                   edit(cran, "README.Rmd", alt, alt + naming), fixture_state())
-    expect_clean("an empty alt with role=presentation", "punycoder",
-                 edit(cran, "README.Rmd", alt, alt + ' role="presentation"'), fixture_state())
-    expect_gap("alt text ahead of an empty alt", "lacks an empty alt=", "punycoder",
-               edit(cran, "README.Rmd", alt, ' alt="punycoder"' + alt), fixture_state())
-    for spelling in (' alt = ""', ' ALT=""', " alt=''", " alt"):
+    expect_gap("an empty alt ahead of the right one", "lacks alt=", "punycoder",
+               edit(cran, "README.Rmd", alt, ' alt=""' + alt), fixture_state())
+    for extra in (' aria-label="punycoder"', ' aria-hidden="true"', ' role="presentation"'):
+        expect_gap(f"the right alt with {extra.strip()}", "replaces or hides its alt", "punycoder",
+                   edit(cran, "README.Rmd", alt, alt + extra), fixture_state())
+    for spelling in (f' alt = "{LOGO_ALT}"', f' ALT="{LOGO_ALT}"', ' alt="hex logo&#44; white on black"',
+                     f" alt='{LOGO_ALT}'", ' alt=" hex logo,  white on black "'):
         expect_clean(f"alt spelled {spelling.strip()!r}", "punycoder",
                      edit(cran, "README.Rmd", alt, spelling), fixture_state())
-    expect_clean("single-quoted alt, ahead of src", "punycoder",
+    expect_clean("a title beside the alt", "punycoder",
+                 edit(cran, "README.Rmd", alt, alt + ' title="punycoder"'), fixture_state())
+    expect_clean("alt ahead of src", "punycoder",
                  edit(cran, "README.Rmd", fixture_h1("punycoder"),
-                      "# punycoder <img alt='' src=\"man/figures/logo.png\" />"),
+                      f"# punycoder <img alt='{LOGO_ALT}' src=\"man/figures/logo.png\" />"),
                  fixture_state())
 
     ci = ".gitlab-ci.yml"

@@ -152,7 +152,7 @@ raddr's `llms.txt` carried its Setup and Verification sections on 2026-10-04.
 1. The heading with the logo (see r-universe, below), in this form:
 
    ```markdown
-   # <pkg> <img src="man/figures/logo.png" align="right" height="139" alt="" />
+   # <pkg> <img src="man/figures/logo.png" align="right" height="139" alt="hex logo, white on black" />
    ```
 
 2. The badge row (above).
@@ -414,13 +414,13 @@ under the owner `gitlab-bart-turczynski`. Researched 2026-10-04
   r-universe shows the logo on the package card and in search, and pkgdown
   puts it in the site header; both find it there. The source artwork, with
   `logo-480.png` and `logo-print.svg`, stays outside the repositories.
-  The README heading's `<img>` carries an empty `alt=""`: it sits inside
-  the `# <pkg>` heading, so any alt text joins the heading's accessible name
-  and repeats the package name next to it. An empty alt with no `title`,
-  `aria-label` or `role` marks it decorative (WCAG technique H67), as pkgdown
-  does for its own copy; a missing alt would make a screen reader read the
-  file name. The logo is not wrapped in a link, which an empty alt would
-  leave unnamed (SEOR-wfleahtg).
+  The README heading's `<img>` carries `alt="hex logo, white on black"`,
+  without the package name. The `<img>` sits inside the `# <pkg>` heading,
+  so its alt joins the heading's accessible name, which reads "<pkg> hex
+  logo, white on black" with the name once. GitLab and GitHub wrap a README
+  image in a link to the file, and the alt is that link's name, so it is not
+  empty. pkgdown replaces the heading's logo with its own, `alt=""`, in the
+  site header (SEOR-wfleahtg).
   `man/figures/` ships in the tarball, so a package on hold for CRAN adds its
   logo only after the accepted release.
 
@@ -481,9 +481,10 @@ What it checks, section by section:
   config file.
 - **Logo.** `man/figures/logo.svg` and `man/figures/logo.png` exist, and the
   first level-1 heading of `README.Rmd` is `# <pkg>` with an `<img>` whose
-  `src` is `man/figures/logo.png` and whose `alt` is present and empty, not
-  wrapped in a link and not named by `title`, `aria-label`,
-  `aria-labelledby` or `role`. The artwork is not judged.
+  `src` is `man/figures/logo.png` (bare, or inside a link as
+  `usethis::use_logo()` writes it) and whose `alt` is `hex logo, white on
+  black`, with no `aria-label`, `aria-labelledby`, `aria-hidden` or `role`
+  that replaces or hides it. The artwork is not judged.
 - **Files.** The list above. `LICENSE` names Bart Turczynski, `LICENSE.md` is
   the MIT text, `SECURITY.md` and `CODE_OF_CONDUCT.md` name the public email,
   and a `SECURITY.md` under ten non-blank lines counts as a stub.
