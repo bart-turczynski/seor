@@ -1,4 +1,4 @@
-# check-fleet-standard v1
+# check-fleet-standard v2
 """Test fleet packages against design/fleet-standard.md and list each gap.
 
 WHY THIS EXISTS. The nine per-package "meets the fleet standard" issues run
@@ -41,13 +41,21 @@ WHAT IT CHECKS, by section of the standard.
 * Badge images. Every image URL in the row answers 200 with an image whose
   text does not read "unknown", "not found", "invalid", "not set up",
   "inaccessible" or "no releases found".
+* README. README.Rmd has a level-2 `## Installation` section holding an
+  `install.packages()` call with the r-universe repository and, on CRAN,
+  `install.packages("<pkg>")`. No heading outside fenced code and chunks, at
+  any level, is maintainer content (BANNED_HEADING_RE, matched against the
+  whole heading, so "Development version" passes and "Setup (development)"
+  does not). No root `llms.txt`, and no `llm-docs: false` in `_pkgdown.yml`.
 * Files. The list in "Files every package carries", plus: LICENSE names Bart
   Turczynski as holder, LICENSE.md is the full MIT text, SECURITY.md and
   CODE_OF_CONDUCT.md name the public contact, and SECURITY.md is more than a
   stub (fewer than 10 non-blank lines is a stub).
 * DESCRIPTION. Bart Turczynski with roles aut, cre and cph, the ORCID comment
   and the public email; `URL:` in the standard's order (trailing slashes
-  ignored); `Language: en-US`; a declared R floor.
+  ignored); `Language: en-US`; a declared R floor; `X-schema.org-keywords`
+  with at least five tokens besides `r`, `rstats`, `r-stats` and `r-package`,
+  which r-universe drops, and none of those four.
 * .gitlab-ci.yml. R CMD check with `--as-cran` and `error_on = "warning"` on
   every push to main, with CRAN incoming switched off only where ADR 0004
   allows; a coverage job on push with a `coverage:` regex, a cobertura report,
@@ -126,6 +134,14 @@ SECURITY_STUB_LINES = 10
 BAD_BADGE_TEXT = ("unknown", "not found", "invalid", "not set up", "inaccessible", "no releases found")
 LIFECYCLE = {"experimental": "orange", "stable": "brightgreen", "superseded": "blue", "deprecated": "orange"}
 SCHEDULE_KINDS = ("deep-check", "dependency-audit")
+# README headings the standard treats as maintainer content, matched against the whole
+# heading text, lower-cased, with backticks and a trailing parenthetical dropped.
+BANNED_HEADING_RE = re.compile(
+    r"setup|development|verification|(?:project|repository) (?:layout|structure)|current state|status"
+    r"|dependencies|function overview|key functions")
+# Keyword tokens r-universe drops, so they never count and never belong.
+DROPPED_KEYWORDS = frozenset({"r", "rstats", "r-stats", "r-package"})
+MIN_KEYWORDS = 5
 USER_AGENT = "seor-check-fleet-standard"
 
 REQUIRED_FILES = (
@@ -1077,6 +1093,60 @@ def check_images(images: list[str], fetch: Callable[[str], tuple[int, str, bytes
             report.gap("badge images", f"renders {bad[0]!r}: {url}")
 
 
+def readme_headings(text: str) -> list[tuple[int, str, int]]:
+    """(level, title, line index) for each ATX heading outside fenced code and chunks."""
+    out, fence = [], None
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        fm = re.match(r"\s*(`{3,}|~{3,})", line)
+        if fm:
+            mark = fm.group(1)
+            if fence is None:
+                fence = mark
+            elif mark[0] == fence[0] and len(mark) >= len(fence) and not line.strip()[len(mark):].strip():
+                fence = None
+            continue
+        hm = re.match(r"(#{1,6})\s+(.*?)\s*#*\s*$", line)
+        if fence is None and hm:
+            out.append((len(hm.group(1)), hm.group(2), i))
+    return out
+
+
+def heading_key(title: str) -> str:
+    title = re.sub(r"\s*\([^)]*\)\s*$", "", title.replace("`", ""))
+    return re.sub(r"\s+", " ", title).strip().rstrip(":.").lower()
+
+
+def check_readme(pkg: str, source, state: State, report: Report) -> None:
+    text = source.read("README.Rmd")
+    if text is not None:
+        headings = readme_headings(text)
+        for level, title, _ in headings:
+            if BANNED_HEADING_RE.fullmatch(heading_key(title)):
+                report.gap("readme", f"heading {'#' * level} {title} is maintainer content")
+        install = [(n, i) for n, (level, title, i) in enumerate(headings)
+                   if level == 2 and heading_key(title) == "installation"]
+        if not install:
+            report.gap("readme", "no ## Installation section")
+        else:
+            n, start = install[0]
+            end = next((i for level, _, i in headings[n + 1:] if level <= 2), None)
+            section = "\n".join(text.splitlines()[start:end])
+            if f"{OWNER}.r-universe.dev" not in section or "install.packages(" not in section:
+                report.gap("readme", "Installation has no r-universe install.packages() command")
+            if state.on_cran is None:
+                report.skip("readme", "Installation: the CRAN command is not judged (CRAN status unknown)")
+            elif state.on_cran and not re.search(rf"install\.packages\(\s*[\"']{pkg}[\"']\s*\)", section):
+                report.gap("readme", f'Installation has no install.packages("{pkg}") for CRAN')
+    tree = source.tree()
+    if "llms.txt" in tree:
+        report.gap("readme", "a hand-written root llms.txt; the pkgdown site builds it")
+    for path in ("_pkgdown.yml", "pkgdown/_pkgdown.yml"):
+        config = source.read(path) if path in tree else None
+        if config and re.search(r"^llm-docs:\s*(?:false|no)\b", config, re.M | re.I):
+            report.gap("readme", f"{path} sets llm-docs: false")
+
+
 def check_files(source, report: Report) -> None:
     tree = source.tree()
     for path in REQUIRED_FILES:
@@ -1146,6 +1216,16 @@ def check_description(pkg: str, source, state: State, report: Report) -> str | N
         urls = [u for u in urls if "CRAN.R-project.org" not in u]
     if urls != expected:
         report.gap("description", f"URL is {', '.join(urls) or '(empty)'}; the standard's is {', '.join(expected)}")
+    keywords = [k.strip() for k in fields.get("X-schema.org-keywords", "").split(",") if k.strip()]
+    if not keywords:
+        report.gap("description", "no X-schema.org-keywords (r-universe's only keyword source)")
+    else:
+        dropped = [k for k in keywords if k.lower() in DROPPED_KEYWORDS]
+        if dropped:
+            report.gap("description", f"X-schema.org-keywords lists {', '.join(dropped)}, which r-universe drops")
+        if len(keywords) - len(dropped) < MIN_KEYWORDS:
+            report.gap("description", f"X-schema.org-keywords has {len(keywords) - len(dropped)} usable "
+                                      f"token(s); the standard wants at least {MIN_KEYWORDS}")
     if fields.get("Language") != "en-US":
         report.gap("description", f"Language is {fields.get('Language')!r}, not en-US")
     fm = re.search(r"\bR\s*\(\s*>=\s*([\d.]+)\s*\)", fields.get("Depends", ""))
@@ -1292,6 +1372,7 @@ def check_repo(pkg: str, source, state: State,
         report.skip("badge images", "not fetched (--offline)")
     elif images:
         check_images(images, fetch, report)
+    check_readme(pkg, source, state, report)
     check_files(source, report)
     floor = check_description(pkg, source, state, report)
     check_ci(pkg, source, state, floor, report)
@@ -1442,6 +1523,14 @@ stages = list(
 )
 """
 
+def fixture_readme_body(pkg: str, on_cran: bool) -> str:
+    cran = f'install.packages("{pkg}")\n\n' if on_cran else ""
+    return (f"\n{pkg} does one thing well.\n\n## Installation\n\n```r\n{cran}"
+            f'install.packages(\n  "{pkg}",\n  repos = c("https://{OWNER}.r-universe.dev", "https://cloud.r-project.org")\n)\n```\n\n'
+            "Building from source needs a C++17 toolchain.\n\n## Usage\n\n"
+            "```{r}\n# Development\nx <- 1\n```\n\n~~~\n## Setup\n~~~\n\n## Learn more\n\nSee the vignettes.\n")
+
+
 FIXTURE_PRECOMMIT = """\
 repos:
   - repo: local
@@ -1459,11 +1548,14 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
     files = {path: "x\n" for path in REQUIRED_FILES}
     files.update({
         "README.Rmd": "# fixture\n\n<!-- badges: start -->\n<!-- a comment is ignored -->\n"
-                      + fixture_badges(pkg, on_cran, release, doi) + "\n<!-- badges: end -->\n",
+                      + fixture_badges(pkg, on_cran, release, doi) + "\n<!-- badges: end -->\n"
+                      + fixture_readme_body(pkg, on_cran),
         "DESCRIPTION": f"Package: {pkg}\nVersion: 1.0.0\n"
                        f"Authors@R:\n    person(\"Bart\", \"Turczynski\", , \"{CONTACT}\", role = c(\"aut\", \"cre\", \"cph\"),\n"
                        f"           comment = c(ORCID = \"{ORCID}\"))\n"
-                       f"Depends: R (>= 4.1.0)\nURL: {', '.join(urls)}\nLanguage: en-US\n",
+                       f"Depends: R (>= 4.1.0)\nURL: {', '.join(urls)}\nLanguage: en-US\n"
+                       "X-schema.org-keywords: punycode, idna, idn, unicode,\n    domain-names\n",
+        "_pkgdown.yml": "url: https://example.org/\ntemplate:\n  bootstrap: 5\n",
         "LICENSE": "YEAR: 2026\nCOPYRIGHT HOLDER: Bart Turczynski\n",
         "LICENSE.md": "MIT License\n\nPermission is hereby granted, free of charge\n",
         "SECURITY.md": "".join(f"line {i} {CONTACT}\n" for i in range(12)),
@@ -1634,6 +1726,44 @@ def self_test() -> list[str]:
                edit(cran, "DESCRIPTION", "URL: https://bart-turczynski.gitlab.io/punycoder/, https://gitlab.com/bart-turczynski/punycoder",
                     "URL: https://gitlab.com/bart-turczynski/punycoder, https://bart-turczynski.gitlab.io/punycoder/"),
                fixture_state())
+
+    # NEGATIVE: README contents and keywords.
+    expect_gap("no Installation", "no ## Installation section", "punycoder",
+               edit(cran, "README.Rmd", "## Installation", "## Getting it"), fixture_state())
+    expect_gap("Installation at level 3 only", "no ## Installation section", "punycoder",
+               edit(cran, "README.Rmd", "## Installation", "### Installation"), fixture_state())
+    expect_gap("Setup heading", "heading ## Setup (development) is maintainer content", "punycoder",
+               edit(cran, "README.Rmd", "## Learn more", "## Setup (development)"), fixture_state())
+    expect_gap("Project layout at level 3", "heading ### Project layout is maintainer content", "punycoder",
+               edit(cran, "README.Rmd", "See the vignettes.\n", "See the vignettes.\n\n### Project layout\n"),
+               fixture_state())
+    expect_gap("function index", "heading ## Function Overview is maintainer content", "punycoder",
+               edit(cran, "README.Rmd", "## Learn more", "## Function Overview"), fixture_state())
+    report = run("punycoder", edit(cran, "README.Rmd", "## Learn more", "## Development version"), fixture_state())
+    if report.gaps:
+        failures.append(f"a heading that only starts with a banned word is not banned, got {report.gaps}")
+    expect_gap("no r-universe command", "no r-universe install.packages()", "punycoder",
+               edit(cran, "README.Rmd", f'repos = c("https://{OWNER}.r-universe.dev", ', "repos = c("), fixture_state())
+    report = expect_gap("on CRAN, no CRAN command", 'no install.packages("punycoder") for CRAN', "punycoder",
+                        edit(cran, "README.Rmd", 'install.packages("punycoder")\n\n', ""), fixture_state())
+    if any("r-universe" in t for _, t in report.gaps):
+        failures.append(f"on CRAN, no CRAN command: the r-universe command was there, got {report.gaps}")
+    unknown_cran = run("punycoder", edit(cran, "README.Rmd", 'install.packages("punycoder")\n\n', ""),
+                       State(**{**fixture_state().__dict__, "on_cran": None}))
+    if any("for CRAN" in t for _, t in unknown_cran.gaps) or not any("CRAN command" in t for _, t in unknown_cran.unjudged):
+        failures.append("Installation: unknown CRAN status must be not judged, never a gap")
+    expect_gap("root llms.txt", "hand-written root llms.txt", "punycoder", dict(cran, **{"llms.txt": "# x\n"}),
+               fixture_state())
+    expect_gap("llm-docs off", "_pkgdown.yml sets llm-docs: false", "punycoder",
+               dict(cran, **{"_pkgdown.yml": "url: https://example.org/\nllm-docs: false\n"}), fixture_state())
+    expect_gap("no keywords", "no X-schema.org-keywords", "punycoder",
+               edit(cran, "DESCRIPTION", "X-schema.org-keywords:", "X-keywords:"), fixture_state())
+    report = expect_gap("dropped keywords", "lists r, rstats, which r-universe drops", "punycoder",
+                        edit(cran, "DESCRIPTION", "domain-names\n", "domain-names, r, rstats\n"), fixture_state())
+    if any("usable" in t for _, t in report.gaps):
+        failures.append(f"dropped keywords: five usable tokens remain, got {report.gaps}")
+    expect_gap("too few keywords", "has 4 usable token(s)", "punycoder",
+               edit(cran, "DESCRIPTION", "unicode,\n    domain-names\n", "unicode, R-package\n"), fixture_state())
 
     ci = ".gitlab-ci.yml"
     # POSITIVE: coverage named on each schedule by its own rules, the other push jobs not.
