@@ -1,3 +1,5 @@
+# seor (development version)
+
 # seor 0.1.0
 
 * First release. It is not on CRAN: `robotstxtr` and `sitemapr` still
