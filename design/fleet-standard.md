@@ -240,8 +240,9 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   `RSTUDIO_PANDOC`, `PATH` and `~/opt/pandoc`, so a Homebrew upgrade past the
   pin otherwise knits a README that CI then reports as drift.
 
-Bump the version only together with a re-knit of `README.md` and the two
-digests.
+A bump moves together, in one change per repository: `PANDOC_VERSION`, the
+two sha256 digests (amd64, arm64), a re-knit of `README.md`, and, once for
+the fleet, `PANDOC_PIN` in `scripts/check-fleet-standard.py`.
 
 Every pipeline a schedule creates on `main`, `deep-check` and
 `dependency-audit` alike, runs the coverage job too. The coverage badge reads

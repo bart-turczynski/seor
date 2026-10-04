@@ -57,9 +57,12 @@
 #    versions, so README.md is byte-stable only under the pandoc that knit it.
 #    Once Homebrew's pandoc moves past the pin, a local build_readme() knits a
 #    README that CI's readme gate reports as drift, after the push passed.
-#    The pin's record is `PANDOC_VERSION` in .gitlab-ci.yml, the value CI
-#    installs: as with check 1, there is no second place to keep in sync. A
-#    repository whose CI records no pin is not checked here.
+#    This check reads the pin from `PANDOC_VERSION` in .gitlab-ci.yml, the
+#    value CI installs. Unlike check 1's field, it is not the only place the
+#    version lives: a bump also moves the two sha256 digests beside it, a
+#    re-knit of README.md, and the fleet's PANDOC_PIN in
+#    check-fleet-standard.py. A repository whose CI records no pin is not
+#    checked here.
 #
 # WHAT IT DELIBERATELY DOES NOT DO.
 #

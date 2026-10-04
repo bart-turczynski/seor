@@ -158,6 +158,8 @@ COVERAGE_MIN = 95.0
 # SEOR-egfbijyi). Each repository records its own pin once, as PANDOC_VERSION
 # in .gitlab-ci.yml, which its CI installs and its check-toolchain.R reads;
 # this is the standard's value, so a repository that pins another is a gap.
+# A bump moves it together with each repository's PANDOC_VERSION, the two
+# sha256 digests beside it and a re-knit of its README.md.
 PANDOC_PIN = "3.10"
 SECURITY_STUB_LINES = 10
 BAD_BADGE_TEXT = ("unknown", "not found", "invalid", "not set up", "inaccessible", "no releases found")
