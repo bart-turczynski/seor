@@ -232,8 +232,9 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   nothing unverified is installed, and README drift reported after that
   warning is suspect. The download has a time limit (curl `--max-time`,
   wget `--timeout`), so a stalled CDN reaches that warning instead of hanging
-  every R job; seor's also retries (`--retry 3 --retry-delay 5
-  --connect-timeout 20 --max-time 300`).
+  every R job. A limit of 0 means none and does not count. seor's also
+  retries, with the retries bounded too (`--retry 3 --retry-delay 5
+  --retry-max-time 300 --connect-timeout 20 --max-time 120`).
 - Locally, `scripts/check-toolchain.R` reads `PANDOC_VERSION` from
   `.gitlab-ci.yml` and fails the pre-push gate when
   `rmarkdown::pandoc_version()` differs. rmarkdown takes the newest pandoc on
