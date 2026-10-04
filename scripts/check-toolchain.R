@@ -307,7 +307,12 @@ yaml_scalar <- function(raw) {
     }
     return(inner)
   }
-  sub("\\s+#.*$", "", raw, perl = TRUE)
+  value <- sub("\\s+#.*$", "", raw, perl = TRUE)
+  # Unquoted, a decimal is a YAML float: GitLab reads `3.10` as 3.1.
+  if (grepl("^[-+]?[0-9]+\\.[0-9]+$", value)) {
+    value <- as.character(as.numeric(value))
+  }
+  value
 }
 
 # Every distinct PANDOC_VERSION value .gitlab-ci.yml assigns, in any spelling
@@ -528,12 +533,15 @@ self_test <- function() {
     "    - export PANDOC_VERSION='3.10' # pinned",
     "  PANDOC_VERSION: \"3.10\"",
     "  PANDOC_VERSION: '3.10'",
-    "  PANDOC_VERSION: 3.10",
     "  PANDOC_VERSION: \"3.10\"  # the fleet pin",
-    "  PANDOC_VERSION: 3.10 # pinned"
+    "  PANDOC_VERSION: '3.10' # pinned"
   )
   for (line in spellings) {
     expect(paste("pandoc-pin:", line), identical(pinned_pandoc(line), "3.10"))
+  }
+  # Unquoted, YAML reads 3.10 as the float 3.1, and so does this check.
+  for (line in c("  PANDOC_VERSION: 3.10", "  PANDOC_VERSION: 3.10 # pinned")) {
+    expect(paste("pandoc-pin:", line), identical(pinned_pandoc(line), "3.1"))
   }
   expect("pandoc-match", !length(check_pandoc("3.10", "3.10")))
   expect("pandoc-unpinned", !length(check_pandoc(character(), "3.11")))

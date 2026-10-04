@@ -745,14 +745,20 @@ class Job:
 def yaml_scalar(raw: str) -> str:
     """A one-line YAML scalar's value: quotes removed, a trailing `# comment` dropped.
 
-    check-toolchain.R's `yaml_scalar()` reads PANDOC_VERSION the same way, so
-    the two scripts agree on the pin (SEOR-egfbijyi).
+    An unquoted decimal is read as YAML reads it, a float: `3.10` is 3.1 to
+    GitLab's parser as to PyYAML, so an unquoted `PANDOC_VERSION: 3.10` pins
+    3.1 and is reported as such. check-toolchain.R's `yaml_scalar()` reads
+    PANDOC_VERSION the same way, so the two scripts agree on the pin
+    (SEOR-egfbijyi).
     """
     raw = raw.strip()
     quoted = re.match(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'", raw)
     if quoted:
         return unquote(quoted.group(0))
-    return re.sub(r"\s+#.*$", "", raw)
+    value = re.sub(r"\s+#.*$", "", raw)
+    if re.fullmatch(r"[-+]?\d+\.\d+", value):
+        return str(float(value))
+    return value
 
 
 def scalar_map(lines: list[str]) -> dict[str, str]:
@@ -940,8 +946,9 @@ DPKG_INSTALL_RE = re.compile(r"\bdpkg\b.*\s(?:-i|--install)(?=\s)")
 # A download with no time limit hangs on a stalled CDN instead of failing into
 # the warn fallback: curl `--max-time`/`-m`, wget `--timeout`/`--read-timeout`/`-T`.
 DOWNLOAD_BOUND_RE = {
-    "curl": re.compile(r"(?:^|\s)(?:--max-time(?:\s+|=)|-m\s*)\d"),
-    "wget": re.compile(r"(?:^|\s)(?:--(?:read-)?timeout(?:\s+|=)|-T\s*)\d"),
+    # A limit of 0 means none to both tools.
+    "curl": re.compile(r"(?:^|\s)(?:--max-time(?:\s+|=)|-m\s*)0*[1-9]"),
+    "wget": re.compile(r"(?:^|\s)(?:--(?:read-)?timeout(?:\s+|=)|-T\s*)0*[1-9]"),
 }
 PANDOC_LOCAL_RE = re.compile(r"\bpandoc_version\s*\(")
 PANDOC_PIN_READ_RE = re.compile(r"\bPANDOC_VERSION\b")
@@ -2250,6 +2257,8 @@ def self_test() -> list[str]:
     unbounded = "downloads pandoc 3.10 with no time limit"
     expect_gap("pandoc download with no time limit", unbounded, "punycoder",
                edit(cran, ci, "--retry 3 --max-time 300 ", "--retry 3 "), fixture_state())
+    expect_gap("pandoc download with a zero time limit", unbounded, "punycoder",
+               edit(cran, ci, "--retry 3 --max-time 300 ", "--retry 3 --max-time 0 "), fixture_state())
     expect_gap("wget with no time limit", unbounded, "punycoder",
                edit(cran, ci, "curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb ", "wget -q -O /tmp/pandoc.deb "), fixture_state())
     expect_gap("pandoc pin at another version", "pins pandoc 3.9, not the fleet's 3.10", "punycoder",
@@ -2263,11 +2272,16 @@ def self_test() -> list[str]:
                      "export PANDOC_VERSION='3.10' # pinned"):
         expect_clean(f"pandoc pin spelled {spelling!r}", "punycoder",
                      edit(cran, ci, "    - PANDOC_VERSION=3.10\n", f"    - {spelling}\n"), fixture_state())
-    for spelling in ('PANDOC_VERSION: "3.10"', "PANDOC_VERSION: '3.10'", "PANDOC_VERSION: 3.10",
-                     'PANDOC_VERSION: "3.10"  # the fleet pin', "PANDOC_VERSION: 3.10 # pinned"):
+    for spelling in ('PANDOC_VERSION: "3.10"', "PANDOC_VERSION: '3.10'",
+                     'PANDOC_VERSION: "3.10"  # the fleet pin', "PANDOC_VERSION: '3.10' # pinned"):
         expect_clean(f"pandoc pin spelled {spelling!r}", "punycoder",
                      edit(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", ""), ci, "variables:\n",
                           f"variables:\n  {spelling}\n"), fixture_state())
+    # Unquoted, YAML reads 3.10 as the float 3.1: CI would fetch pandoc 3.1.
+    for spelling in ("PANDOC_VERSION: 3.10", "PANDOC_VERSION: 3.10 # pinned"):
+        expect_gap(f"pandoc pin spelled {spelling!r}", "pins pandoc 3.1, not the fleet's 3.10", "punycoder",
+                   edit(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", ""), ci, "variables:\n",
+                        f"variables:\n  {spelling}\n"), fixture_state())
     expect_gap("pandoc version written into the URL", "downloads pandoc at 3.10, not at $PANDOC_VERSION", "punycoder",
                edit(cran, ci, "download/${PANDOC_VERSION}/", "download/3.10/"), fixture_state())
     expect_gap("pandoc version in another variable", "downloads pandoc at ${PV}, not at $PANDOC_VERSION", "punycoder",
