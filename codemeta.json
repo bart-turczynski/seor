@@ -11,7 +11,7 @@
   "codeRepository": "https://gitlab.com/bart-turczynski/seor",
   "issueTracker": "https://gitlab.com/bart-turczynski/seor/-/work_items",
   "license": "https://spdx.org/licenses/MIT",
-  "version": "0.0.0.9000",
+  "version": "0.1.0",
   "programmingLanguage": {
     "@type": "ComputerLanguage",
     "name": "R",
@@ -213,7 +213,7 @@
       ],
       "name": "{seor}: Easily Install and Load the 'seor' SEO and Developer Tools",
       "url": "https://gitlab.com/bart-turczynski/seor",
-      "description": "R package version 0.0.0.9000"
+      "description": "R package version 0.1.0"
     }
   ],
   "releaseNotes": "https://gitlab.com/bart-turczynski/seor/-/blob/main/NEWS.md",

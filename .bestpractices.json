@@ -92,7 +92,7 @@
   "crypto_random_status": "N/A",
   "crypto_random_justification": "seor generates no cryptographic keys or nonces.",
   "version_semver_status": "Met",
-  "version_semver_justification": "DESCRIPTION's Version uses R's x.y.z scheme, with a fourth .9000 component marking development versions (currently 0.0.0.9000).",
+  "version_semver_justification": "DESCRIPTION's Version uses R's x.y.z scheme, with a fourth .9000 component marking development versions (the first release was 0.1.0).",
   "version_tags_status": "Met",
   "version_tags_justification": "No release exists yet. The release process tags every CRAN version in git and publishes a matching GitLab Release (https://gitlab.com/bart-turczynski/seor/-/releases), as SECURITY-INSIGHTS.yml records.",
   "release_notes_vulns_status": "Met",

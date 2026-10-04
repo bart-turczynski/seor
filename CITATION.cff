@@ -9,7 +9,7 @@ type: software
 title: "seor"
 abstract: >-
   The 'seor' suite bundles a set of focused R packages for search engine optimization and web-developer workflows: URL parsing, punycode and internationalized-domain conversion, public suffix list lookups, XML sitemap parsing and PageRank estimation. Loading 'seor' with a single call to library() installs and attaches all of the member packages at once, in the style of the 'tidyverse' metapackage.
-version: 0.0.0.9000
+version: 0.1.0
 authors:
   - family-names: Turczynski
     given-names: Bart

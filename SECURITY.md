@@ -3,8 +3,7 @@
 ## Supported versions
 
 Security fixes are made against the latest released version of `seor` and the
-development version on `main`. Until the first release, only `main` is
-supported. Once there is a release, please upgrade to the most recent one
+development version on `main`. Please upgrade to the most recent release
 before reporting.
 
 | Version                        | Supported          |
