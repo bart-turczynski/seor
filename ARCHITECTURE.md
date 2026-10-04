@@ -33,8 +33,7 @@ dependencies and (2) attach them all on `library(seor)`.
   package-level roxygen block.
 - `man/`, `NAMESPACE` — roxygen2 output. Never edited by hand; regenerate with
   `devtools::document()`.
-- `tests/testthat/` — testthat tests plus the cucumber `.feature` specs, which
-  run inside the normal `R CMD check` pass.
+- `tests/testthat/` — testthat tests, run inside the normal `R CMD check` pass.
 - `vignettes/` — long-form documentation.
 - `inst/` — files that ship inside the installed package (`CITATION`, `WORDLIST`).
 - `design/`, `ARCHITECTURE.md` — durable project context. Kept out of the CRAN

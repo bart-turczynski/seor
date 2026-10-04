@@ -79,7 +79,7 @@ been pending for more than 20 minutes, it opens a `stuck-runner` issue in
    a whole pipeline.
 4. Close the `stuck-runner` issue. No new alert opens while one is open.
 
-See the project README for the source, behavior-specification, and test layout.
+See the project README for the source and test layout.
 Durable project context lives in `ARCHITECTURE.md` and `design/`.
 
 Keep local-only planning state in `_scratch/`. Do not commit `_scratch/`, `.fp/`, secrets, dependency folders, build outputs, or generated caches.

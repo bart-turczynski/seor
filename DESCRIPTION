@@ -30,7 +30,6 @@ Imports:
     sitemapr,
     utils
 Suggests:
-    cucumber (>= 2.0.0),
     knitr,
     oysteR,
     rmarkdown,

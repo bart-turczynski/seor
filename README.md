@@ -92,8 +92,7 @@ Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
 Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'res <- rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false")); if (!identical(as.integer(res$status), 0L)) stop("R CMD check exited with status ", res$status, "; the run did not complete.", call. = FALSE)'
 ```
 
-`R CMD check` runs the testthat and cucumber specs, so the behavior
-specs are verified as part of the check.
+`R CMD check` runs the testthat suite as part of the check.
 
 The `env =` argument disables only the CRAN incoming-feasibility step.
 seor is a metapackage with members that are not yet on CRAN, so that
@@ -109,8 +108,7 @@ runs. Re-enable it for the first CRAN submission.
   `devtools::document()`).
 - `NAMESPACE` and `man/` are roxygen2-generated — edit the roxygen
   comments in `R/`, not these.
-- `tests/testthat/` contains testthat tests and the cucumber feature
-  specs.
+- `tests/testthat/` contains the testthat tests.
 - `vignettes/` contains long-form documentation.
 - `_pkgdown.yml` configures the generated package website in `site/`.
 - `DESCRIPTION` declares package metadata and dependencies.
