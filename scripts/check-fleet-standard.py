@@ -1178,7 +1178,9 @@ def check_logo(pkg: str, source, report: Report) -> None:
     if text is None:
         return
     title = next((title for level, title, _ in readme_headings(text) if level == 1), None)
-    header = rf'{re.escape(pkg)}\s+<img\s[^>]*\bsrc="man/figures/logo\.png"[^>]*>'
+    # The bare <img>, or the link-wrapped one usethis::use_logo() writes.
+    img = r"<img\s(?:[^>]*\s)?src=(?:\"man/figures/logo\.png\"|'man/figures/logo\.png'|man/figures/logo\.png(?=[\s/>]))[^>]*>"
+    header = rf"{re.escape(pkg)}\s+(?:{img}|<a\s[^>]*>\s*{img}\s*</a>)"
     if title is None or not re.fullmatch(header, title):
         report.gap("logo", f'README.Rmd: the first heading is not "# {pkg}" with the man/figures/logo.png <img>')
 
@@ -1833,6 +1835,20 @@ def self_test() -> list[str]:
                edit(cran, "README.Rmd", 'src="man/figures/logo.png"', 'src="logo.png"'), fixture_state())
     expect_gap("logo under another package's name", "the first heading is not", "punycoder",
                edit(cran, "README.Rmd", "# punycoder <img", "# fixture <img"), fixture_state())
+    expect_gap("logo path only in data-src", "the first heading is not", "punycoder",
+               edit(cran, "README.Rmd", 'src="man/figures/logo.png"', 'src="logo.png" data-src="man/figures/logo.png"'),
+               fixture_state())
+    no_svg = dict(cran)
+    del no_svg["man/figures/logo.svg"]
+    expect_gap("no logo.svg", "missing man/figures/logo.svg", "punycoder", no_svg, fixture_state())
+    expect_gap("no level-1 heading", "the first heading is not", "punycoder",
+               edit(cran, "README.Rmd", fixture_h1("punycoder") + "\n", ""), fixture_state())
+    expect_clean("single-quoted logo src", "punycoder",
+                 edit(cran, "README.Rmd", 'src="man/figures/logo.png"', "src='man/figures/logo.png'"), fixture_state())
+    expect_clean("the use_logo() link-wrapped heading", "punycoder",
+                 edit(cran, "README.Rmd", fixture_h1("punycoder"),
+                      '# punycoder <a href="https://bart-turczynski.gitlab.io/punycoder/"><img src="man/figures/logo.png" '
+                      'align="right" height="138" alt="punycoder website" /></a>'), fixture_state())
 
     ci = ".gitlab-ci.yml"
     # POSITIVE: coverage named on each schedule by its own rules, the other push jobs not.
