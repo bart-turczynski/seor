@@ -523,7 +523,7 @@ floor-check:
       Rscript -e 'snap <- Sys.getenv("FLOOR_SNAPSHOT"); univ <- Sys.getenv("FLOOR_UNIVERSE");
       install.packages(c("punycoder", "rurl"), repos = c(univ, snap), Ncpus = 4L);
       install.packages(c("pagerankr", "pslr", "raddr",
-      "testthat", "cucumber", "knitr", "rmarkdown", "rcmdcheck"),
+      "testthat", "knitr", "rmarkdown", "rcmdcheck"),
       repos = snap, Ncpus = 4L);
       install.packages("sitemapr", repos = c(univ, snap), Ncpus = 4L);
       need <- c("pagerankr", "pslr", "punycoder", "raddr", "rurl", "sitemapr", "testthat", "rcmdcheck");
