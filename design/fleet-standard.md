@@ -209,6 +209,34 @@ Every push to `main` runs:
 - The cheap gates: README drift (`README.md` matches a fresh knit of
   `README.Rmd`), news-version, citation-version, lint and spelling.
 
+**pandoc 3.10, pinned in the shared R setup.** pandoc's markdown writer
+reflows text and pads tables differently between versions, so `README.md` is
+byte-stable only under the pandoc that knit it, and the README drift gate is
+only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
+3.1.3; it reported drift in seor's README that 3.10 does not write.
+
+- Every job that runs R installs pandoc 3.10 in the setup they share: the
+  `before_script` of the template every R job extends, or `default:`. One job
+  pinning it for the readme gate is not enough: `check`, `coverage` and
+  `pages` render with it too. seor's `.r` template is the model.
+- The version is recorded once, as the `PANDOC_VERSION` CI variable.
+- The `.deb` comes from the pandoc GitHub release
+  (`https://github.com/jgm/pandoc/releases/download/<version>/pandoc-<version>-1-<arch>.deb`),
+  and `sha256sum -c` checks it against the release's published digest before
+  `dpkg -i` installs it over apt's `pandoc`. A failed or mismatched download
+  may warn and leave apt's pandoc in place, so every gate still runs and
+  reports ([ADR 0005](adr/0005-cheap-ci-jobs-fold-into-one-gates-job.md)), but
+  nothing unverified is installed, and README drift reported after that
+  warning is suspect.
+- Locally, `scripts/check-toolchain.R` reads `PANDOC_VERSION` from
+  `.gitlab-ci.yml` and fails the pre-push gate when
+  `rmarkdown::pandoc_version()` differs. rmarkdown takes the newest pandoc on
+  `RSTUDIO_PANDOC`, `PATH` and `~/opt/pandoc`, so a Homebrew upgrade past the
+  pin otherwise knits a README that CI then reports as drift.
+
+Bump the version only together with a re-knit of `README.md` and the two
+digests.
+
 Every pipeline a schedule creates on `main`, `deep-check` and
 `dependency-audit` alike, runs the coverage job too. The coverage badge reads
 the latest successful pipeline on `main`, so a green schedule pipeline without
@@ -290,6 +318,9 @@ Added by this standard: a URL check shaped like sitemapr's `urls` stage in
 dead one, because `--as-cran` reports a dead link only as a NOTE. It fails when
 it checked zero URLs, and the only exemption is the `BugReports:` `/-/issues`
 URL answering exactly 404 (SEOR-ocbtrrnl).
+
+Also added: `check-toolchain`'s pandoc check, which compares the local pandoc
+with the CI pin (see the pandoc rule under "CI on every push to `main`").
 
 ## Files every package carries
 
@@ -429,11 +460,15 @@ What it checks, section by section:
   `deep-check` schedule alone it wants release, oldrel, devel and floor legs,
   read from image tags, plus sanitizer legs where required. The audits run on the `dependency-audit` schedule alone, with
   seor's disposition-row test files, and `fossa analyze` runs where FOSSA is
-  allocated. A job's commands are read as text, along with the R, shell and
-  YAML scripts it names, so a script that skips a gate it contains reads as
-  running it.
+  allocated. Every job that runs R on a push downloads pandoc from its GitHub
+  release at version 3.10 (`PANDOC_VERSION` expanded through `variables:` or
+  a shell assignment) and checks it with `sha256sum -c`; a
+  `default: before_script` counts for each job that inherits it. A job's
+  commands are read as text, along with the R, shell and YAML scripts it
+  names, so a script that skips a gate it contains reads as running it.
 - **Local gate.** The pre-commit config, or an R or shell script its hooks
-  call, runs a URL check.
+  call, runs a URL check and calls `rmarkdown::pandoc_version()`, the
+  pandoc check.
 - **Schedules.** One active `deep-check` and one `dependency-audit` schedule,
   on `main`, with `SCHEDULE_KIND` set on each schedule.
 
