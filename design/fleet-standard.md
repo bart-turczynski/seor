@@ -152,7 +152,7 @@ raddr's `llms.txt` carried its Setup and Verification sections on 2026-10-04.
 1. The heading with the logo (see r-universe, below), in this form:
 
    ```markdown
-   # <pkg> <img src="man/figures/logo.png" align="right" height="139" />
+   # <pkg> <img src="man/figures/logo.png" align="right" height="139" alt="<pkg> hex logo, white on black" />
    ```
 
 2. The badge row (above).
@@ -391,6 +391,9 @@ under the owner `gitlab-bart-turczynski`. Researched 2026-10-04
   r-universe shows the logo on the package card and in search, and pkgdown
   puts it in the site header; both find it there. The source artwork, with
   `logo-480.png` and `logo-print.svg`, stays outside the repositories.
+  The README heading's `<img>` carries the alt text `<pkg> hex logo, white
+  on black`, so a screen reader names the package and the look
+  (SEOR-wfleahtg).
   `man/figures/` ships in the tarball, so a package on hold for CRAN adds its
   logo only after the accepted release.
 
@@ -451,7 +454,8 @@ What it checks, section by section:
   config file.
 - **Logo.** `man/figures/logo.svg` and `man/figures/logo.png` exist, and the
   first level-1 heading of `README.Rmd` is `# <pkg>` with an `<img>` whose
-  `src` is `man/figures/logo.png`. The artwork is not judged.
+  `src` is `man/figures/logo.png` and whose `alt` is `<pkg> hex logo, white
+  on black`, with the package's own name. The artwork is not judged.
 - **Files.** The list above. `LICENSE` names Bart Turczynski, `LICENSE.md` is
   the MIT text, `SECURITY.md` and `CODE_OF_CONDUCT.md` name the public email,
   and a `SECURITY.md` under ten non-blank lines counts as a stub.
