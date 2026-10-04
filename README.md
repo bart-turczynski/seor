@@ -61,9 +61,9 @@ in `DESCRIPTION`, so the members not yet on CRAN are fetched too:
 pak::pak("gitlab::bart-turczynski/seor")
 ```
 
-Some members compile C or C++ code from source. punycoder uses `libidn2`
-when it is present at build time, and robotstxtr needs a C++17
-toolchain.
+Some members compile C or C++ code from source. `punycoder` uses
+`libidn2` when it is present at build time, and `robotstxtr` needs a
+C++17 compiler.
 
 ## Usage
 
