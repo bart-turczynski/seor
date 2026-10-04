@@ -149,10 +149,16 @@ raddr's `llms.txt` carried its Setup and Verification sections on 2026-10-04.
 
 `README.Rmd` carries, in this order:
 
-1. The badge row (above).
-2. A short what and why: what the package does and who it is for, in a
+1. The heading with the logo (see r-universe, below), in this form:
+
+   ```markdown
+   # <pkg> <img src="man/figures/logo.png" align="right" height="139" />
+   ```
+
+2. The badge row (above).
+3. A short what and why: what the package does and who it is for, in a
    paragraph or two.
-3. `## Installation`, with copy-paste commands:
+4. `## Installation`, with copy-paste commands:
    - `install.packages("<pkg>")` once the package is on CRAN;
    - the r-universe command, always:
 
@@ -165,8 +171,8 @@ raddr's `llms.txt` carried its Setup and Verification sections on 2026-10-04.
 
    - the system requirements a source install needs, such as libidn2 for
      punycoder's native backend or a C++17 toolchain for robotstxtr.
-4. A small example.
-5. Links to the vignettes or the pkgdown site.
+5. A small example.
+6. Links to the vignettes or the pkgdown site.
 
 Other user-facing sections (how it compares, citation, code of conduct,
 license) may follow. A section repeating the reference index, such as a table
@@ -340,7 +346,14 @@ under the owner `gitlab-bart-turczynski`. Researched 2026-10-04
   listed. Writing R Extensions §1.1.1 allows extra `DESCRIPTION` fields, and
   the CRAN copies of rurl, punycoder, pslr and raddr already carry this one.
   An edit reaches CRAN only with that package's next release.
-- **Logo.** Waits on the owner's decision in SEOR-wxjuxbtu. No rule until then.
+- **Logo.** One fleet look, chosen by the owner on 2026-10-04
+  (SEOR-wxjuxbtu): a black hex with the package name set in IBM Plex Mono.
+  Each package carries `man/figures/logo.svg` and `man/figures/logo.png`.
+  r-universe shows the logo on the package card and in search, and pkgdown
+  puts it in the site header; both find it there. The source artwork, with
+  `logo-480.png` and `logo-print.svg`, stays outside the repositories.
+  `man/figures/` ships in the tarball, so a package on hold for CRAN adds its
+  logo only after the accepted release.
 
 ## Identities
 
@@ -397,6 +410,9 @@ What it checks, section by section:
   `install.packages("<pkg>")`. No heading outside code chunks is one of the
   banned ones. No root `llms.txt`, and `llm-docs` is not off in any pkgdown
   config file.
+- **Logo.** `man/figures/logo.svg` and `man/figures/logo.png` exist, and the
+  first level-1 heading of `README.Rmd` is `# <pkg>` with an `<img>` whose
+  `src` is `man/figures/logo.png`. The artwork is not judged.
 - **Files.** The list above. `LICENSE` names Bart Turczynski, `LICENSE.md` is
   the MIT text, `SECURITY.md` and `CODE_OF_CONDUCT.md` name the public email,
   and a `SECURITY.md` under ten non-blank lines counts as a stub.

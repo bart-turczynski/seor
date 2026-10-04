@@ -1,4 +1,4 @@
-# check-fleet-standard v2
+# check-fleet-standard v3
 """Test fleet packages against design/fleet-standard.md and list each gap.
 
 WHY THIS EXISTS. The nine per-package "meets the fleet standard" issues run
@@ -47,6 +47,9 @@ WHAT IT CHECKS, by section of the standard.
   any level, is maintainer content (BANNED_HEADING_RE, matched against the
   whole heading, so "Development version" passes and "Setup (development)"
   does not). No root `llms.txt`, and `llm-docs` not off in any pkgdown config.
+* Logo. `man/figures/logo.svg` and `man/figures/logo.png` are in the tree, and
+  README.Rmd's first level-1 heading is `# <pkg>` followed by an `<img>` whose
+  `src` is `man/figures/logo.png`. The artwork itself is not judged.
 * Files. The list in "Files every package carries", plus: LICENSE names Bart
   Turczynski as holder, LICENSE.md is the full MIT text, SECURITY.md and
   CODE_OF_CONDUCT.md name the public contact, and SECURITY.md is more than a
@@ -1162,6 +1165,26 @@ def check_readme(pkg: str, source, state: State, report: Report) -> None:
             report.gap("readme", f"{path} sets llm-docs off")
 
 
+# What r-universe and pkgdown look for, and the README header that shows it.
+LOGO_FILES = ("man/figures/logo.svg", "man/figures/logo.png")
+
+
+def check_logo(pkg: str, source, report: Report) -> None:
+    tree = source.tree()
+    for path in LOGO_FILES:
+        if path not in tree:
+            report.gap("logo", f"missing {path}")
+    text = source.read("README.Rmd")
+    if text is None:
+        return
+    title = next((title for level, title, _ in readme_headings(text) if level == 1), None)
+    # The bare <img>, or the link-wrapped one usethis::use_logo() writes.
+    img = r"<img\s(?:[^>]*\s)?src=(?:\"man/figures/logo\.png\"|'man/figures/logo\.png'|man/figures/logo\.png(?=[\s/>]))[^>]*>"
+    header = rf"{re.escape(pkg)}\s+(?:{img}|<a\s[^>]*>\s*{img}\s*</a>)"
+    if title is None or not re.fullmatch(header, title):
+        report.gap("logo", f'README.Rmd: the first heading is not "# {pkg}" with the man/figures/logo.png <img>')
+
+
 def check_files(source, report: Report) -> None:
     tree = source.tree()
     for path in REQUIRED_FILES:
@@ -1389,6 +1412,7 @@ def check_repo(pkg: str, source, state: State,
     elif images:
         check_images(images, fetch, report)
     check_readme(pkg, source, state, report)
+    check_logo(pkg, source, report)
     check_files(source, report)
     floor = check_description(pkg, source, state, report)
     check_ci(pkg, source, state, floor, report)
@@ -1539,6 +1563,10 @@ stages = list(
 )
 """
 
+def fixture_h1(pkg: str) -> str:
+    return f'# {pkg} <img src="man/figures/logo.png" align="right" height="139" />'
+
+
 def fixture_readme_body(pkg: str, on_cran: bool) -> str:
     cran = f'install.packages("{pkg}")\n\n' if on_cran else ""
     return (f"\n{pkg} does one thing well.\n\n## Installation\n\n```r\n{cran}"
@@ -1563,7 +1591,7 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
             f"https://{OWNER}.r-universe.dev/{pkg}"] + ([f"https://CRAN.R-project.org/package={pkg}"] if on_cran else [])
     files = {path: "x\n" for path in REQUIRED_FILES}
     files.update({
-        "README.Rmd": "# fixture\n\n<!-- badges: start -->\n<!-- a comment is ignored -->\n"
+        "README.Rmd": fixture_h1(pkg) + "\n\n<!-- badges: start -->\n<!-- a comment is ignored -->\n"
                       + fixture_badges(pkg, on_cran, release, doi) + "\n<!-- badges: end -->\n"
                       + fixture_readme_body(pkg, on_cran),
         "DESCRIPTION": f"Package: {pkg}\nVersion: 1.0.0\n"
@@ -1585,6 +1613,7 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
         ".gitlab/issue_templates/Bug.md": "x\n",
         ".gitlab/merge_request_templates/Default.md": "x\n",
     })
+    files.update({path: "x\n" for path in LOGO_FILES})
     files.update({path: "x\n" for path in AUDIT_TEST_FILES})
     return files
 
@@ -1783,7 +1812,8 @@ def self_test() -> list[str]:
     expect_gap("indented heading after inline triple backticks", "heading ## Verification is maintainer content",
                "punycoder", edit(cran, "README.Rmd", "See the vignettes.\n",
                                  "See ```x``` inline.\n\n   ## Verification\n"), fixture_state())
-    hidden = edit(cran, "README.Rmd", "# fixture\n", "---\noutput: github_document\n# Setup: knit it\n---\n\n# fixture\n")
+    hidden = edit(cran, "README.Rmd", fixture_h1("punycoder") + "\n",
+                  "---\noutput: github_document\n# Setup: knit it\n---\n\n" + fixture_h1("punycoder") + "\n")
     hidden = edit(hidden, "README.Rmd", "See the vignettes.\n", "See the vignettes.\n\n<!--\n## Development\n-->\n")
     expect_clean("headings in front matter and comments do not render", "punycoder", hidden, fixture_state())
     expect_gap("no keywords", "no X-schema.org-keywords", "punycoder",
@@ -1794,6 +1824,31 @@ def self_test() -> list[str]:
         failures.append(f"dropped keywords: five usable tokens remain, got {report.gaps}")
     expect_gap("too few keywords", "has 4 distinct usable token(s)", "punycoder",
                edit(cran, "DESCRIPTION", "unicode,\n    domain-names\n", "unicode, R-package\n"), fixture_state())
+
+    # NEGATIVE: logo.
+    no_png = dict(cran)
+    del no_png["man/figures/logo.png"]
+    expect_gap("no logo.png", "missing man/figures/logo.png", "punycoder", no_png, fixture_state())
+    plain_h1 = edit(cran, "README.Rmd", fixture_h1("punycoder"), "# punycoder")
+    expect_gap("heading without the logo", "the first heading is not", "punycoder", plain_h1, fixture_state())
+    expect_gap("logo from another path", "the first heading is not", "punycoder",
+               edit(cran, "README.Rmd", 'src="man/figures/logo.png"', 'src="logo.png"'), fixture_state())
+    expect_gap("logo under another package's name", "the first heading is not", "punycoder",
+               edit(cran, "README.Rmd", "# punycoder <img", "# fixture <img"), fixture_state())
+    expect_gap("logo path only in data-src", "the first heading is not", "punycoder",
+               edit(cran, "README.Rmd", 'src="man/figures/logo.png"', 'src="logo.png" data-src="man/figures/logo.png"'),
+               fixture_state())
+    no_svg = dict(cran)
+    del no_svg["man/figures/logo.svg"]
+    expect_gap("no logo.svg", "missing man/figures/logo.svg", "punycoder", no_svg, fixture_state())
+    expect_gap("no level-1 heading", "the first heading is not", "punycoder",
+               edit(cran, "README.Rmd", fixture_h1("punycoder") + "\n", ""), fixture_state())
+    expect_clean("single-quoted logo src", "punycoder",
+                 edit(cran, "README.Rmd", 'src="man/figures/logo.png"', "src='man/figures/logo.png'"), fixture_state())
+    expect_clean("the use_logo() link-wrapped heading", "punycoder",
+                 edit(cran, "README.Rmd", fixture_h1("punycoder"),
+                      '# punycoder <a href="https://bart-turczynski.gitlab.io/punycoder/"><img src="man/figures/logo.png" '
+                      'align="right" height="138" alt="punycoder website" /></a>'), fixture_state())
 
     ci = ".gitlab-ci.yml"
     # POSITIVE: coverage named on each schedule by its own rules, the other push jobs not.
