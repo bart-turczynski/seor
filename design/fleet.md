@@ -203,8 +203,9 @@ Schedules live in each project's settings (Build > Pipeline schedules), not in
 
 A schedule pipeline on `main` also runs every job that runs on a push to `main`
 (check, coverage, gates or verify, pages), because their rules admit any
-pipeline on the default branch. So a schedule costs its own jobs plus one main
-pipeline.
+pipeline on the default branch. The one exception is `fossa` (rurl, seor,
+ssrfr), whose rule admits pushes only. So a schedule costs its own jobs plus
+one main pipeline.
 
 ### The schedule table
 
@@ -217,44 +218,42 @@ the minute does not. "Runner time" is the sum of job durations for one run:
 busy time on the Mac's runners. It is not GitLab compute minutes, which
 self-hosted project runners don't draw on.
 
-| repo       | kind             | jobs it adds to the main pipeline      | cron          | starts    | id       | runner time |
-|------------|------------------|----------------------------------------|---------------|-----------|----------|-------------|
-| pagerankr  | rurl-devel       | rurl-devel                             | Mon 05:00 UTC | Mon 07:00 | 4466631  | ~10 min     |
-| punycoder  | dependency-audit | osv-audit, security-audit              | Mon 10:17     | Mon 11:00 | 4427280  | ~7 min      |
-| ssrfr      | deep-check       | full-check (4.4.3, 4.5.1), renovate    | Mon 12:00     | Mon 12:00 | 4459714  | ~33 min     |
-| punycoder  | deep-check       | full-check (3 legs), sanitizers        | Mon 21:00     | Mon 21:00 | 4466444  | ~16 min     |
-| raddr      | deep-check       | check:linux-devel (also on every push) | Tue 21:00     | Tue 21:00 | 4467064  | ~6 min      |
-| rurl       | dependency-audit | osv-audit, security-audit              | Tue 10:17     | Tue 11:00 | 4467472  | ~11 min     |
-| robotstxtr | dependency-audit | osv-audit, security-audit              | Tue 11:17     | Tue 12:00 | 4467473  | ~10 min     |
-| sitemapr   | dependency-audit | osv-audit, security-audit              | Wed 10:17     | Wed 11:00 | 4467474  | ~8 min      |
-| pagerankr  | dependency-audit | osv-audit, security-audit              | Wed 11:17     | Wed 12:00 | 4467475  | ~12 min     |
-| pagerankr  | deep-check       | check-oldrel                           | Wed 21:00     | Wed 21:00 | 4467476  | ~11 min     |
-| pslr       | dependency-audit | osv-audit, security-audit only         | Thu 10:17     | Thu 11:00 | 4467477  | 2 min       |
-| seor       | dependency-audit | osv-audit, security-audit              | Thu 11:17     | Thu 12:00 | 4467483  | 19 min      |
-| seor       | deep-check       | full-check (3 legs), floor-check       | Thu 21:00     | Thu 21:00 | 4467484  | pending     |
-| robotstxtr | deep-check       | none yet (SEOR-thlzqzac adds the legs) | Mon 22:00     | Mon 22:00 | 4472810  | pending     |
-| sitemapr   | deep-check       | none yet (SEOR-dunwqfkj adds the legs) | Tue 22:00     | Tue 22:00 | 4472811  | pending     |
-| pslr       | deep-check       | none: workflow refuses (SEOR-twxjxogh) | Wed 22:00     | Wed 22:00 | 4472812  | pending     |
-| raddr      | dependency-audit | none yet (SEOR-lavybtkr adds the jobs) | Fri 10:17     | Fri 11:00 | 4472813  | pending     |
-| ssrfr      | dependency-audit | none yet (SEOR-rcpzfhgx adds the jobs) | Fri 11:17     | Fri 12:00 | 4472814  | pending     |
-| rurl       | deep-check       | none yet (SEOR-nxycpzlk adds the legs) | Fri 21:00     | Fri 21:00 | 4472809  | pending     |
+| repo       | kind             | jobs it adds to the main pipeline            | cron          | starts    | id      | runner time |
+|------------|------------------|----------------------------------------------|---------------|-----------|---------|-------------|
+| pagerankr  | rurl-devel       | rurl-devel                                   | Mon 05:00 UTC | Mon 07:00 | 4466631 | 11 min      |
+| punycoder  | dependency-audit | osv-audit, security-audit                    | Mon 10:17     | Mon 11:00 | 4427280 | 6 min       |
+| ssrfr      | deep-check       | full-check (3 legs), floor-check, renovate   | Mon 12:00     | Mon 12:00 | 4459714 | pending     |
+| punycoder  | deep-check       | full-check (3 legs), floor-check, sanitizers | Mon 21:00     | Mon 21:00 | 4466444 | 26 min      |
+| raddr      | deep-check       | deep-check: release, oldrel, devel, floor    | Tue 21:00     | Tue 21:00 | 4467064 | 17 min      |
+| rurl       | dependency-audit | osv-audit, security-audit                    | Tue 10:17     | Tue 11:00 | 4467472 | 19 min      |
+| robotstxtr | dependency-audit | osv-audit, security-audit                    | Tue 11:17     | Tue 12:00 | 4467473 | 11 min      |
+| sitemapr   | dependency-audit | osv-audit, security-audit                    | Wed 10:17     | Wed 11:00 | 4467474 | 9 min       |
+| pagerankr  | dependency-audit | osv-audit, security-audit                    | Wed 11:17     | Wed 12:00 | 4467475 | 9 min       |
+| pagerankr  | deep-check       | full-check (3 legs), floor-check             | Wed 21:00     | Wed 21:00 | 4467476 | 18 min      |
+| pslr       | dependency-audit | osv-audit, security-audit                    | Thu 10:17     | Thu 11:00 | 4467477 | 13 min      |
+| seor       | dependency-audit | osv-audit, security-audit                    | Thu 11:17     | Thu 12:00 | 4467483 | 33 min      |
+| seor       | deep-check       | full-check (3 legs), floor-check             | Thu 21:00     | Thu 21:00 | 4467484 | pending     |
+| robotstxtr | deep-check       | full-check (3 legs), floor-check, sanitizers | Mon 22:00     | Mon 22:00 | 4472810 | 35 min      |
+| sitemapr   | deep-check       | deep-check (3 legs), floor-check             | Tue 22:00     | Tue 22:00 | 4472811 | 31 min      |
+| pslr       | deep-check       | full-check (4 legs), sanitizers              | Wed 22:00     | Wed 22:00 | 4472812 | 29 min      |
+| raddr      | dependency-audit | osv-audit, security-audit                    | Fri 10:17     | Fri 11:00 | 4472813 | 5 min       |
+| ssrfr      | dependency-audit | osv-audit, security-audit                    | Fri 11:17     | Fri 12:00 | 4472814 | 17 min      |
+| rurl       | deep-check       | full-check (3 legs), floor-check             | Fri 21:00     | Fri 21:00 | 4472809 | 37 min      |
 
 All nineteen are active. The eight from rurl's audit to seor's deep check were
 created 2026-09-30. The last six were created through the API on 2026-10-03
-for the fleet standard (SEOR-tahlljtx). Until each repository's fleet-standard
-issue adds its scheduled jobs, those six run only the main-pipeline jobs, and
-pslr's creates no pipeline at all. Their runner time is measured at the first
-green run after that.
-Rows without a `~` are a first run's measurement: pslr's audit (pipeline
-2900446410) and seor's audit (2900664488), both on 2026-10-01 and both green
-with only the intended jobs. seor's deep check measured 18 min on its old two
-legs (2902727359); SEOR-kqcbgsfc replaced them with release, oldrel, devel and
-floor legs, so its row waits for the first run of those. seor's two audits
-took about 6 minutes each against the 100 s estimate, building their
-dependencies from source on a cold cache; a warm cache should shorten them.
+for the fleet standard (SEOR-tahlljtx), whose run that day and the next gave
+every repository its deep-check and dependency-audit jobs.
+Each runner time includes the push-to-`main` jobs the schedule also runs, not
+only the jobs in the third column. A `~` marks an estimate. Every row is now
+either a measurement (method below) or "pending": a schedule with no green run
+of its current jobs yet, measured at its first one. seor's deep check had a
+green pipeline (2909772809), but its floor-check failed there under
+`allow_failure`, before affb75d fixed that job, so the row waits. seor's
+audit jobs take 5 to 6 minutes each, building their dependencies from source.
 
-Total: about 2.8 runner-hours a week (about 12 a month) for the first
-thirteen; the five schedules that predate 2026-09-30 are about 71 min of that. The host runs
+Total: about 5.4 runner-hours a week (about 23 a month) for the seventeen
+measured rows; the two pending rows add to it. The host runs
 `concurrent = 4`, so this is a small share of its week; the constraint is when
 it is awake, not capacity.
 
@@ -266,19 +265,21 @@ against each other on the same host. The rounding once put punycoder's 10:17
 audit and ssrfr's 10:43 deep check in the same Mon 11:00 slot; ssrfr's moved
 to Mon 12:00 on 2026-09-30 (owner approved).
 
-**How the estimates were made** (2026-09-30, medians of each project's last
-100 successful jobs). Measured: every main-pipeline job, punycoder's audits
-(57 s, 60 s) and deep checks, ssrfr's full-check (486 s a leg), raddr's
-`check:linux-devel` (190 s), pagerankr's `check-oldrel` (130 s) and
-`rurl-devel` (120 s), and pslr's audits (100 s, 90 s). Estimated, with no run
-on record: the audits elsewhere at 100 s each (pslr's figure), and seor's
-full-check at about 200 s a leg (seor's `verify` job, which runs the same
-`R CMD check`, takes 195 s). Each new schedule's first run replaces its estimate
-with a measurement; update the row then.
+**How the runner times were measured** (2026-10-04, read-only through the
+GitLab API). For each schedule, take its `last_pipeline`; if that is not green,
+take the newest green schedule pipeline on `main` whose jobs include the
+schedule's own. Sum `duration` over that pipeline's jobs, leaving out manual and
+skipped ones. None of the pipelines used had a retried job. All are from
+2026-10-03 except pagerankr's `rurl-devel` (2026-09-30), whose push-to-`main`
+jobs have not changed since. These replace the 2026-09-30 estimates, which were
+medians of each project's last 100 successful jobs. Re-measure a row when its
+repository changes its scheduled or push-to-`main` jobs.
 
 **Kept for now (owner, 2026-09-30).** About two-thirds of a new schedule's
 runner time is the main pipeline rerunning on a commit that already passed.
 Adding `$CI_PIPELINE_SOURCE != "schedule"` to each repository's on-main rules
 would cut the week to about an hour, but a scheduled run would no longer
 re-check `main` against moved dependencies. That re-check is useful for the
-audits and deep checks, and it's why the rows above keep it.
+audits and deep checks, and it's why the rows above keep it. The 2026-10-04
+measurements put the rerun at about half, not two-thirds: the seventeen
+measured rows' own jobs are about 2.7 of their 5.4 runner-hours.
