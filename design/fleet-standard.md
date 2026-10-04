@@ -230,7 +230,10 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   may warn and leave apt's pandoc in place, so every gate still runs and
   reports ([ADR 0005](adr/0005-cheap-ci-jobs-fold-into-one-gates-job.md)), but
   nothing unverified is installed, and README drift reported after that
-  warning is suspect.
+  warning is suspect. The download has a time limit (curl `--max-time`,
+  wget `--timeout`), so a stalled CDN reaches that warning instead of hanging
+  every R job; seor's also retries (`--retry 3 --retry-delay 5
+  --connect-timeout 20 --max-time 300`).
 - Locally, `scripts/check-toolchain.R` reads `PANDOC_VERSION` from
   `.gitlab-ci.yml` and fails the pre-push gate when
   `rmarkdown::pandoc_version()` differs. rmarkdown takes the newest pandoc on
@@ -470,7 +473,8 @@ What it checks, section by section:
   the `.deb` to a file with curl or wget, a `sha256sum -c` (or
   `shasum -a 256 -c`) names that file, and a later `dpkg -i` installs that
   same file; a checksum of some other download, or a checked `.deb` never
-  installed, does not count. The install counts only in the `before_script` or
+  installed, does not count, and neither does a download with no time
+  limit. The install counts only in the `before_script` or
   `script` the job ends up with, its own or its template's; one only in
   `default: before_script` is reported, to move into the template. A job's
   commands are read as text, along with the R, shell and YAML scripts it

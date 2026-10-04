@@ -229,7 +229,9 @@ default:
     # 2026-10-04). A failed or mismatched download only warns and leaves the
     # apt pandoc in place: per ADR 0005 every gate still runs and reports, so
     # README drift `gates` reports after that warning is suspect. Nothing
-    # unverified is ever installed.
+    # unverified is ever installed. The download retries and has a ceiling
+    # (--max-time, which the fleet checker requires), so a stalled CDN reaches
+    # that warning instead of hanging every R job.
     - |
       ARCH=$(dpkg --print-architecture)
       case "$ARCH" in
@@ -237,7 +239,8 @@ default:
         arm64) PANDOC_SHA256=b651c8bfd5a0a2f6650d6c0830131747ef67a1d9c0475b1399626611419e2205 ;;
         *) PANDOC_SHA256=unknown ;;
       esac
-      if curl -fsSL -o /tmp/pandoc.deb "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-${ARCH}.deb" \
+      if curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 20 --max-time 300 \
+        -o /tmp/pandoc.deb "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-${ARCH}.deb" \
         && echo "${PANDOC_SHA256}  /tmp/pandoc.deb" | sha256sum -c - \
         && dpkg -i /tmp/pandoc.deb; then
         echo "pandoc ${PANDOC_VERSION} installed"

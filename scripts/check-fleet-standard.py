@@ -77,7 +77,8 @@ WHAT IT CHECKS, by section of the standard.
   `variables:` entry or a shell assignment (the spellings check-toolchain.R
   reads too, so the two never disagree on the pin), saves it to a file with
   curl or wget, checks that file with `sha256sum -c` (or `shasum -a 256 -c`),
-  then `dpkg -i`s that same file (pandoc_install_state). The install counts
+  then `dpkg -i`s that same file (pandoc_install_state), the download with a
+  time limit (curl `--max-time`, wget `--timeout`). The install counts
   in the `before_script` or `script` the job ends up with (its own, else the
   template's that GitLab merges last), not in `default:`, which also reaches
   jobs on images without dpkg or curl; a pin found only there is reported, to
@@ -934,6 +935,12 @@ SHA256_CHECK_RE = re.compile(r"\bsha256sum\b[^\n]*\s(?:-c|--check)\b|\bshasum\b[
 PANDOC_TOOL_RE = re.compile(r"\b(curl|wget)\b")
 PANDOC_DEB_URL_RE = re.compile(r"https?://github\.com/jgm/pandoc/releases/download/[^\s\"']+")
 DPKG_INSTALL_RE = re.compile(r"\bdpkg\b.*\s(?:-i|--install)(?=\s)")
+# A download with no time limit hangs on a stalled CDN instead of failing into
+# the warn fallback: curl `--max-time`/`-m`, wget `--timeout`/`--read-timeout`/`-T`.
+DOWNLOAD_BOUND_RE = {
+    "curl": re.compile(r"(?:^|\s)(?:--max-time(?:\s+|=)|-m\s*)\d"),
+    "wget": re.compile(r"(?:^|\s)(?:--(?:read-)?timeout(?:\s+|=)|-T\s*)\d"),
+}
 PANDOC_LOCAL_RE = re.compile(r"\bpandoc_version\s*\(")
 PANDOC_PIN_READ_RE = re.compile(r"\bPANDOC_VERSION\b")
 GATES = {
@@ -1005,7 +1012,7 @@ def download_target(command: str, url_vars: set[str]) -> str | None:
     return shell_path(url.group(0).rsplit("/", 1)[-1]) if url else None
 
 
-INSTALL_STATES = ("absent", "unchecked", "uninstalled", "installed")
+INSTALL_STATES = ("absent", "unchecked", "uninstalled", "unbounded", "installed")
 
 
 def pandoc_install_state(text: str) -> str:
@@ -1014,7 +1021,8 @@ def pandoc_install_state(text: str) -> str:
     `installed` needs, in this order: a curl or wget download of the release
     to a file, a `sha256sum -c` (or `shasum -a 256 -c`) naming that file, and a
     `dpkg -i` of that file. Checking another download, or checking the .deb
-    and never installing it, does not count (SEOR-egfbijyi).
+    and never installing it, does not count (SEOR-egfbijyi). That chain with a
+    download that sets no time limit is `unbounded`.
     """
     commands = shell_commands(text)
     url_vars = set(re.findall(r"\b(\w+)=[\"']?https?://github\.com/jgm/pandoc/releases/download/", text))
@@ -1028,7 +1036,11 @@ def pandoc_install_state(text: str) -> str:
             if SHA256_CHECK_RE.search(commands[j]) and target in shell_path(commands[j]):
                 state = "uninstalled"
                 if any(DPKG_INSTALL_RE.search(c) and target in shell_path(c) for c in commands[j + 1:]):
-                    return "installed"
+                    tool = PANDOC_TOOL_RE.search(command).group(1)
+                    if DOWNLOAD_BOUND_RE[tool].search(command):
+                        return "installed"
+                    state = "unbounded"
+                    break
         best = max(best, state, key=INSTALL_STATES.index)
     return best
 
@@ -1086,6 +1098,8 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
         "absent": f"names the pandoc {PANDOC_PIN} release but downloads it with neither curl nor wget",
         "unchecked": f"downloads pandoc {PANDOC_PIN} without a sha256 check of that download",
         "uninstalled": f"sha256-checks the pandoc {PANDOC_PIN} .deb but does not `dpkg -i` it after the check",
+        "unbounded": f"downloads pandoc {PANDOC_PIN} with no time limit (curl --max-time, wget --timeout), so a "
+                     "stalled download hangs the job instead of reaching the warn fallback",
     }
     for state, names in unverified.items():
         report.gap("ci", f"{', '.join(names)}: {reasons[state]}")
@@ -1727,7 +1741,7 @@ workflow:
 .r:
   before_script:
     - PANDOC_VERSION=3.10
-    - curl -fsSL -o /tmp/pandoc.deb "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
+    - curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
     - echo "d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf  /tmp/pandoc.deb" | sha256sum -c -
     - dpkg -i /tmp/pandoc.deb
 .on-main:
@@ -2206,12 +2220,12 @@ def self_test() -> list[str]:
     expect_gap("installed before the check", "sha256-checks the pandoc 3.10 .deb but does not `dpkg -i` it",
                "punycoder", edit(cran, ci, check_line + install_line, install_line + check_line), fixture_state())
     expect_gap("release named but never downloaded", "downloads it with neither curl nor wget", "punycoder",
-               edit(cran, ci, "    - curl -fsSL -o /tmp/pandoc.deb ", "    - echo -o /tmp/pandoc.deb "), fixture_state())
+               edit(cran, ci, "    - curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb ", "    - echo -o /tmp/pandoc.deb "), fixture_state())
     seor_shape = (
         "    - PANDOC_VERSION=3.10\n"
         "    - |\n"
         "      ARCH=$(dpkg --print-architecture)\n"
-        "      if curl -fsSL -o /tmp/pandoc.deb \"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/"
+        "      if curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 20 --max-time 300 -o /tmp/pandoc.deb \"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/"
         "pandoc-${PANDOC_VERSION}-1-${ARCH}.deb\" \\\n"
         "        && echo \"${PANDOC_SHA256}  /tmp/pandoc.deb\" | sha256sum -c - \\\n"
         "        && dpkg -i /tmp/pandoc.deb; then\n"
@@ -2221,16 +2235,21 @@ def self_test() -> list[str]:
         "      fi\n")
     expect_clean("pandoc installed in seor's shape", "punycoder", edit(cran, ci, pin_lines, seor_shape), fixture_state())
     expect_clean("pandoc saved under its release name", "punycoder",
-                 edit(edit(edit(cran, ci, "curl -fsSL -o /tmp/pandoc.deb ", "curl -fsSLO "), ci,
+                 edit(edit(edit(cran, ci, "-o /tmp/pandoc.deb \"https", "-O \"https"), ci,
                            "  /tmp/pandoc.deb\" | sha256sum -c -",
                            "  pandoc-${PANDOC_VERSION}-1-amd64.deb\" | sha256sum --check"),
                       ci, install_line, "    - dpkg -i ./pandoc-${PANDOC_VERSION}-1-amd64.deb\n"), fixture_state())
     expect_clean("pandoc fetched with wget", "punycoder",
-                 edit(cran, ci, "curl -fsSL -o /tmp/pandoc.deb ", "wget -q -O /tmp/pandoc.deb "), fixture_state())
+                 edit(cran, ci, "curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb ", "wget -q --timeout=60 -O /tmp/pandoc.deb "), fixture_state())
     expect_clean("pandoc URL in a variable", "punycoder",
-                 edit(edit(cran, ci, "    - curl -fsSL -o /tmp/pandoc.deb \"https:", "    - PANDOC_URL=\"https:"),
-                      ci, "-1-amd64.deb\"\n", "-1-amd64.deb\"\n    - curl -fsSL -o /tmp/pandoc.deb \"$PANDOC_URL\"\n"),
+                 edit(edit(cran, ci, "    - curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb \"https:", "    - PANDOC_URL=\"https:"),
+                      ci, "-1-amd64.deb\"\n", "-1-amd64.deb\"\n    - curl -m 300 -fsSL -o /tmp/pandoc.deb \"$PANDOC_URL\"\n"),
                  fixture_state())
+    unbounded = "downloads pandoc 3.10 with no time limit"
+    expect_gap("pandoc download with no time limit", unbounded, "punycoder",
+               edit(cran, ci, "--retry 3 --max-time 300 ", "--retry 3 "), fixture_state())
+    expect_gap("wget with no time limit", unbounded, "punycoder",
+               edit(cran, ci, "curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb ", "wget -q -O /tmp/pandoc.deb "), fixture_state())
     expect_gap("pandoc pin at another version", "pins pandoc 3.9, not the fleet's 3.10", "punycoder",
                edit(cran, ci, "PANDOC_VERSION=3.10", "PANDOC_VERSION=3.9"), fixture_state())
     expect_gap("pandoc version never recorded", "downloads pandoc at $PANDOC_VERSION, which .gitlab-ci.yml never assigns",
