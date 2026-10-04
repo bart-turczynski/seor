@@ -76,9 +76,10 @@ WHAT IT CHECKS, by section of the standard.
   version as `$PANDOC_VERSION`, which .gitlab-ci.yml sets to PANDOC_PIN in a
   `variables:` entry or a shell assignment (the spellings check-toolchain.R
   reads too, so the two never disagree on the pin), and a `sha256sum -c` (or
-  `shasum -a 256 -c`) checks it. Where
-  the download sits is not judged, only that every R job carries it, which is
-  what shared setup gives.
+  `shasum -a 256 -c`) checks it. The install counts in the `before_script`
+  or `script` the job ends up with (its own, else the template's that GitLab
+  merges last), not in `default:`, which also reaches jobs on images without dpkg or curl; a pin
+  found only there is reported, to move into the template.
 * Local gate. The pre-commit config, or a script its hooks call, runs a URL
   check (`check_url_db`, `url_db_from_package_sources` or urlchecker) and
   compares `rmarkdown::pandoc_version()` with the pin (check-toolchain.R).
@@ -93,7 +94,9 @@ top-level blocks; `extends:` is followed, a job's own `rules:` replace the
 template's, `variables:` merge, and YAML anchors (`*name`) pull in the block
 that defines them. `default: before_script` (or the top-level one) joins every
 job that sets no `before_script` of its own and does not turn it off with
-`inherit: default:`. `rules:if` and `workflow:rules` are evaluated for real (a
+`inherit: default:`. A job's text joins every block it extends; the pandoc
+rule alone reads the one `before_script` and `script` a job ends up with,
+since GitLab replaces arrays along `extends`. `rules:if` and `workflow:rules` are evaluated for real (a
 small evaluator for `==`, `!=`, `=~`, `!~`, `&&`, `||`, presence and
 parentheses) in four pipelines: a push to main, a `deep-check` schedule, a
 `dependency-audit` schedule and a tag. A job "runs" in a pipeline when the
@@ -722,6 +725,7 @@ class Job:
     variables: dict[str, str]
     runs: dict[str, bool] = field(default_factory=dict)
     scripts: list[tuple[str, str]] = field(default_factory=list)
+    inherits_default_before: bool = False
 
     def full_text(self) -> str:
         return "\n".join([self.text] + [body for _, body in self.scripts])
@@ -814,11 +818,12 @@ class CI:
 
     def job(self, name: str) -> Job:
         attrs, texts, variables = self.resolve(name, set())
-        if self.default_before and "before_script" not in attrs and self.inherits_default_before(attrs):
+        inherits = bool(self.default_before) and "before_script" not in attrs and self.inherits_default_before(attrs)
+        if inherits:
             inline, lines = self.default_before
             texts.insert(0, "\n".join(["before_script: " + inline] + lines))
         text = "\n".join(dict.fromkeys(texts))
-        job = Job(name, attrs, text, variables)
+        job = Job(name, attrs, text, variables, inherits_default_before=inherits)
         rules = parse_rules(attrs["rules"][1]) if "rules" in attrs else None
         job_when = attrs.get("when", ("on_success", []))[0] or "on_success"
         for pipeline in PIPELINES:
@@ -842,6 +847,33 @@ class CI:
         if value in ("true", "false"):
             return value == "true"
         return "before_script" in list_values(*inherit["default"])
+
+    def setup_text(self, job: Job) -> str:
+        """The job's effective `before_script` and `script`, `default:` left out.
+
+        Unlike `job.text`, which joins every block the job extends, this takes
+        the one `before_script` and `script` the job ends up with: its own, or
+        else the template's merged last, as GitLab replaces arrays along
+        `extends`.
+        The anchor blocks they pull in are added.
+        """
+        parts = []
+        for key in ("before_script", "script"):
+            if key in job.attrs:
+                inline, lines = job.attrs[key]
+                parts.append("\n".join([f"{key}: {inline}"] + lines))
+        text = "\n".join(parts)
+        for anchor in dict.fromkeys(re.findall(r"\*([\w-]+)", text)):
+            holder = self.anchors.get(anchor)
+            if holder:
+                text += "\n" + "\n".join(self.blocks[holder])
+        return text
+
+    def default_before_text(self) -> str:
+        if not self.default_before:
+            return ""
+        inline, lines = self.default_before
+        return "\n".join(["before_script: " + inline] + lines)
 
     def images(self, job: Job) -> list[str]:
         """The job's image(s), expanded through parallel:matrix and variables."""
@@ -917,39 +949,55 @@ def coverage_thresholds(text: str) -> list[float]:
     return [v for v in found if 1 <= v <= 100]
 
 
-def pandoc_version_value(job: Job, ci: CI) -> str | None:
+def pandoc_version_value(job: Job, ci: CI, setup: str) -> str | None:
     """PANDOC_VERSION as the job sees it: its `variables:` (extends merged), the
-    global ones, then a shell assignment in its .gitlab-ci.yml text. The scripts
-    a job names are not read: check-toolchain.R reads .gitlab-ci.yml alone."""
+    global ones, then a shell assignment in its setup text. The scripts a job
+    names are not read: check-toolchain.R reads .gitlab-ci.yml alone."""
     value = job.variables.get("PANDOC_VERSION") or ci.global_vars.get("PANDOC_VERSION")
     if not value:
-        assigned = PANDOC_SHELL_PIN_RE.search(job.text)
+        assigned = PANDOC_SHELL_PIN_RE.search(setup)
         value = assigned.group(1) if assigned else None
     return value
 
 
 def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
-    """Every R job on push installs PANDOC_PIN from the release, sha256-checked."""
-    unpinned, unrecorded, other, unchecked = [], {}, {}, []
+    """Every R job on push installs PANDOC_PIN from the release, sha256-checked.
+
+    The install must reach the job through its own `before_script` or `script`
+    (in practice the template the R jobs extend), not through `default:`: the
+    install block needs Debian, dpkg and curl, and `default:` hands it to every
+    job, including those on other images (seor's citation-version runs on
+    python:3.13-alpine).
+    """
+    unpinned, in_default, unrecorded, other, unchecked = [], [], {}, {}, []
     for job in on_push:
         if not R_JOB_RE.search(job.full_text()):
             continue
-        tokens = set(PANDOC_URL_RE.findall(job.full_text()))
+        setup = ci.setup_text(job)
+        chunks = [setup] + [body for _, body in inline_scripts(setup, ci.source)]
+        tokens = {t for chunk in chunks for t in PANDOC_URL_RE.findall(chunk)}
         if not tokens:
-            unpinned.append(job.name)
+            if job.inherits_default_before and PANDOC_URL_RE.search(ci.default_before_text()):
+                in_default.append(job.name)
+            else:
+                unpinned.append(job.name)
             continue
         literal = sorted(t for t in tokens if not PANDOC_VAR_TOKEN_RE.fullmatch(t))
         if literal:
             unrecorded.setdefault(", ".join(literal), []).append(job.name)
             continue
-        value = pandoc_version_value(job, ci)
+        value = pandoc_version_value(job, ci, setup)
         if value != PANDOC_PIN:
             other.setdefault(value, []).append(job.name)
-        elif not SHA256_CHECK_RE.search(job.full_text()):
+        elif not any(SHA256_CHECK_RE.search(chunk) for chunk in chunks):
             unchecked.append(job.name)
     if unpinned:
         report.gap("ci", f"pandoc {PANDOC_PIN} is not installed from the pandoc release in the setup of "
                          f"{', '.join(unpinned)} (README.md is byte-stable only under the pinned pandoc)")
+    if in_default:
+        report.gap("ci", f"{', '.join(in_default)}: pandoc is pinned only in `default: before_script`, which every "
+                         "job inherits, whatever its image; move the install into the before_script of the "
+                         "template the R jobs extend")
     for tokens, names in unrecorded.items():
         report.gap("ci", f"{', '.join(names)}: downloads pandoc at {tokens}, not at $PANDOC_VERSION, the variable "
                          "check-toolchain.R compares the local pandoc with")
@@ -1583,11 +1631,6 @@ FIXTURE_CI = """\
 stages: [check, deploy, audit]
 default:
   image: rocker/r-ver:4.6.1
-  before_script:
-    - PANDOC_VERSION=3.10
-    - curl -fsSL -o /tmp/pandoc.deb "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
-    - echo "d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf  /tmp/pandoc.deb" | sha256sum -c -
-    - dpkg -i /tmp/pandoc.deb
 variables:
   P3M_SNAPSHOT: "2026-09-01"
 workflow:
@@ -1598,6 +1641,12 @@ workflow:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
     - if: $CI_PIPELINE_SOURCE == "web"
     - when: never
+.r:
+  before_script:
+    - PANDOC_VERSION=3.10
+    - curl -fsSL -o /tmp/pandoc.deb "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
+    - echo "d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf  /tmp/pandoc.deb" | sha256sum -c -
+    - dpkg -i /tmp/pandoc.deb
 .on-main:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -1616,17 +1665,17 @@ workflow:
 .deps: &deps
   - Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
 gates:
-  extends: .on-main
+  extends: [.r, .on-main]
   script:
     - *deps
     - Rscript tools/gates.R
 check:
-  extends: .on-main
+  extends: [.r, .on-main]
   script:
     - *deps
     - Rscript -e 'res <- rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning")'
 coverage:
-  extends: .on-main
+  extends: [.r, .on-main]
   script:
     - Rscript -e 'cov <- covr::package_coverage(); covr::to_cobertura(cov); pct <- covr::percent_coverage(cov); cat(sprintf("Coverage: %.2f%%\\n", pct)); if (pct < 95) quit(status = 1)'
   coverage: '/Coverage: (\\d+\\.\\d+)%/'
@@ -1653,7 +1702,7 @@ fossa:
   script:
     - fossa analyze
 pages:
-  extends: .on-main
+  extends: [.r, .on-main]
   script:
     - Rscript -e 'pkgdown::build_site()'
 osv-audit:
@@ -1985,8 +2034,8 @@ def self_test() -> list[str]:
                      "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_PIPELINE_SOURCE != \"schedule\"\n"
                      "    - if: $CI_PIPELINE_SOURCE == \"web\"\n.deep:")
     expect_clean("coverage on both schedules by its own rules", "punycoder",
-                 edit(push_only, ci, "coverage:\n  extends: .on-main\n",
-                      "coverage:\n  rules:\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n"),
+                 edit(push_only, ci, "coverage:\n  extends: [.r, .on-main]\n",
+                      "coverage:\n  extends: .r\n  rules:\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n"),
                  fixture_state())
 
     # NEGATIVE: CI.
@@ -1996,8 +2045,8 @@ def self_test() -> list[str]:
         failures.append(f"coverage only on push: expected a dependency-audit schedule gap too, got {report.gaps}")
     report = expect_gap("coverage off the audit schedule", "coverage job does not run on the dependency-audit schedule",
                         "punycoder",
-                        edit(cran, ci, "coverage:\n  extends: .on-main\n",
-                             "coverage:\n  rules:\n    - if: $SCHEDULE_KIND == \"dependency-audit\"\n      when: never\n"
+                        edit(cran, ci, "coverage:\n  extends: [.r, .on-main]\n",
+                             "coverage:\n  extends: .r\n  rules:\n    - if: $SCHEDULE_KIND == \"dependency-audit\"\n      when: never\n"
                              "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n"),
                         fixture_state())
     if any("deep-check schedule" in t for _, t in report.gaps):
@@ -2009,7 +2058,8 @@ def self_test() -> list[str]:
     expect_gap("coverage regex absent", "no coverage job with a coverage: regex", "punycoder",
                edit(cran, ci, "  coverage: '/Coverage: (\\d+\\.\\d+)%/'\n", ""), fixture_state())
     expect_gap("coverage allow_failure", "allow_failure: true", "punycoder",
-               edit(cran, ci, "coverage:\n  extends: .on-main\n", "coverage:\n  extends: .on-main\n  allow_failure: true\n"),
+               edit(cran, ci, "coverage:\n  extends: [.r, .on-main]\n",
+                    "coverage:\n  extends: [.r, .on-main]\n  allow_failure: true\n"),
                fixture_state())
     expect_gap("check not --as-cran", "does not use --as-cran", "punycoder",
                edit(cran, ci, 'rcmdcheck(args = "--as-cran", error_on = "warning")\'\ncoverage',
@@ -2018,13 +2068,13 @@ def self_test() -> list[str]:
                edit(cran, ci, 'error_on = "warning")\'\ncoverage',
                     'error_on = "warning", env = c("_R_CHECK_CRAN_INCOMING_" = "false"))\'\ncoverage'), fixture_state())
     expect_gap("check only on tags", "no R CMD check runs on a push to main", "punycoder",
-               edit(cran, ci, "check:\n  extends: .on-main\n", "check:\n  rules:\n    - if: $CI_COMMIT_TAG\n"),
+               edit(cran, ci, "check:\n  extends: [.r, .on-main]\n", "check:\n  extends: .r\n  rules:\n    - if: $CI_COMMIT_TAG\n"),
                fixture_state())
     expect_gap("workflow shuts out main", "workflow: rules admit no push to main", "punycoder",
                edit(cran, ci, "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n    - if: $CI_PIPELINE_SOURCE == \"web\"\n    - when: never",
                     "    - if: $CI_PIPELINE_SOURCE == \"web\"\n    - when: never"), fixture_state())
     expect_gap("pages off main", "pages does not deploy", "punycoder",
-               edit(cran, ci, "pages:\n  extends: .on-main\n", "pages:\n  rules:\n    - if: $CI_COMMIT_TAG\n"),
+               edit(cran, ci, "pages:\n  extends: [.r, .on-main]\n", "pages:\n  extends: .r\n  rules:\n    - if: $CI_COMMIT_TAG\n"),
                fixture_state())
     expect_gap("opt-in readme stage", "no README drift gate", "punycoder",
                edit(cran, "tools/gates.R", "readme = list(default = TRUE", "readme = list(default = FALSE"), fixture_state())
@@ -2047,9 +2097,10 @@ def self_test() -> list[str]:
                fixture_state(on_cran=False, release=False, doi=False, fossa=False))
 
     # pandoc pin (SEOR-egfbijyi): every R job on push installs PANDOC_PIN from the
-    # release with a sha256 check. The fixture pins it in `default: before_script`.
-    pin_lines = cran[ci].split("  before_script:\n", 1)[1].split("variables:\n", 1)[0]
-    no_pin = edit(cran, ci, "  before_script:\n" + pin_lines, "")
+    # release with a sha256 check. The fixture pins it in the `.r` template the R jobs extend.
+    pin_block = cran[ci].split(".r:\n", 1)[1].split(".on-main:\n", 1)[0]
+    pin_lines = pin_block.split("  before_script:\n", 1)[1]
+    no_pin = edit(cran, ci, ".r:\n" + pin_block, ".r:\n  image: rocker/r-ver:4.6.1\n")
     report = expect_gap("pandoc pin absent", "pandoc 3.10 is not installed from the pandoc release in the setup of",
                         "punycoder", no_pin, fixture_state())
     unpinned = next((t for _, t in report.gaps if "not installed from the pandoc release" in t), "")
@@ -2084,13 +2135,26 @@ def self_test() -> list[str]:
                     **{"tools/pin.sh": "PANDOC_VERSION=3.10\n"}), fixture_state())
     # seor before SEOR-egfbijyi: only `gates` pinned it.
     report = expect_gap("pandoc pin in one job only", "in the setup of check, coverage, pages", "punycoder",
-                        edit(no_pin, ci, "gates:\n  extends: .on-main\n  script:\n",
-                             "gates:\n  extends: .on-main\n  script:\n" + pin_lines), fixture_state())
+                        edit(no_pin, ci, "gates:\n  extends: [.r, .on-main]\n  script:\n",
+                             "gates:\n  extends: [.r, .on-main]\n  script:\n" + pin_lines), fixture_state())
     if "gates" in next((t for _, t in report.gaps if "not installed from the pandoc release" in t), ""):
         failures.append(f"pandoc pin in one job only: gates pins it, got {report.gaps}")
-    expect_gap("job opts out of the default before_script", "in the setup of check (README.md", "punycoder",
-               edit(cran, ci, "check:\n  extends: .on-main\n", "check:\n  extends: .on-main\n  inherit:\n    default: false\n"),
-               fixture_state())
+    # GitLab replaces arrays along `extends`: a job's own before_script drops the template's pin.
+    report = expect_gap("job replaces the template's before_script", "in the setup of check (README.md", "punycoder",
+                        edit(cran, ci, "check:\n  extends: [.r, .on-main]\n",
+                             "check:\n  extends: [.r, .on-main]\n  before_script:\n    - echo own setup\n"),
+                        fixture_state())
+    # The pin in `default:` reaches every job, citation-version's python:alpine
+    # included, so it does not count; the R jobs are told to move it.
+    in_default = edit(no_pin, ci, "default:\n  image: rocker/r-ver:4.6.1\n",
+                      "default:\n  image: rocker/r-ver:4.6.1\n  before_script:\n" + pin_lines)
+    report = expect_gap("pandoc pin only in default:", "gates, check, coverage, pages: pandoc is pinned only in "
+                        "`default: before_script`", "punycoder", in_default, fixture_state())
+    if any("not installed from the pandoc release" in t for _, t in report.gaps):
+        failures.append(f"pandoc pin only in default:: expected the move-it gap alone, got {report.gaps}")
+    expect_gap("default: pin with the job opted out", "in the setup of check (README.md", "punycoder",
+               edit(in_default, ci, "check:\n  extends: [.r, .on-main]\n",
+                    "check:\n  extends: [.r, .on-main]\n  inherit:\n    default: false\n"), fixture_state())
     expect_clean("pandoc version as a CI variable", "punycoder",
                  edit(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", ""), ci, "variables:\n",
                       "variables:\n  PANDOC_VERSION: \"3.10\"\n"), fixture_state())

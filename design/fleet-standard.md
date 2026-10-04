@@ -216,9 +216,12 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
 3.1.3; it reported drift in seor's README that 3.10 does not write.
 
 - Every job that runs R installs pandoc 3.10 in the setup they share: the
-  `before_script` of the template every R job extends, or `default:`. One job
-  pinning it for the readme gate is not enough: `check`, `coverage` and
-  `pages` render with it too. seor's `.r` template is the model.
+  `before_script` of the template every R job extends. seor's `.r` template
+  is the model. One job pinning it for the readme gate is not enough: the
+  check, `coverage` and `pages` jobs render with it too. Not in `default:`:
+  the install needs Debian, `dpkg` and `curl`, and `default:` hands it to
+  every job, including ones on other images (seor's `citation-version` runs
+  on `python:3.13-alpine`).
 - The version is recorded once, as the `PANDOC_VERSION` CI variable.
 - The `.deb` comes from the pandoc GitHub release
   (`https://github.com/jgm/pandoc/releases/download/<version>/pandoc-<version>-1-<arch>.deb`),
@@ -464,8 +467,9 @@ What it checks, section by section:
   release at `$PANDOC_VERSION`, which `.gitlab-ci.yml` sets to 3.10 in a
   `variables:` entry or a shell assignment, quoted or not, with or without a
   trailing comment (the spellings `check-toolchain.R` reads too), and checks
-  it with `sha256sum -c`; a
-  `default: before_script` counts for each job that inherits it. A job's
+  it with `sha256sum -c`. The install counts only in the `before_script` or
+  `script` the job ends up with, its own or its template's; one only in
+  `default: before_script` is reported, to move into the template. A job's
   commands are read as text, along with the R, shell and YAML scripts it
   names, so a script that skips a gate it contains reads as running it.
 - **Local gate.** The pre-commit config, or an R or shell script its hooks
