@@ -74,21 +74,28 @@ WHAT IT CHECKS, by section of the standard.
   the pandoc pin (PANDOC_PIN, SEOR-egfbijyi): every job that runs R on a
   push to main downloads pandoc from its GitHub release
   (`github.com/jgm/pandoc/releases/download/<version>/pandoc-`), names that
-  version as `$PANDOC_VERSION`, which .gitlab-ci.yml sets to PANDOC_PIN in a
-  `variables:` entry or a shell assignment (the spellings check-toolchain.R
-  reads too, so the two never disagree on the pin), saves it to a file with
-  curl or wget, checks that file with `sha256sum -c` (or `shasum -a 256 -c`),
-  then `dpkg -i`s that same file (pandoc_install_state), the download with a
-  time limit (curl `--max-time`, wget `--timeout`). The install counts
-  in the `before_script` or `script` the job ends up with (its own, else the
-  template's that GitLab merges last), not in `default:`, which also reaches
-  jobs on images without dpkg or curl; a pin found only there is reported, to
-  move into the template.
+  version as `$PANDOC_VERSION`, which .gitlab-ci.yml sets to PANDOC_PIN, one
+  value however many times it is assigned and in a line the job sees (its
+  variables, the global ones or its setup). The pin is read by running
+  check-toolchain.R's own reader (`--pandoc-assignments`, SEOR-xhyrogfm), so
+  the two never disagree on it; this needs Rscript, and without it the pin
+  is not judged. The job saves the release to a file with curl or wget,
+  checks that file with `sha256sum -c` (or `shasum -a 256 -c`), then
+  `dpkg -i`s that same file, paths compared as whole words, and only when
+  the check passed: a failing script item ends the job, but inside one item
+  `|| true`, `;` or a newline goes on unless `set -e` is on
+  (pandoc_install_state). The download has a time limit: curl `--max-time`
+  or `-m`, wget `--timeout` with `--tries` of 5 or fewer, or `timeout`. The
+  install counts in the `before_script` or `script` the job ends up with
+  (its own, else the template's that GitLab merges last), not in
+  `default:`, which also reaches jobs on images without dpkg or curl; a pin
+  found only there is reported, to move into the template.
 * Local gate. The pre-commit config, or a script its hooks call, runs a URL
   check (`check_url_db`, `url_db_from_package_sources` or urlchecker), and
-  one of them both calls `rmarkdown::pandoc_version()` and reads
-  `PANDOC_VERSION`, comparing the local pandoc with the CI pin
-  (check-toolchain.R).
+  one of them calls `rmarkdown::pandoc_version()` and reads `PANDOC_VERSION`
+  from `.gitlab-ci.yml`, comparing the local pandoc with the CI pin
+  (check-toolchain.R). Reading the variable from the environment does not
+  count: nothing sets it locally.
 * Schedules. A `deep-check` and a `dependency-audit` schedule, each active,
   on `main`, with `SCHEDULE_KIND` set on the schedule itself; no schedule
   without a `SCHEDULE_KIND` or off `main`.
@@ -125,13 +132,15 @@ and exempts only the BugReports 404, how security-audit treats missing OSS
 Index credentials, the GitLab project badges, and that no employer is named as
 copyright holder or funder. Those stay review items.
 
-Stdlib only. `glab` must be on PATH and authenticated unless `--offline`.
+Stdlib only. `glab` must be on PATH and authenticated unless `--offline`, and
+`Rscript` for the pandoc pin (the self-test included).
 """
 
 from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import functools
 import json
 import os
 import re
@@ -748,10 +757,9 @@ def yaml_scalar(raw: str) -> str:
     """A one-line YAML scalar's value: quotes removed, a trailing `# comment` dropped.
 
     An unquoted decimal is read as YAML reads it, a float: `3.10` is 3.1 to
-    GitLab's parser as to PyYAML, so an unquoted `PANDOC_VERSION: 3.10` pins
-    3.1 and is reported as such. check-toolchain.R's `yaml_scalar()` reads
-    PANDOC_VERSION the same way, so the two scripts agree on the pin
-    (SEOR-egfbijyi).
+    GitLab's parser as to PyYAML (SEOR-egfbijyi). PANDOC_VERSION is not read
+    here but by check-toolchain.R, whose `yaml_scalar()` does the same
+    (pandoc_assignments(); SEOR-xhyrogfm).
     """
     raw = raw.strip()
     quoted = re.match(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'", raw)
@@ -774,6 +782,7 @@ def scalar_map(lines: list[str]) -> dict[str, str]:
 
 class CI:
     def __init__(self, text: str, source):
+        self.text = text
         self.blocks = split_blocks(text)
         self.source = source
         self.global_vars = scalar_map(self.blocks.get("variables", [])[1:])
@@ -933,27 +942,40 @@ URL_CHECK_RE = re.compile(r"check_url_db|url_db_from_package_sources|urlchecker:
 SANITIZER_IMAGE_RE = re.compile(r"-san\b|clang-asan|gcc-asan|r-debug|asan|ubsan", re.I)
 R_JOB_RE = re.compile(r"\bRscript\b|\bR CMD\b")
 PANDOC_URL_RE = re.compile(r"github\.com/jgm/pandoc/releases/download/([^/\s\"']+)/pandoc-")
-# The pin's spellings, which check-toolchain.R reads identically from
-# .gitlab-ci.yml (`pandoc_shell_re`; SEOR-egfbijyi): a `variables:` entry
-# `PANDOC_VERSION: <value>`, read by yaml_scalar(), or a shell assignment
-# anywhere on a non-comment line (`PANDOC_VERSION=3.10`,
-# `export PANDOC_VERSION="3.10"`, a trailing `# comment`). The download must
-# name its version through this variable, the one check-toolchain.R reads.
-PANDOC_SHELL_PIN_RE = re.compile(r"\bPANDOC_VERSION=[\"']?([\w.-]+)")
+# The pin itself is read by check-toolchain.R, the fleet's only reader of its
+# spellings: pandoc_assignments() runs it (SEOR-xhyrogfm). The download must
+# name its version through PANDOC_VERSION, the variable that script reads.
+TOOLCHAIN_R = Path(__file__).resolve().with_name("check-toolchain.R")
 PANDOC_VAR_TOKEN_RE = re.compile(r"\$\{?PANDOC_VERSION\}?")
 SHA256_CHECK_RE = re.compile(r"\bsha256sum\b[^\n]*\s(?:-c|--check)\b|\bshasum\b[^\n]*-a\s*256[^\n]*\s(?:-c|--check)\b")
 PANDOC_TOOL_RE = re.compile(r"\b(curl|wget)\b")
 PANDOC_DEB_URL_RE = re.compile(r"https?://github\.com/jgm/pandoc/releases/download/[^\s\"']+")
 DPKG_INSTALL_RE = re.compile(r"\bdpkg\b.*\s(?:-i|--install)(?=\s)")
 # A download with no time limit hangs on a stalled CDN instead of failing into
-# the warn fallback: curl `--max-time`/`-m`, wget `--timeout`/`--read-timeout`/`-T`.
+# the warn fallback. Every pattern of the tool must match; a limit of 0 means
+# none to curl, wget and timeout(1) alike. curl `--max-time`/`-m` (bundled
+# too, `-fsSLm 300`) bounds an attempt, and its `--retry` count is finite.
+# wget's `--timeout`/`--read-timeout`/`-T` bounds one try, but wget tries 20
+# times by default, waiting between tries, and `--tries=0` is forever, so a
+# limit counts only with `--tries` of 5 or fewer: about the ceiling of seor's
+# curl (4 attempts of 120 s).
 DOWNLOAD_BOUND_RE = {
-    # A limit of 0 means none to both tools.
-    "curl": re.compile(r"(?:^|\s)(?:--max-time(?:\s+|=)|-m\s*)0*[1-9]"),
-    "wget": re.compile(r"(?:^|\s)(?:--(?:read-)?timeout(?:\s+|=)|-T\s*)0*[1-9]"),
+    "curl": (re.compile(r"(?:^|\s)(?:--max-time(?:\s+|=)|-[A-Za-z]*m\s*)0*[1-9]"),),
+    "wget": (re.compile(r"(?:^|\s)(?:--(?:read-)?timeout(?:\s+|=)|-[A-Za-z]*T\s*)0*[1-9]"),
+             re.compile(r"(?:^|\s)(?:--tries(?:\s+|=)|-[A-Za-z]*t\s*)0*[1-5](?![\d.])")),
 }
+# `timeout 300 curl …` bounds the whole download, retries included.
+TIMEOUT_WRAPPER_RE = re.compile(
+    r"(?:^|\s)timeout\s+(?:(?:-[ks]|--kill-after|--signal)\s+\S+\s+|-\S+\s+)*"
+    r"0*(?:[1-9]\d*(?:\.\d*)?|\.\d*[1-9]\d*)[smhd]?\s+(?:\S*/)?(?:curl|wget)\b")
 PANDOC_LOCAL_RE = re.compile(r"\bpandoc_version\s*\(")
 PANDOC_PIN_READ_RE = re.compile(r"\bPANDOC_VERSION\b")
+# The local check reads the pin from .gitlab-ci.yml, named as a string (or, in
+# a shell script, a bare word). An environment read does not count: nothing
+# sets PANDOC_VERSION locally, so it compares with its default.
+PANDOC_CI_FILE_RE = re.compile(r"[\"'](?:[^\"'\n]*/)?\.gitlab-ci\.yml[\"']")
+PANDOC_CI_FILE_WORD_RE = re.compile(r"(?:^|\s)(?:\./)?\.gitlab-ci\.yml(?=[\s;|)]|$)", re.M)
+PANDOC_ENV_READ_RE = re.compile(r"Sys\.getenv\(\s*[\"']PANDOC_VERSION[\"'][^)]*\)|\$\{?PANDOC_VERSION\b")
 GATES = {
     "README drift": (re.compile(r"build_readme\s*\(|render\(\s*[\"']README\.Rmd"),),
     "news-version": (re.compile(r"NEWS\.md"), re.compile(r"development version", re.I)),
@@ -975,23 +997,310 @@ def coverage_thresholds(text: str) -> list[float]:
     return [v for v in found if 1 <= v <= 100]
 
 
-def pandoc_version_value(job: Job, ci: CI, setup: str) -> str | None:
-    """PANDOC_VERSION as the job sees it: its `variables:` (extends merged), the
-    global ones, then a shell assignment in its setup text. The scripts a job
-    names are not read: check-toolchain.R reads .gitlab-ci.yml alone."""
-    value = job.variables.get("PANDOC_VERSION") or ci.global_vars.get("PANDOC_VERSION")
-    if not value:
-        assigned = PANDOC_SHELL_PIN_RE.search(setup)
-        value = assigned.group(1) if assigned else None
-    return value
+def pandoc_assignments(text: str) -> tuple[tuple[int, str], ...]:
+    """(line number, value) of each PANDOC_VERSION assignment in a .gitlab-ci.yml.
+
+    check-toolchain.R reads them: this runs its `--pandoc-assignments` instead
+    of parsing the spellings a second way, so the two scripts cannot disagree
+    on a pin (SEOR-xhyrogfm). It is the copy beside this script, which the
+    fleet's copies match. That reader goes line by line, so only the lines
+    naming PANDOC_VERSION are sent, and a fixture set that shares them costs
+    one Rscript run. A ProbeError when Rscript cannot run it.
+    """
+    numbered = [(n, line) for n, line in enumerate(re.split(r"\r\n|\r|\n", text), 1) if "PANDOC_VERSION" in line]
+    found = read_pandoc_assignments(tuple(line for _, line in numbered))
+    return tuple((numbered[k - 1][0], value) for k, value in found if 0 < k <= len(numbered))
 
 
-def shell_commands(text: str) -> list[str]:
-    """A shell text's simple commands, in order: backslash continuations joined,
-    split at newlines, `;`, `&&` and `||`. A pipeline stays one command, so
-    `echo "<digest>  f.deb" | sha256sum -c -` names its file."""
+@functools.lru_cache(maxsize=None)
+def read_pandoc_assignments(lines: tuple[str, ...]) -> tuple[tuple[int, str], ...]:
+    if not lines:
+        return ()
+    try:
+        run = subprocess.run(["Rscript", str(TOOLCHAIN_R), "--pandoc-assignments"], input="\n".join(lines) + "\n",
+                             capture_output=True, encoding="utf-8", timeout=120, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ProbeError(f"Rscript {TOOLCHAIN_R.name} --pandoc-assignments: {error}") from error
+    if run.returncode:
+        raise ProbeError(f"Rscript {TOOLCHAIN_R.name} --pandoc-assignments exited {run.returncode}: "
+                         f"{run.stderr.strip()[-200:]}")
+    return tuple((int(m.group(1)), m.group(2)) for m in re.finditer(r"^(\d+)\t(.*)$", run.stdout, re.M))
+
+
+def script_entries(text: str) -> list[str]:
+    """The shell text of each list item in a YAML `before_script`/`script` text.
+
+    GitLab fails the job when an item exits non-zero, so the items are the
+    units pandoc_install_state() reads control flow across. A `- |` block is
+    one item, its lines joined by newlines; a `- >` block or a plain scalar
+    over several lines is one line.
+    """
+    lines = text.splitlines()
+    entries: list[str] = []
+    i = 0
+    while i < len(lines):
+        m = re.match(r"(\s*)- (.*)$", lines[i])
+        i += 1
+        if not m:
+            continue
+        indent, head = len(m.group(1)), m.group(2).strip()
+        body = []
+        while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > indent):
+            body.append(lines[i])
+            i += 1
+        block = re.fullmatch(r"([|>])[-+]?\d*", head)
+        if block:
+            margin = min((len(line) - len(line.lstrip()) for line in body if line.strip()), default=0)
+            body = [line[margin:] for line in body]
+            entries.append("\n".join(body) if block.group(1) == "|" else " ".join(line for line in body if line))
+        else:
+            entries.append(unquote(" ".join([head] + [line.strip() for line in body if line.strip()])))
+    return entries
+
+
+SHELL_KEYWORDS = frozenset({"if", "then", "elif", "else", "fi", "case", "esac", "for", "while", "until",
+                            "do", "done", "{", "}", "!"})
+
+
+def shell_tokens(text: str) -> list[tuple[str, str]]:
+    """A shell text as ("cmd", text), ("kw", word) and ("op", "&&" | "||" | ";") tokens.
+
+    Quotes, `$(...)` and backslash escapes stay inside their command; a
+    pipeline is one command; a newline, `;`, `;;` and a background `&` all
+    read as `;`; a `#` that starts a word comments out the rest of its line.
+    """
     text = re.sub(r"\\\n", " ", text)
-    return [c.strip() for c in re.split(r"\n|&&|\|\||;", text) if c.strip()]
+    tokens: list[tuple[str, str]] = []
+    buf: list[str] = []
+
+    def flush() -> None:
+        words = "".join(buf).strip()
+        buf.clear()
+        while words:
+            head = re.split(r"\s", words, maxsplit=1)[0]
+            if head not in SHELL_KEYWORDS:
+                tokens.append(("cmd", words))
+                return
+            tokens.append(("kw", head))
+            words = words[len(head):].strip()
+
+    i, n, quote, depth = 0, len(text), None, 0
+    while i < n:
+        ch, two = text[i], text[i:i + 2]
+        if quote:
+            buf.append(ch)
+            if ch == "\\" and quote == '"' and i + 1 < n:
+                buf.append(text[i + 1])
+                i += 1
+            elif ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"`":
+            quote = ch
+        elif ch == "\\" and i + 1 < n:
+            buf.append(two)
+            i += 2
+            continue
+        elif two == "$(":
+            depth += 1
+            buf.append(two)
+            i += 2
+            continue
+        elif depth:
+            depth += {"(": 1, ")": -1}.get(ch, 0)
+        elif ch == "#" and (not buf or buf[-1].isspace()):
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        elif two in ("&&", "||"):
+            flush()
+            tokens.append(("op", two))
+            i += 2
+            continue
+        elif ch in ";\n" or (ch == "&" and text[i - 1:i] not in ("<", ">", "|") and text[i + 1:i + 2] != ">"):
+            flush()
+            tokens.append(("op", ";"))
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    flush()
+    return tokens
+
+
+def parse_shell(tokens: list[tuple[str, str]], commands: list[str]) -> list:
+    """A token list as a tree of and-or lists, `if`s and `{ }` groups.
+
+    Each simple command is appended to `commands`; its node holds that index.
+    `case` and the loops are read as one command whose outcome is unknown,
+    and the commands inside them are not listed.
+    """
+    pos = 0
+
+    def peek() -> tuple[str, str]:
+        return tokens[pos] if pos < len(tokens) else ("end", "")
+
+    def take(word: str) -> None:
+        nonlocal pos
+        if peek() == ("kw", word):
+            pos += 1
+
+    def parse_list(stop: frozenset[str]) -> list:
+        nonlocal pos
+        items = []
+        while True:
+            while peek() == ("op", ";"):
+                pos += 1
+            kind, value = peek()
+            if kind == "end" or (kind == "kw" and value in stop):
+                return items
+            items.append(parse_and_or(stop))
+
+    def parse_and_or(stop: frozenset[str]) -> tuple:
+        nonlocal pos
+        first, rest = parse_pipeline(stop), []
+        while peek() in (("op", "&&"), ("op", "||")):
+            op = peek()[1]
+            pos += 1
+            while peek() == ("op", ";"):
+                pos += 1
+            rest.append((op, parse_pipeline(stop)))
+        return first, rest
+
+    def parse_pipeline(stop: frozenset[str]) -> tuple:
+        nonlocal pos
+        kind, value = peek()
+        pos += 1
+        if kind == "cmd":
+            commands.append(value)
+            return ("cmd", len(commands) - 1, value)
+        if (kind, value) == ("kw", "!"):
+            return ("not", parse_pipeline(stop))
+        if (kind, value) == ("kw", "if"):
+            clauses, orelse = [], None
+            while True:
+                cond = parse_list(frozenset({"then"}))
+                take("then")
+                clauses.append((cond, parse_list(frozenset({"elif", "else", "fi"}))))
+                if peek() != ("kw", "elif"):
+                    break
+                pos += 1
+            if peek() == ("kw", "else"):
+                pos += 1
+                orelse = parse_list(frozenset({"fi"}))
+            take("fi")
+            return ("if", clauses, orelse)
+        if (kind, value) == ("kw", "{"):
+            body = parse_list(frozenset({"}"}))
+            take("}")
+            return ("group", body)
+        if kind == "kw" and value in ("case", "for", "while", "until"):
+            opener, closer = ("case", "esac") if value == "case" else ("do", "done")
+            nest = 1 if value == "case" else 0
+            while pos < len(tokens):
+                kind, value = tokens[pos]
+                pos += 1
+                if kind == "kw" and value == opener:
+                    nest += 1
+                elif kind == "kw" and value == closer:
+                    nest -= 1
+                    if nest <= 0:
+                        break
+        return ("opaque",)
+
+    return parse_list(frozenset())
+
+
+def errexit_after(command: str, errexit: bool) -> bool:
+    """Whether `set -e` is on after `command`, given whether it was before."""
+    words = command.split()
+    if not words or words[0] != "set":
+        return errexit
+    for k, word in enumerate(words[1:], 1):
+        if word in ("-o", "+o") and words[k + 1:k + 2] == ["errexit"]:
+            errexit = word == "-o"
+        elif re.fullmatch(r"[-+][a-z]*e[a-z]*", word) and word != "-o":
+            errexit = word[0] == "-"
+    return errexit
+
+
+def runs_after_failure(entries: list[list], failed: int, later: int) -> bool:
+    """Whether some run of `entries` executes command `later` after command
+    `failed` exited non-zero.
+
+    `entries` holds one parse_shell() tree per script item. A failing item ends
+    the job; inside an item a failure goes on to the next command unless
+    `set -e` is on, outside an `if` condition and a non-final `&&`/`||` link,
+    as in sh. `exit` ends the run. Any other command may succeed or fail, so
+    `check || true` and `check; install` both reach the install.
+    """
+    class Reached(Exception):
+        pass
+
+    # A state is (has `failed` failed, did the last command succeed, set -e).
+    def run_cmd(index: int, text: str, states: set, exempt: bool) -> set:
+        word = (text.split() or [""])[0]
+        out = set()
+        for has_failed, _, errexit in states:
+            if index == later and has_failed:
+                raise Reached
+            errexit = errexit_after(text, errexit)
+            if index == failed:
+                outcomes: tuple[bool, ...] = (False,)
+            elif word in ("exit", "exec"):
+                outcomes = ()
+            elif word in ("true", ":") or word == "set":
+                outcomes = (True,)
+            elif word == "false":
+                outcomes = (False,)
+            else:
+                outcomes = (True, False)
+            for ok in outcomes:
+                if ok or exempt or not errexit:
+                    out.add((has_failed or index == failed, ok, errexit))
+        return out
+
+    def run_node(node: tuple, states: set, exempt: bool) -> set:
+        if not states:
+            return states
+        if node[0] == "cmd":
+            return run_cmd(node[1], node[2], states, exempt)
+        if node[0] == "not":
+            return {(f, not ok, e) for f, ok, e in run_node(node[1], states, True)}
+        if node[0] == "if":
+            result, pending = set(), states
+            for cond, body in node[1]:
+                after = run_list(cond, pending, True)
+                result |= run_list(body, {s for s in after if s[1]}, exempt)
+                pending = {s for s in after if not s[1]}
+            if node[2] is not None:
+                return result | run_list(node[2], pending, exempt)
+            return result | {(f, True, e) for f, _, e in pending}
+        if node[0] == "group":
+            return run_list(node[1], states, exempt)
+        return {(f, ok, e) for f, _, e in states for ok in (True, False) if ok or exempt or not e}
+
+    def run_and_or(item: tuple, states: set, exempt: bool) -> set:
+        first, rest = item
+        states = run_node(first, states, exempt or bool(rest))
+        for k, (op, node) in enumerate(rest):
+            go = {s for s in states if s[1] == (op == "&&")}
+            states = (states - go) | run_node(node, go, exempt or k < len(rest) - 1)
+        return states
+
+    def run_list(items: list, states: set, exempt: bool) -> set:
+        for item in items:
+            states = run_and_or(item, states, exempt)
+        return states
+
+    states = {(False, True, False)}
+    try:
+        for entry in entries:
+            states = {s for s in run_list(entry, states, False) if s[1]}
+    except Reached:
+        return True
+    return False
 
 
 def shell_path(text: str) -> str:
@@ -1000,12 +1309,35 @@ def shell_path(text: str) -> str:
     return re.sub(r"(?<![\w.$/-])\./", "", text)
 
 
-def download_target(command: str, url_vars: set[str]) -> str | None:
-    """The file a curl or wget command saves the pandoc release to, else None.
+def path_tokens(command: str) -> set[str]:
+    """The words of a command, as shell_path() reads them: a path matches whole."""
+    return set(re.split(r"[\s|;&<>()]+", shell_path(command))) - {""}
+
+
+def stdout_redirect(command: str) -> str | None:
+    """The file a command's stdout is redirected to, the last `>`, `>>` or `1>`.
+
+    `2>`, `&>` and `>&` redirect stderr or duplicate a descriptor, so they are
+    skipped. Digits glued to a word belong to it: `x.deb2>f` redirects stdout.
+    """
+    target = None
+    for m in re.finditer(r"(&|\d+)?(>>?|>\|)(&)?\s*[\"']?([^\s\"'&|;<>]*)", command):
+        fd, _, dup, path = m.groups()
+        if fd and fd.isdigit() and m.start() and not command[m.start() - 1].isspace():
+            fd = None
+        if fd in (None, "1") and not dup and path:
+            target = path
+    return target
+
+
+def download_target(command: str, url_vars: set[str]) -> tuple[str, str | None] | None:
+    """(tool, file) for a curl or wget command that fetches the pandoc release,
+    else None. The file is None when the download goes to stdout and no file.
 
     The command names the release URL, or a variable assigned it earlier. The
     file is the `-o`/`--output` argument (curl), the `-O`/`--output-document`
-    one (wget), a `>` redirect, or else the URL's own file name (`curl -O`).
+    one (wget); when that is `-` or absent, stdout's redirect; else the URL's
+    own file name (`curl -O`, wget's default).
     """
     tool = PANDOC_TOOL_RE.search(command)
     url = PANDOC_DEB_URL_RE.search(command)
@@ -1016,43 +1348,67 @@ def download_target(command: str, url_vars: set[str]) -> str | None:
         flag = r"-[A-Za-z]*o\s*|--output(?:\s+|=)"
     else:
         flag = r"-[A-Za-z]*O\s*|--output-document(?:\s+|=)"
-    out = re.search(rf"(?:^|\s)(?:{flag})[\"']?([^\s\"']+)", command) \
-        or re.search(r">\s*[\"']?([^\s\"'&|;]+)", command)
-    if out:
-        return shell_path(out.group(1))
-    return shell_path(url.group(0).rsplit("/", 1)[-1]) if url else None
+    out = re.search(rf"(?:^|\s)(?:{flag})[\"']?([^\s\"']+)", command)
+    target = out.group(1) if out else None
+    if target in (None, "-"):
+        redirect = stdout_redirect(command)
+        if redirect:
+            target = redirect
+        elif target == "-":
+            return tool.group(1), None
+        elif url:
+            target = url.group(0).rsplit("/", 1)[-1]
+        else:
+            return tool.group(1), None
+    return tool.group(1), shell_path(target)
 
 
-INSTALL_STATES = ("absent", "unchecked", "uninstalled", "unbounded", "installed")
+def download_bounded(tool: str, command: str) -> bool:
+    return bool(TIMEOUT_WRAPPER_RE.search(command)) or all(p.search(command) for p in DOWNLOAD_BOUND_RE[tool])
 
 
-def pandoc_install_state(text: str) -> str:
-    """How far a shell text gets with the pandoc .deb, as one of INSTALL_STATES.
+INSTALL_STATES = ("absent", "unchecked", "uninstalled", "unconditioned", "unbounded", "installed")
+
+
+def pandoc_install_state(entries: list[str]) -> str:
+    """How far a job's script items get with the pandoc .deb, one of INSTALL_STATES.
 
     `installed` needs, in this order: a curl or wget download of the release
     to a file, a `sha256sum -c` (or `shasum -a 256 -c`) naming that file, and a
-    `dpkg -i` of that file. Checking another download, or checking the .deb
-    and never installing it, does not count (SEOR-egfbijyi). That chain with a
-    download that sets no time limit is `unbounded`.
+    `dpkg -i` of that file that runs only when the check passed. Paths compare
+    as whole words. Checking another download, checking the .deb and never
+    installing it, or installing it whatever the check said does not count
+    (SEOR-egfbijyi, SEOR-xhyrogfm). That chain with a download that sets no
+    time limit is `unbounded`.
     """
-    commands = shell_commands(text)
-    url_vars = set(re.findall(r"\b(\w+)=[\"']?https?://github\.com/jgm/pandoc/releases/download/", text))
+    commands: list[str] = []
+    program = [parse_shell(shell_tokens(entry), commands) for entry in entries]
+    url_vars = set(re.findall(r"\b(\w+)=[\"']?https?://github\.com/jgm/pandoc/releases/download/", "\n".join(entries)))
+
+    def better(a: str, b: str) -> str:
+        return max(a, b, key=INSTALL_STATES.index)
+
     best = "absent"
     for i, command in enumerate(commands):
-        target = download_target(command, url_vars)
-        if not target:
+        download = download_target(command, url_vars)
+        if download is None:
             continue
+        tool, target = download
         state = "unchecked"
         for j in range(i + 1, len(commands)):
-            if SHA256_CHECK_RE.search(commands[j]) and target in shell_path(commands[j]):
-                state = "uninstalled"
-                if any(DPKG_INSTALL_RE.search(c) and target in shell_path(c) for c in commands[j + 1:]):
-                    tool = PANDOC_TOOL_RE.search(command).group(1)
-                    if DOWNLOAD_BOUND_RE[tool].search(command):
-                        return "installed"
-                    state = "unbounded"
-                    break
-        best = max(best, state, key=INSTALL_STATES.index)
+            if not (target and SHA256_CHECK_RE.search(commands[j]) and target in path_tokens(commands[j])):
+                continue
+            state = better(state, "uninstalled")
+            for k in range(j + 1, len(commands)):
+                if not (DPKG_INSTALL_RE.search(commands[k]) and target in path_tokens(commands[k])):
+                    continue
+                if runs_after_failure(program, j, k):
+                    state = better(state, "unconditioned")
+                elif download_bounded(tool, command):
+                    return "installed"
+                else:
+                    state = better(state, "unbounded")
+        best = better(best, state)
     return best
 
 
@@ -1064,14 +1420,21 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     install block needs Debian, dpkg and curl, and `default:` hands it to every
     job, including those on other images (seor's citation-version runs on
     python:3.13-alpine).
+
+    The pin is what check-toolchain.R reads (pandoc_assignments()): one value
+    in all of .gitlab-ci.yml. A shell assignment overrides `variables:` at run
+    time, so with two values the one a job installs depends on where each
+    sits; two are a gap, as they are an error to check-toolchain.R. A job
+    must also see an assignment: in its variables, the global ones, or a line
+    of its setup.
     """
-    unpinned, in_default, unrecorded, other, unverified = [], [], {}, {}, {}
+    unpinned, in_default, unrecorded, candidates = [], [], {}, []
     for job in on_push:
         if not R_JOB_RE.search(job.full_text()):
             continue
         setup = ci.setup_text(job)
-        chunks = [setup] + [body for _, body in inline_scripts(setup, ci.source)]
-        tokens = {t for chunk in chunks for t in PANDOC_URL_RE.findall(chunk)}
+        bodies = [body for _, body in inline_scripts(setup, ci.source)]
+        tokens = {t for chunk in [setup] + bodies for t in PANDOC_URL_RE.findall(chunk)}
         if not tokens:
             if job.inherits_default_before and PANDOC_URL_RE.search(ci.default_before_text()):
                 in_default.append(job.name)
@@ -1082,11 +1445,40 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
         if literal:
             unrecorded.setdefault(", ".join(literal), []).append(job.name)
             continue
-        value = pandoc_version_value(job, ci, setup)
-        if value != PANDOC_PIN:
-            other.setdefault(value, []).append(job.name)
-            continue
-        state = max((pandoc_install_state(chunk) for chunk in chunks), key=INSTALL_STATES.index)
+        candidates.append((job, setup, bodies))
+    values: list[str] | None = None
+    assigning: set[str] = set()
+    if candidates:
+        try:
+            found = pandoc_assignments(ci.text)
+            values = list(dict.fromkeys(value for _, value in found))
+            lines = re.split(r"\r\n|\r|\n", ci.text)
+            assigning = {lines[n - 1] for n, _ in found if 0 < n <= len(lines)}
+        except ProbeError as error:
+            report.skip("ci", f"the pandoc pin was not read, only the install steps (probe failed: {error})")
+    if values and len(values) > 1:
+        report.gap("ci", f".gitlab-ci.yml assigns PANDOC_VERSION more than once, with different values "
+                         f"({', '.join(values)}); keep one pin, as check-toolchain.R requires")
+    never, unseen, other, unverified = [], [], [], {}
+    for job, setup, bodies in candidates:
+        if values is not None:
+            visible = setup.splitlines()
+            if job.inherits_default_before:
+                visible += ci.default_before_text().splitlines()
+            if not values:
+                never.append(job.name)
+                continue
+            if not ("PANDOC_VERSION" in job.variables or "PANDOC_VERSION" in ci.global_vars
+                    or any(line in assigning for line in visible)):
+                unseen.append(job.name)
+                continue
+            if len(values) > 1:
+                continue
+            if values[0] != PANDOC_PIN:
+                other.append(job.name)
+                continue
+        state = max([pandoc_install_state(script_entries(setup))] + [pandoc_install_state([body]) for body in bodies],
+                    key=INSTALL_STATES.index)
         if state != "installed":
             unverified.setdefault(state, []).append(job.name)
     if unpinned:
@@ -1099,18 +1491,22 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     for tokens, names in unrecorded.items():
         report.gap("ci", f"{', '.join(names)}: downloads pandoc at {tokens}, not at $PANDOC_VERSION, the variable "
                          "check-toolchain.R compares the local pandoc with")
-    for value, names in other.items():
-        if value is None:
-            report.gap("ci", f"{', '.join(names)}: downloads pandoc at $PANDOC_VERSION, "
-                             "which .gitlab-ci.yml never assigns")
-        else:
-            report.gap("ci", f"{', '.join(names)}: pins pandoc {value}, not the fleet's {PANDOC_PIN}")
+    if never:
+        report.gap("ci", f"{', '.join(never)}: downloads pandoc at $PANDOC_VERSION, which .gitlab-ci.yml never assigns")
+    if unseen:
+        report.gap("ci", f"{', '.join(unseen)}: downloads pandoc at $PANDOC_VERSION, which neither its variables "
+                         "nor its setup assign")
+    if other:
+        report.gap("ci", f"{', '.join(other)}: pins pandoc {values[0]}, not the fleet's {PANDOC_PIN}")
     reasons = {
         "absent": f"names the pandoc {PANDOC_PIN} release but downloads it with neither curl nor wget",
         "unchecked": f"downloads pandoc {PANDOC_PIN} without a sha256 check of that download",
         "uninstalled": f"sha256-checks the pandoc {PANDOC_PIN} .deb but does not `dpkg -i` it after the check",
-        "unbounded": f"downloads pandoc {PANDOC_PIN} with no time limit (curl --max-time, wget --timeout), so a "
-                     "stalled download hangs the job instead of reaching the warn fallback",
+        "unconditioned": f"installs the pandoc {PANDOC_PIN} .deb whether or not its sha256 check passes (`|| true`, "
+                         "or `;` or a newline in one script item without `set -e`)",
+        "unbounded": f"downloads pandoc {PANDOC_PIN} with no time limit (curl --max-time, wget --timeout with "
+                     "--tries of 5 or fewer, or timeout(1)), so a stalled download hangs the job instead of "
+                     "reaching the warn fallback",
     }
     for state, names in unverified.items():
         report.gap("ci", f"{', '.join(names)}: {reasons[state]}")
@@ -1658,12 +2054,21 @@ def check_local_gate(source, report: Report) -> None:
     body = strip_comment_lines(text)
     # R and shell only: a Python script that merely names check_url_db (this
     # one, check-bugreports.py's docstring) runs no URL check.
-    scripts = [s for path, s in inline_scripts(body, source, depth=3) if Path(path).suffix in ("", ".R", ".r", ".sh")]
+    named = [(path, s) for path, s in inline_scripts(body, source, depth=3) if Path(path).suffix in ("", ".R", ".r", ".sh")]
+    scripts = [s for _, s in named]
     if not any(URL_CHECK_RE.search(chunk) for chunk in [body] + scripts):
         report.gap("local gate", "no URL check in the pre-push gate")
-    # One script both asks rmarkdown for its pandoc and reads the CI pin: a
-    # pandoc_version() call alone may be an unrelated minimum-version check.
-    if not any(PANDOC_LOCAL_RE.search(chunk) and PANDOC_PIN_READ_RE.search(chunk) for chunk in [body] + scripts):
+
+    # One script both asks rmarkdown for its pandoc and reads the CI pin from
+    # .gitlab-ci.yml: a pandoc_version() call alone may be an unrelated
+    # minimum-version check, and PANDOC_VERSION is never set locally.
+    def reads_ci_pin(path: str, chunk: str) -> bool:
+        names_ci = PANDOC_CI_FILE_RE.search(chunk) or (
+            Path(path).suffix not in (".R", ".r") and PANDOC_CI_FILE_WORD_RE.search(chunk))
+        return bool(PANDOC_LOCAL_RE.search(chunk) and names_ci
+                    and PANDOC_PIN_READ_RE.search(PANDOC_ENV_READ_RE.sub("", chunk)))
+
+    if not any(reads_ci_pin(path, chunk) for path, chunk in [(".pre-commit-config.yaml", body)] + named):
         report.gap("local gate", "no check that compares the local rmarkdown::pandoc_version() with the CI pin "
                                  f"(PANDOC_VERSION, {PANDOC_PIN})")
 
@@ -1886,8 +2291,9 @@ repos:
 """
 
 FIXTURE_TOOLCHAIN_R = """\
-# The pin comes from the CI; a toolchain check compares the local pandoc to it.
-pin <- Sys.getenv("PANDOC_VERSION")
+# The pin is read from the CI file; a toolchain check compares the local pandoc to it.
+ci <- readLines(file.path(root, ".gitlab-ci.yml"))
+pin <- read_pin(ci, "PANDOC_VERSION")
 if (!identical(as.character(rmarkdown::pandoc_version()), pin)) quit(status = 1)
 """
 
@@ -2297,7 +2703,8 @@ def self_test() -> list[str]:
                            "  pandoc-${PANDOC_VERSION}-1-amd64.deb\" | sha256sum --check"),
                       ci, install_line, "    - dpkg -i ./pandoc-${PANDOC_VERSION}-1-amd64.deb\n"), fixture_state())
     expect_clean("pandoc fetched with wget", "punycoder",
-                 edit(cran, ci, "curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb ", "wget -q --timeout=60 -O /tmp/pandoc.deb "), fixture_state())
+                 edit(cran, ci, "curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb ",
+                      "wget -q --timeout=60 --tries=3 -O /tmp/pandoc.deb "), fixture_state())
     expect_clean("pandoc URL in a variable", "punycoder",
                  edit(edit(cran, ci, "    - curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb \"https:", "    - PANDOC_URL=\"https:"),
                       ci, "-1-amd64.deb\"\n", "-1-amd64.deb\"\n    - curl -m 300 -fsSL -o /tmp/pandoc.deb \"$PANDOC_URL\"\n"),
@@ -2364,6 +2771,108 @@ def self_test() -> list[str]:
                  edit(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", ""), ci, "variables:\n",
                       "variables:\n  PANDOC_VERSION: \"3.10\"\n"), fixture_state())
 
+    # SEOR-xhyrogfm. One pin, read by check-toolchain.R's own reader: a shell
+    # assignment overrides `variables:` at run time, so two values are a gap
+    # whichever one a job would see, and check-toolchain.R refuses them too.
+    two_pins = ".gitlab-ci.yml assigns PANDOC_VERSION more than once, with different values"
+    expect_gap("pin in variables, another in the setup", two_pins, "punycoder",
+               edit(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "    - PANDOC_VERSION=3.9\n"), ci, "variables:\n",
+                    "variables:\n  PANDOC_VERSION: \"3.10\"\n"), fixture_state())
+    expect_gap("pin in the setup, another in variables", two_pins, "punycoder",
+               edit(cran, ci, "variables:\n", "variables:\n  PANDOC_VERSION: \"3.9\"\n"), fixture_state())
+    expect_clean("the same pin in variables and the setup", "punycoder",
+                 edit(cran, ci, "variables:\n", "variables:\n  PANDOC_VERSION: \"3.10\"\n"), fixture_state())
+    expect_gap("two shell pins in the setup", two_pins, "punycoder",
+               edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "    - PANDOC_VERSION=3.10\n    - PANDOC_VERSION=3.9\n"),
+               fixture_state())
+    expect_gap("a second pin in a job without R", two_pins, "punycoder",
+               edit(cran, ci, "    - fossa analyze\n", "    - export PANDOC_VERSION=3.9\n    - fossa analyze\n"),
+               fixture_state())
+    expect_gap("a second pin as a matrix entry", two_pins, "punycoder",
+               edit(cran, ci, "      - R_VERSION: [\"4.6.1\", \"4.5.3\", \"devel\", \"4.1.3\"]\n",
+                    "      - R_VERSION: [\"4.6.1\", \"4.5.3\", \"devel\", \"4.1.3\"]\n      - PANDOC_VERSION: \"3.9\"\n"),
+               fixture_state())
+    expect_gap("pin only in a job that installs no pandoc", "which neither its variables nor its setup assign",
+               "punycoder", edit(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", ""), ci, "    - fossa analyze\n",
+                                 "    - PANDOC_VERSION=3.10\n    - fossa analyze\n"), fixture_state())
+
+    # The install runs only when the sha256 check passed: a failing entry ends
+    # the job, but inside one entry `;` and newlines go on unless `set -e`.
+    unconditioned = "installs the pandoc 3.10 .deb whether or not its sha256 check passes"
+    url = "\"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb\""
+    dl_cmd = f"curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb {url}"
+    check_cmd = f"echo \"{digest}  /tmp/pandoc.deb\" | sha256sum -c -"
+
+    def setup(*entries: str) -> dict:
+        return edit(cran, ci, pin_lines, "    - PANDOC_VERSION=3.10\n" + "".join(entries))
+
+    expect_gap("sha256 failure ignored with || true", unconditioned, "punycoder",
+               edit(cran, ci, check_line, f"    - {check_cmd} || true\n"), fixture_state())
+    expect_gap("install after ; on the check's line", unconditioned, "punycoder",
+               edit(cran, ci, check_line + install_line, f"    - {check_cmd}; dpkg -i /tmp/pandoc.deb\n"), fixture_state())
+    expect_gap("install in a block without set -e", unconditioned, "punycoder",
+               setup(f"    - |\n      {dl_cmd}\n      {check_cmd}\n      dpkg -i /tmp/pandoc.deb\n"), fixture_state())
+    expect_gap("install in a block chained with ;", unconditioned, "punycoder",
+               setup(f"    - |\n      {dl_cmd}; {check_cmd}; dpkg -i /tmp/pandoc.deb\n"), fixture_state())
+    expect_gap("install after the if that checks", unconditioned, "punycoder",
+               setup(f"    - |\n      if {dl_cmd} && {check_cmd}; then\n        echo checked\n      fi\n"
+                     "      dpkg -i /tmp/pandoc.deb\n"), fixture_state())
+    expect_clean("install in a set -e block", "punycoder",
+                 setup(f"    - |\n      set -eu\n      {dl_cmd}\n      {check_cmd}\n      dpkg -i /tmp/pandoc.deb\n"),
+                 fixture_state())
+    expect_clean("sha256 failure exits", "punycoder",
+                 edit(cran, ci, check_line, f"    - {check_cmd} || exit 1\n"), fixture_state())
+    expect_clean("seor's shape with its arch case", "punycoder", setup(
+        "    - |\n"
+        "      ARCH=$(dpkg --print-architecture)\n"
+        "      case \"$ARCH\" in\n"
+        f"        amd64) PANDOC_SHA256={digest} ;;\n"
+        "        *) PANDOC_SHA256=unknown ;;\n"
+        "      esac\n"
+        "      if curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 120 \\\n"
+        "        -o /tmp/pandoc.deb \"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/"
+        "pandoc-${PANDOC_VERSION}-1-${ARCH}.deb\" \\\n"
+        "        && echo \"${PANDOC_SHA256}  /tmp/pandoc.deb\" | sha256sum -c - \\\n"
+        "        && dpkg -i /tmp/pandoc.deb; then\n"
+        "        echo \"pandoc ${PANDOC_VERSION} installed\"\n"
+        "      else\n"
+        "        echo \"WARNING: pandoc ${PANDOC_VERSION} not installed\"\n"
+        "      fi\n"
+        "      pandoc --version | sed -n 1p\n"), fixture_state())
+
+    # Paths compare as whole tokens; `-` is stdout, not a file.
+    other_check = f"    - echo \"{digest}  /tmp/other.deb\" | sha256sum -c -\n"
+    to_stdout = f"    - wget -q -T 60 -t 3 -O- {url} > /tmp/pandoc.deb\n"
+    expect_gap("download to stdout, another file checked", "without a sha256 check of that download", "punycoder",
+               setup(to_stdout, other_check, install_line), fixture_state())
+    expect_clean("download to stdout, redirected to the checked .deb", "punycoder",
+                 setup(to_stdout, check_line, install_line), fixture_state())
+    expect_gap("output path inside an unrelated checksum file's name", "without a sha256 check of that download",
+               "punycoder", setup(f"    - curl -fsSL --max-time 300 -o p {url}\n",
+                                  "    - sha256sum -c /tmp/unrelated.sha256\n", "    - dpkg -i p\n"), fixture_state())
+    expect_gap("installs a .deb whose name extends the download's", "but does not `dpkg -i` it", "punycoder",
+               edit(cran, ci, install_line, "    - dpkg -i /tmp/pandoc.deb.bak\n"), fixture_state())
+
+    # The `>` fallback reads stdout's redirect, not stderr's.
+    for redirect in ("2>/dev/null > /tmp/pandoc.deb", "&>/dev/null >/tmp/pandoc.deb", "2>&1 >/tmp/pandoc.deb"):
+        expect_clean(f"download saved with {redirect!r}", "punycoder",
+                     setup(f"    - curl -fsSL --max-time 300 {url} {redirect}\n", check_line, install_line), fixture_state())
+
+    # Time limits: timeout(1) and a bundled -m bound the download; wget's
+    # --timeout bounds one try, and it tries 20 times by default (0: forever).
+    for bounded in (f"timeout 300 curl -fsSL --retry 3 -o /tmp/pandoc.deb {url}",
+                    f"curl -fsSLm 300 -o /tmp/pandoc.deb {url}",
+                    f"timeout -k 10 5m wget -q -O /tmp/pandoc.deb {url}",
+                    f"wget -q -T 60 -t 3 -O /tmp/pandoc.deb {url}"):
+        expect_clean(f"download bounded: {bounded[:30]!r}", "punycoder", setup(f"    - {bounded}\n", check_line, install_line),
+                     fixture_state())
+    for unbounded_dl in (f"timeout 0 curl -fsSL -o /tmp/pandoc.deb {url}",
+                         f"wget -q --timeout=60 -O /tmp/pandoc.deb {url}",
+                         f"wget -q --timeout=60 --tries=0 -O /tmp/pandoc.deb {url}",
+                         f"wget -q --timeout=60 --tries=20 -O /tmp/pandoc.deb {url}"):
+        expect_gap(f"download unbounded: {unbounded_dl[:40]!r}", unbounded, "punycoder",
+                   setup(f"    - {unbounded_dl}\n", check_line, install_line), fixture_state())
+
     # NEGATIVE: local gate and schedules.
     expect_gap("URL check missing", "no URL check", "punycoder",
                dict(cran, **{"tools/verify.R": "# check_url_db is only mentioned in a comment\nx <- 1\n"}), fixture_state())
@@ -2378,6 +2887,19 @@ def self_test() -> list[str]:
     expect_gap("pin read and pandoc asked in different scripts", no_local_pandoc, "punycoder",
                dict(cran, **{"scripts/check-toolchain.R": "pin <- Sys.getenv(\"PANDOC_VERSION\")\n",
                              "tools/verify.R": cran["tools/verify.R"] + "v <- rmarkdown::pandoc_version()\n"}),
+               fixture_state())
+    # The pin is read from .gitlab-ci.yml: nothing sets PANDOC_VERSION locally,
+    # so an environment read compares with its default, a minimum check.
+    compare = "if (!identical(as.character(rmarkdown::pandoc_version()), pin)) quit(status = 1)\n"
+    expect_gap("local pandoc check against an unset variable", no_local_pandoc, "punycoder",
+               dict(cran, **{"scripts/check-toolchain.R": "pin <- Sys.getenv(\"PANDOC_VERSION\", \"2.11\")\n" + compare}),
+               fixture_state())
+    expect_gap("CI file read for something else, pin from the environment", no_local_pandoc, "punycoder",
+               dict(cran, **{"scripts/check-toolchain.R": "ci <- readLines(\".gitlab-ci.yml\")\n"
+                                                          "pin <- Sys.getenv(\"PANDOC_VERSION\")\n" + compare}),
+               fixture_state())
+    expect_gap("CI file named only in a trailing comment", no_local_pandoc, "punycoder",
+               dict(cran, **{"scripts/check-toolchain.R": "pin <- PANDOC_VERSION  # see .gitlab-ci.yml\n" + compare}),
                fixture_state())
     no_deep = fixture_state()
     no_deep.schedules = no_deep.schedules[1:]
