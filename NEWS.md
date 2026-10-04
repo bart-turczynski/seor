@@ -1,7 +1,7 @@
 # seor (development version)
 
 * seor 0.1.0 is archived on Zenodo. `citation("seor")`, `CITATION.cff` and
-  `codemeta.json` carry the concept DOI (10.5281/zenodo.23136687), `CITATION.cff` also
+  `codemeta.json` carry the concept DOI (`10.5281/zenodo.23136687`), `CITATION.cff` also
   carries the 0.1.0 version DOI, and the README shows the DOI and
   latest-release badges (SEOR-dvbdsvuq).
 # seor 0.1.0
