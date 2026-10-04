@@ -13,9 +13,11 @@
 * seor has a logo, the fleet's black hex, in `man/figures/logo.svg` and
   `logo.png`. r-universe shows it on the package card and pkgdown in the site
   header, and the README heading carries it (SEOR-wxjuxbtu).
-* The README logo has alt text, "seor hex logo, white on black". The fleet
+* The README logo carries an empty `alt=""`: it sits inside the heading, so
+  alt text would repeat the package name to a screen reader. The fleet
   standard asks the same of every package, and
-  `scripts/check-fleet-standard.py` flags a logo without it (SEOR-wfleahtg).
+  `scripts/check-fleet-standard.py` flags a logo whose alt is missing or not
+  empty (SEOR-wfleahtg).
 * The README is for users now: an Installation section with the r-universe
   command, and each member's site and `llms.txt` link. The development setup
   and verify command live in `CONTRIBUTING.md`, the layout in
