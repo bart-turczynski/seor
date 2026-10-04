@@ -141,6 +141,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable
 
@@ -1431,6 +1432,21 @@ LOGO_FILES = ("man/figures/logo.svg", "man/figures/logo.png")
 LOGO_ALT = "{pkg} hex logo, white on black"
 
 
+def tag_attrs(tag: str) -> dict[str, str | None]:
+    """One HTML start tag's attributes as a browser reads them: names lower-cased,
+    entities decoded, spaces around `=` allowed, and the first of a repeated
+    attribute kept."""
+    found: dict[str, str | None] = {}
+
+    class Reader(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            for name, value in attrs:
+                found.setdefault(name, value)
+
+    Reader(convert_charrefs=True).feed(tag)
+    return found
+
+
 def check_logo(pkg: str, source, report: Report) -> None:
     tree = source.tree()
     for path in LOGO_FILES:
@@ -1441,18 +1457,14 @@ def check_logo(pkg: str, source, report: Report) -> None:
         return
     title = next((title for level, title, _ in readme_headings(text) if level == 1), None)
     alt = LOGO_ALT.format(pkg=pkg)
-    src = r"src=(?:\"man/figures/logo\.png\"|'man/figures/logo\.png'|man/figures/logo\.png(?=[\s/>]))"
-    # The alt attribute anywhere in the tag, in either quotes.
-    has_alt = rf"(?=[^>]*\salt=(?:\"{re.escape(alt)}\"|'{re.escape(alt)}'))"
-
-    def header(lookahead: str) -> str:
-        # The bare <img>, or the link-wrapped one usethis::use_logo() writes.
-        img = rf"<img{lookahead}\s(?:[^>]*\s)?{src}[^>]*>"
-        return rf"{re.escape(pkg)}\s+(?:{img}|<a\s[^>]*>\s*{img}\s*</a>)"
-
-    if title is None or not re.fullmatch(header(""), title):
+    # The bare <img>, or the link-wrapped one usethis::use_logo() writes. Its
+    # attributes are read as a browser reads them (tag_attrs), not by pattern.
+    img = r"<img\s[^>]*>"
+    m = title and re.fullmatch(rf"{re.escape(pkg)}\s+(?:({img})|<a\s[^>]*>\s*({img})\s*</a>)", title)
+    attrs = tag_attrs(m.group(1) or m.group(2)) if m else {}
+    if attrs.get("src") != "man/figures/logo.png":
         report.gap("logo", f'README.Rmd: the first heading is not "# {pkg}" with the man/figures/logo.png <img>')
-    elif not re.fullmatch(header(has_alt), title):
+    elif attrs.get("alt") != alt:
         report.gap("logo", f'README.Rmd: the logo <img> lacks alt="{alt}"')
 
 
@@ -2157,6 +2169,14 @@ def self_test() -> list[str]:
                edit(cran, "README.Rmd", fixture_h1("punycoder"),
                     '# punycoder <a href="https://bart-turczynski.gitlab.io/punycoder/"><img src="man/figures/logo.png" '
                     'align="right" height="138" alt="punycoder website" /></a>'), fixture_state())
+    expect_gap("an empty alt ahead of the right one", "lacks alt=", "punycoder",
+               edit(cran, "README.Rmd", alt, ' alt=""' + alt), fixture_state())
+    expect_gap("alt text only inside another attribute", "lacks alt=", "punycoder",
+               edit(cran, "README.Rmd", alt, " title='x" + alt + "'"), fixture_state())
+    for spelling in (' alt = "punycoder hex logo, white on black"', ' ALT="punycoder hex logo, white on black"',
+                     ' alt="punycoder hex logo&#44; white on black"'):
+        expect_clean(f"alt spelled {spelling.strip()!r}", "punycoder",
+                     edit(cran, "README.Rmd", alt, spelling), fixture_state())
     expect_clean("single-quoted alt, ahead of src", "punycoder",
                  edit(cran, "README.Rmd", fixture_h1("punycoder"),
                       "# punycoder <img alt='punycoder hex logo, white on black' src=\"man/figures/logo.png\" />"),
