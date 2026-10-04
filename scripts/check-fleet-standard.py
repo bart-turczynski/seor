@@ -75,11 +75,13 @@ WHAT IT CHECKS, by section of the standard.
   (`github.com/jgm/pandoc/releases/download/<version>/pandoc-`), names that
   version as `$PANDOC_VERSION`, which .gitlab-ci.yml sets to PANDOC_PIN in a
   `variables:` entry or a shell assignment (the spellings check-toolchain.R
-  reads too, so the two never disagree on the pin), and a `sha256sum -c` (or
-  `shasum -a 256 -c`) checks it. The install counts in the `before_script`
-  or `script` the job ends up with (its own, else the template's that GitLab
-  merges last), not in `default:`, which also reaches jobs on images without dpkg or curl; a pin
-  found only there is reported, to move into the template.
+  reads too, so the two never disagree on the pin), saves it to a file with
+  curl or wget, checks that file with `sha256sum -c` (or `shasum -a 256 -c`),
+  then `dpkg -i`s that same file (pandoc_install_state). The install counts
+  in the `before_script` or `script` the job ends up with (its own, else the
+  template's that GitLab merges last), not in `default:`, which also reaches
+  jobs on images without dpkg or curl; a pin found only there is reported, to
+  move into the template.
 * Local gate. The pre-commit config, or a script its hooks call, runs a URL
   check (`check_url_db`, `url_db_from_package_sources` or urlchecker) and
   compares `rmarkdown::pandoc_version()` with the pin (check-toolchain.R).
@@ -96,7 +98,8 @@ that defines them. `default: before_script` (or the top-level one) joins every
 job that sets no `before_script` of its own and does not turn it off with
 `inherit: default:`. A job's text joins every block it extends; the pandoc
 rule alone reads the one `before_script` and `script` a job ends up with,
-since GitLab replaces arrays along `extends`. `rules:if` and `workflow:rules` are evaluated for real (a
+since GitLab replaces arrays along `extends`. `rules:if` and `workflow:rules`
+are evaluated for real (a
 small evaluator for `==`, `!=`, `=~`, `!~`, `&&`, `||`, presence and
 parentheses) in four pipelines: a push to main, a `deep-check` schedule, a
 `dependency-audit` schedule and a tag. A job "runs" in a pipeline when the
@@ -854,8 +857,7 @@ class CI:
         Unlike `job.text`, which joins every block the job extends, this takes
         the one `before_script` and `script` the job ends up with: its own, or
         else the template's merged last, as GitLab replaces arrays along
-        `extends`.
-        The anchor blocks they pull in are added.
+        `extends`. The anchor blocks they pull in are added.
         """
         parts = []
         for key in ("before_script", "script"):
@@ -927,6 +929,9 @@ PANDOC_URL_RE = re.compile(r"github\.com/jgm/pandoc/releases/download/([^/\s\"']
 PANDOC_SHELL_PIN_RE = re.compile(r"\bPANDOC_VERSION=[\"']?([\w.-]+)")
 PANDOC_VAR_TOKEN_RE = re.compile(r"\$\{?PANDOC_VERSION\}?")
 SHA256_CHECK_RE = re.compile(r"\bsha256sum\b[^\n]*\s(?:-c|--check)\b|\bshasum\b[^\n]*-a\s*256[^\n]*\s(?:-c|--check)\b")
+PANDOC_TOOL_RE = re.compile(r"\b(curl|wget)\b")
+PANDOC_DEB_URL_RE = re.compile(r"https?://github\.com/jgm/pandoc/releases/download/[^\s\"']+")
+DPKG_INSTALL_RE = re.compile(r"\bdpkg\b.*\s(?:-i|--install)(?=\s)")
 PANDOC_LOCAL_RE = re.compile(r"\bpandoc_version\s*\(")
 GATES = {
     "README drift": (re.compile(r"build_readme\s*\(|render\(\s*[\"']README\.Rmd"),),
@@ -960,6 +965,71 @@ def pandoc_version_value(job: Job, ci: CI, setup: str) -> str | None:
     return value
 
 
+def shell_commands(text: str) -> list[str]:
+    """A shell text's simple commands, in order: backslash continuations joined,
+    split at newlines, `;`, `&&` and `||`. A pipeline stays one command, so
+    `echo "<digest>  f.deb" | sha256sum -c -` names its file."""
+    text = re.sub(r"\\\n", " ", text)
+    return [c.strip() for c in re.split(r"\n|&&|\|\||;", text) if c.strip()]
+
+
+def shell_path(text: str) -> str:
+    """A path or command as compared here: `${X}` read as `$X`, quotes and `./` dropped."""
+    text = re.sub(r"\$\{(\w+)\}", r"$\1", text).replace('"', "").replace("'", "")
+    return re.sub(r"(?<![\w.$/-])\./", "", text)
+
+
+def download_target(command: str, url_vars: set[str]) -> str | None:
+    """The file a curl or wget command saves the pandoc release to, else None.
+
+    The command names the release URL, or a variable assigned it earlier. The
+    file is the `-o`/`--output` argument (curl), the `-O`/`--output-document`
+    one (wget), a `>` redirect, or else the URL's own file name (`curl -O`).
+    """
+    tool = PANDOC_TOOL_RE.search(command)
+    url = PANDOC_DEB_URL_RE.search(command)
+    named = any(re.search(rf"\$\{{?{var}\b", command) for var in url_vars)
+    if not tool or not (url or named):
+        return None
+    if tool.group(1) == "curl":
+        flag = r"-[A-Za-z]*o\s*|--output(?:\s+|=)"
+    else:
+        flag = r"-[A-Za-z]*O\s*|--output-document(?:\s+|=)"
+    out = re.search(rf"(?:^|\s)(?:{flag})[\"']?([^\s\"']+)", command) \
+        or re.search(r">\s*[\"']?([^\s\"'&|;]+)", command)
+    if out:
+        return shell_path(out.group(1))
+    return shell_path(url.group(0).rsplit("/", 1)[-1]) if url else None
+
+
+INSTALL_STATES = ("absent", "unchecked", "uninstalled", "installed")
+
+
+def pandoc_install_state(text: str) -> str:
+    """How far a shell text gets with the pandoc .deb, as one of INSTALL_STATES.
+
+    `installed` needs, in this order: a curl or wget download of the release
+    to a file, a `sha256sum -c` (or `shasum -a 256 -c`) naming that file, and a
+    `dpkg -i` of that file. Checking another download, or checking the .deb
+    and never installing it, does not count (SEOR-egfbijyi).
+    """
+    commands = shell_commands(text)
+    url_vars = set(re.findall(r"\b(\w+)=[\"']?https?://github\.com/jgm/pandoc/releases/download/", text))
+    best = "absent"
+    for i, command in enumerate(commands):
+        target = download_target(command, url_vars)
+        if not target:
+            continue
+        state = "unchecked"
+        for j in range(i + 1, len(commands)):
+            if SHA256_CHECK_RE.search(commands[j]) and target in shell_path(commands[j]):
+                state = "uninstalled"
+                if any(DPKG_INSTALL_RE.search(c) and target in shell_path(c) for c in commands[j + 1:]):
+                    return "installed"
+        best = max(best, state, key=INSTALL_STATES.index)
+    return best
+
+
 def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     """Every R job on push installs PANDOC_PIN from the release, sha256-checked.
 
@@ -969,7 +1039,7 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     job, including those on other images (seor's citation-version runs on
     python:3.13-alpine).
     """
-    unpinned, in_default, unrecorded, other, unchecked = [], [], {}, {}, []
+    unpinned, in_default, unrecorded, other, unverified = [], [], {}, {}, {}
     for job in on_push:
         if not R_JOB_RE.search(job.full_text()):
             continue
@@ -989,8 +1059,10 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
         value = pandoc_version_value(job, ci, setup)
         if value != PANDOC_PIN:
             other.setdefault(value, []).append(job.name)
-        elif not any(SHA256_CHECK_RE.search(chunk) for chunk in chunks):
-            unchecked.append(job.name)
+            continue
+        state = max((pandoc_install_state(chunk) for chunk in chunks), key=INSTALL_STATES.index)
+        if state != "installed":
+            unverified.setdefault(state, []).append(job.name)
     if unpinned:
         report.gap("ci", f"pandoc {PANDOC_PIN} is not installed from the pandoc release in the setup of "
                          f"{', '.join(unpinned)} (README.md is byte-stable only under the pinned pandoc)")
@@ -1007,8 +1079,13 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
                              "which .gitlab-ci.yml never assigns")
         else:
             report.gap("ci", f"{', '.join(names)}: pins pandoc {value}, not the fleet's {PANDOC_PIN}")
-    if unchecked:
-        report.gap("ci", f"{', '.join(unchecked)}: downloads pandoc {PANDOC_PIN} without a sha256 check")
+    reasons = {
+        "absent": f"names the pandoc {PANDOC_PIN} release but downloads it with neither curl nor wget",
+        "unchecked": f"downloads pandoc {PANDOC_PIN} without a sha256 check of that download",
+        "uninstalled": f"sha256-checks the pandoc {PANDOC_PIN} .deb but does not `dpkg -i` it after the check",
+    }
+    for state, names in unverified.items():
+        report.gap("ci", f"{', '.join(names)}: {reasons[state]}")
 
 
 def leg_roles(image: str, state: State, floor: str | None) -> set[str]:
@@ -2109,6 +2186,45 @@ def self_test() -> list[str]:
     expect_gap("pandoc pin without sha256", "downloads pandoc 3.10 without a sha256 check", "punycoder",
                edit(cran, ci, "    - echo \"d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf  "
                     "/tmp/pandoc.deb\" | sha256sum -c -\n", ""), fixture_state())
+    # The sha256 check and the install are tied to the downloaded .deb.
+    digest = "d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf"
+    check_line = f"    - echo \"{digest}  /tmp/pandoc.deb\" | sha256sum -c -\n"
+    install_line = "    - dpkg -i /tmp/pandoc.deb\n"
+    expect_gap("sha256 check of another download", "downloads pandoc 3.10 without a sha256 check of that download",
+               "punycoder", edit(cran, ci, check_line, "    - curl -fsSL -o /tmp/other.tgz https://example.org/o.tgz\n"
+                                 f"    - echo \"{digest}  /tmp/other.tgz\" | sha256sum -c -\n"), fixture_state())
+    expect_gap("checked .deb never installed", "sha256-checks the pandoc 3.10 .deb but does not `dpkg -i` it",
+               "punycoder", edit(cran, ci, install_line, ""), fixture_state())
+    expect_gap("another .deb installed", "sha256-checks the pandoc 3.10 .deb but does not `dpkg -i` it",
+               "punycoder", edit(cran, ci, install_line, "    - dpkg -i /tmp/other.deb\n"), fixture_state())
+    expect_gap("installed before the check", "sha256-checks the pandoc 3.10 .deb but does not `dpkg -i` it",
+               "punycoder", edit(cran, ci, check_line + install_line, install_line + check_line), fixture_state())
+    expect_gap("release named but never downloaded", "downloads it with neither curl nor wget", "punycoder",
+               edit(cran, ci, "    - curl -fsSL -o /tmp/pandoc.deb ", "    - echo -o /tmp/pandoc.deb "), fixture_state())
+    seor_shape = (
+        "    - PANDOC_VERSION=3.10\n"
+        "    - |\n"
+        "      ARCH=$(dpkg --print-architecture)\n"
+        "      if curl -fsSL -o /tmp/pandoc.deb \"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/"
+        "pandoc-${PANDOC_VERSION}-1-${ARCH}.deb\" \\\n"
+        "        && echo \"${PANDOC_SHA256}  /tmp/pandoc.deb\" | sha256sum -c - \\\n"
+        "        && dpkg -i /tmp/pandoc.deb; then\n"
+        "        echo \"pandoc ${PANDOC_VERSION} installed\"\n"
+        "      else\n"
+        "        echo \"WARNING: pandoc ${PANDOC_VERSION} not installed\"\n"
+        "      fi\n")
+    expect_clean("pandoc installed in seor's shape", "punycoder", edit(cran, ci, pin_lines, seor_shape), fixture_state())
+    expect_clean("pandoc saved under its release name", "punycoder",
+                 edit(edit(edit(cran, ci, "curl -fsSL -o /tmp/pandoc.deb ", "curl -fsSLO "), ci,
+                           "  /tmp/pandoc.deb\" | sha256sum -c -",
+                           "  pandoc-${PANDOC_VERSION}-1-amd64.deb\" | sha256sum --check"),
+                      ci, install_line, "    - dpkg -i ./pandoc-${PANDOC_VERSION}-1-amd64.deb\n"), fixture_state())
+    expect_clean("pandoc fetched with wget", "punycoder",
+                 edit(cran, ci, "curl -fsSL -o /tmp/pandoc.deb ", "wget -q -O /tmp/pandoc.deb "), fixture_state())
+    expect_clean("pandoc URL in a variable", "punycoder",
+                 edit(edit(cran, ci, "    - curl -fsSL -o /tmp/pandoc.deb \"https:", "    - PANDOC_URL=\"https:"),
+                      ci, "-1-amd64.deb\"\n", "-1-amd64.deb\"\n    - curl -fsSL -o /tmp/pandoc.deb \"$PANDOC_URL\"\n"),
+                 fixture_state())
     expect_gap("pandoc pin at another version", "pins pandoc 3.9, not the fleet's 3.10", "punycoder",
                edit(cran, ci, "PANDOC_VERSION=3.10", "PANDOC_VERSION=3.9"), fixture_state())
     expect_gap("pandoc version never recorded", "downloads pandoc at $PANDOC_VERSION, which .gitlab-ci.yml never assigns",

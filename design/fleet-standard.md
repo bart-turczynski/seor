@@ -466,8 +466,11 @@ What it checks, section by section:
   allocated. Every job that runs R on a push downloads pandoc from its GitHub
   release at `$PANDOC_VERSION`, which `.gitlab-ci.yml` sets to 3.10 in a
   `variables:` entry or a shell assignment, quoted or not, with or without a
-  trailing comment (the spellings `check-toolchain.R` reads too), and checks
-  it with `sha256sum -c`. The install counts only in the `before_script` or
+  trailing comment (the spellings `check-toolchain.R` reads too). It saves
+  the `.deb` to a file with curl or wget, a `sha256sum -c` (or
+  `shasum -a 256 -c`) names that file, and a later `dpkg -i` installs that
+  same file; a checksum of some other download, or a checked `.deb` never
+  installed, does not count. The install counts only in the `before_script` or
   `script` the job ends up with, its own or its template's; one only in
   `default: before_script` is reported, to move into the template. A job's
   commands are read as text, along with the R, shell and YAML scripts it
