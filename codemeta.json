@@ -212,8 +212,11 @@
         }
       ],
       "name": "{seor}: Easily Install and Load the 'seor' SEO and Developer Tools",
+      "identifier": "10.5281/zenodo.23136687",
       "url": "https://gitlab.com/bart-turczynski/seor",
-      "description": "R package version 0.1.0"
+      "description": "R package version 0.1.0",
+      "@id": "https://doi.org/10.5281/zenodo.23136687",
+      "sameAs": "https://doi.org/10.5281/zenodo.23136687"
     }
   ],
   "releaseNotes": "https://gitlab.com/bart-turczynski/seor/-/blob/main/NEWS.md",
