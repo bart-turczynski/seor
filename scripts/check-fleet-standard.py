@@ -83,8 +83,10 @@ WHAT IT CHECKS, by section of the standard.
   jobs on images without dpkg or curl; a pin found only there is reported, to
   move into the template.
 * Local gate. The pre-commit config, or a script its hooks call, runs a URL
-  check (`check_url_db`, `url_db_from_package_sources` or urlchecker) and
-  compares `rmarkdown::pandoc_version()` with the pin (check-toolchain.R).
+  check (`check_url_db`, `url_db_from_package_sources` or urlchecker), and
+  one of them both calls `rmarkdown::pandoc_version()` and reads
+  `PANDOC_VERSION`, comparing the local pandoc with the CI pin
+  (check-toolchain.R).
 * Schedules. A `deep-check` and a `dependency-audit` schedule, each active,
   on `main`, with `SCHEDULE_KIND` set on the schedule itself; no schedule
   without a `SCHEDULE_KIND` or off `main`.
@@ -933,6 +935,7 @@ PANDOC_TOOL_RE = re.compile(r"\b(curl|wget)\b")
 PANDOC_DEB_URL_RE = re.compile(r"https?://github\.com/jgm/pandoc/releases/download/[^\s\"']+")
 DPKG_INSTALL_RE = re.compile(r"\bdpkg\b.*\s(?:-i|--install)(?=\s)")
 PANDOC_LOCAL_RE = re.compile(r"\bpandoc_version\s*\(")
+PANDOC_PIN_READ_RE = re.compile(r"\bPANDOC_VERSION\b")
 GATES = {
     "README drift": (re.compile(r"build_readme\s*\(|render\(\s*[\"']README\.Rmd"),),
     "news-version": (re.compile(r"NEWS\.md"), re.compile(r"development version", re.I)),
@@ -1612,8 +1615,11 @@ def check_local_gate(source, report: Report) -> None:
     scripts = [s for path, s in inline_scripts(body, source, depth=3) if Path(path).suffix in ("", ".R", ".r", ".sh")]
     if not any(URL_CHECK_RE.search(chunk) for chunk in [body] + scripts):
         report.gap("local gate", "no URL check in the pre-push gate")
-    if not any(PANDOC_LOCAL_RE.search(chunk) for chunk in [body] + scripts):
-        report.gap("local gate", f"no check that the local rmarkdown::pandoc_version() is the pinned {PANDOC_PIN}")
+    # One script both asks rmarkdown for its pandoc and reads the CI pin: a
+    # pandoc_version() call alone may be an unrelated minimum-version check.
+    if not any(PANDOC_LOCAL_RE.search(chunk) and PANDOC_PIN_READ_RE.search(chunk) for chunk in [body] + scripts):
+        report.gap("local gate", "no check that compares the local rmarkdown::pandoc_version() with the CI pin "
+                                 f"(PANDOC_VERSION, {PANDOC_PIN})")
 
 
 def check_schedules(state: State, report: Report) -> None:
@@ -2278,8 +2284,17 @@ def self_test() -> list[str]:
     # NEGATIVE: local gate and schedules.
     expect_gap("URL check missing", "no URL check", "punycoder",
                dict(cran, **{"tools/verify.R": "# check_url_db is only mentioned in a comment\nx <- 1\n"}), fixture_state())
-    expect_gap("local pandoc check missing", "no check that the local rmarkdown::pandoc_version() is the pinned 3.10",
-               "punycoder", dict(cran, **{"scripts/check-toolchain.R": "# pandoc_version() is only mentioned here\nx <- 1\n"}),
+    no_local_pandoc = "no check that compares the local rmarkdown::pandoc_version() with the CI pin (PANDOC_VERSION, 3.10)"
+    expect_gap("local pandoc check missing", no_local_pandoc, "punycoder",
+               dict(cran, **{"scripts/check-toolchain.R": "# pandoc_version() is only mentioned here\nx <- 1\n"}),
+               fixture_state())
+    expect_gap("local pandoc check against a minimum only", no_local_pandoc, "punycoder",
+               dict(cran, **{"scripts/check-toolchain.R":
+                             "if (rmarkdown::pandoc_version() < \"2.11\") stop(\"pandoc too old\")\n"}),
+               fixture_state())
+    expect_gap("pin read and pandoc asked in different scripts", no_local_pandoc, "punycoder",
+               dict(cran, **{"scripts/check-toolchain.R": "pin <- Sys.getenv(\"PANDOC_VERSION\")\n",
+                             "tools/verify.R": cran["tools/verify.R"] + "v <- rmarkdown::pandoc_version()\n"}),
                fixture_state())
     no_deep = fixture_state()
     no_deep.schedules = no_deep.schedules[1:]

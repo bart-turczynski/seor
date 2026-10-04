@@ -476,8 +476,10 @@ What it checks, section by section:
   commands are read as text, along with the R, shell and YAML scripts it
   names, so a script that skips a gate it contains reads as running it.
 - **Local gate.** The pre-commit config, or an R or shell script its hooks
-  call, runs a URL check and calls `rmarkdown::pandoc_version()`, the
-  pandoc check.
+  call, runs a URL check, and one such script both calls
+  `rmarkdown::pandoc_version()` and reads `PANDOC_VERSION`: the comparison
+  with the CI pin. A `pandoc_version()` call alone, such as a minimum-version
+  check, is not it.
 - **Schedules.** One active `deep-check` and one `dependency-audit` schedule,
   on `main`, with `SCHEDULE_KIND` set on each schedule.
 
