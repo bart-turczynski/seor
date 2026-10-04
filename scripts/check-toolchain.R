@@ -302,7 +302,10 @@ yaml_scalar <- function(raw) {
   )
   if (length(quoted)) {
     inner <- substr(quoted, 2L, nchar(quoted) - 1L)
-    return(if (startsWith(quoted, "'")) gsub("''", "'", inner) else inner)
+    if (startsWith(quoted, "'")) {
+      inner <- gsub("''", "'", inner, fixed = TRUE)
+    }
+    return(inner)
   }
   sub("\\s+#.*$", "", raw, perl = TRUE)
 }
