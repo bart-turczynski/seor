@@ -1,5 +1,10 @@
 # seor (development version)
 
+* CI pins pandoc 3.10 in every R job, not only the README gate: the
+  download is checked against its published digest and bounded in time. The
+  pre-push gate (`scripts/check-toolchain.R`) fails when the local pandoc
+  differs from the pin, and the fleet standard and
+  `scripts/check-fleet-standard.py` require both (SEOR-egfbijyi).
 * seor has a logo, the fleet's black hex, in `man/figures/logo.svg` and
   `logo.png`. r-universe shows it on the package card and pkgdown in the site
   header, and the README heading carries it (SEOR-wxjuxbtu).

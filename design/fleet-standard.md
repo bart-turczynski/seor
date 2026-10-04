@@ -209,6 +209,42 @@ Every push to `main` runs:
 - The cheap gates: README drift (`README.md` matches a fresh knit of
   `README.Rmd`), news-version, citation-version, lint and spelling.
 
+**pandoc 3.10, pinned in the shared R setup.** pandoc's markdown writer
+reflows text and pads tables differently between versions, so `README.md` is
+byte-stable only under the pandoc that knit it, and the README drift gate is
+only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
+3.1.3; it reported drift in seor's README that 3.10 does not write.
+
+- Every job that runs R installs pandoc 3.10 in the setup they share: the
+  `before_script` of the template every R job extends. seor's `.r` template
+  is the model. One job pinning it for the readme gate is not enough: the
+  check, `coverage` and `pages` jobs render with it too. Not in `default:`:
+  the install needs Debian, `dpkg` and `curl`, and `default:` hands it to
+  every job, including ones on other images (seor's `citation-version` runs
+  on `python:3.13-alpine`).
+- The version is recorded once, as the `PANDOC_VERSION` CI variable.
+- The `.deb` comes from the pandoc GitHub release
+  (`https://github.com/jgm/pandoc/releases/download/<version>/pandoc-<version>-1-<arch>.deb`),
+  and `sha256sum -c` checks it against the release's published digest before
+  `dpkg -i` installs it over apt's `pandoc`. A failed or mismatched download
+  may warn and leave apt's pandoc in place, so every gate still runs and
+  reports ([ADR 0005](adr/0005-cheap-ci-jobs-fold-into-one-gates-job.md)), but
+  nothing unverified is installed, and README drift reported after that
+  warning is suspect. The download has a time limit (curl `--max-time`,
+  wget `--timeout`), so a stalled CDN reaches that warning instead of hanging
+  every R job. A limit of 0 means none and does not count. seor's also
+  retries, with the retries bounded too (`--retry 3 --retry-delay 5
+  --retry-max-time 300 --connect-timeout 20 --max-time 120`).
+- Locally, `scripts/check-toolchain.R` reads `PANDOC_VERSION` from
+  `.gitlab-ci.yml` and fails the pre-push gate when
+  `rmarkdown::pandoc_version()` differs. rmarkdown takes the newest pandoc on
+  `RSTUDIO_PANDOC`, `PATH` and `~/opt/pandoc`, so a Homebrew upgrade past the
+  pin otherwise knits a README that CI then reports as drift.
+
+A bump moves together, in one change per repository: `PANDOC_VERSION`, the
+two sha256 digests (amd64, arm64), a re-knit of `README.md`, and, once for
+the fleet, `PANDOC_PIN` in `scripts/check-fleet-standard.py`.
+
 Every pipeline a schedule creates on `main`, `deep-check` and
 `dependency-audit` alike, runs the coverage job too. The coverage badge reads
 the latest successful pipeline on `main`, so a green schedule pipeline without
@@ -290,6 +326,9 @@ Added by this standard: a URL check shaped like sitemapr's `urls` stage in
 dead one, because `--as-cran` reports a dead link only as a NOTE. It fails when
 it checked zero URLs, and the only exemption is the `BugReports:` `/-/issues`
 URL answering exactly 404 (SEOR-ocbtrrnl).
+
+Also added: `check-toolchain`'s pandoc check, which compares the local pandoc
+with the CI pin (see the pandoc rule under "CI on every push to `main`").
 
 ## Files every package carries
 
@@ -429,11 +468,24 @@ What it checks, section by section:
   `deep-check` schedule alone it wants release, oldrel, devel and floor legs,
   read from image tags, plus sanitizer legs where required. The audits run on the `dependency-audit` schedule alone, with
   seor's disposition-row test files, and `fossa analyze` runs where FOSSA is
-  allocated. A job's commands are read as text, along with the R, shell and
-  YAML scripts it names, so a script that skips a gate it contains reads as
-  running it.
+  allocated. Every job that runs R on a push downloads pandoc from its GitHub
+  release at `$PANDOC_VERSION`, which `.gitlab-ci.yml` sets to 3.10 in a
+  `variables:` entry or a shell assignment, quoted or not, with or without a
+  trailing comment (the spellings `check-toolchain.R` reads too). It saves
+  the `.deb` to a file with curl or wget, a `sha256sum -c` (or
+  `shasum -a 256 -c`) names that file, and a later `dpkg -i` installs that
+  same file; a checksum of some other download, or a checked `.deb` never
+  installed, does not count, and neither does a download with no time
+  limit. The install counts only in the `before_script` or
+  `script` the job ends up with, its own or its template's; one only in
+  `default: before_script` is reported, to move into the template. A job's
+  commands are read as text, along with the R, shell and YAML scripts it
+  names, so a script that skips a gate it contains reads as running it.
 - **Local gate.** The pre-commit config, or an R or shell script its hooks
-  call, runs a URL check.
+  call, runs a URL check, and one such script both calls
+  `rmarkdown::pandoc_version()` and reads `PANDOC_VERSION`: the comparison
+  with the CI pin. A `pandoc_version()` call alone, such as a minimum-version
+  check, is not it.
 - **Schedules.** One active `deep-check` and one `dependency-audit` schedule,
   on `main`, with `SCHEDULE_KIND` set on each schedule.
 
