@@ -503,18 +503,16 @@ full-check:
 # - Vignettes are neither built nor checked, and there is no manual, as in
 #   punycoder: the vignette attaches the same members the tests do.
 #
-# BEST EFFORT. Nothing here could be run before it merged: on R 4.1 every
-# dependency builds from source (igraph among them), and a dependency whose
-# declared R floor is wrong only shows up here. So the leg is allow_failure
-# until its first green run on the deep-check schedule; drop allow_failure
-# then (SEOR-kqcbgsfc).
+# On R 4.1 every dependency builds from source (igraph among them), and a
+# dependency whose declared R floor is wrong only shows up here. The leg was
+# allow_failure until its first green run on the deep-check schedule
+# (pipeline 2909936469, 2026-10-04); it is blocking now (SEOR-kqcbgsfc).
 floor-check:
   extends:
     - .r
     - .scheduled-or-manual
   stage: check
   image: rocker/r-ver:4.1.3
-  allow_failure: true
   variables:
     FLOOR_SNAPSHOT: "https://packagemanager.posit.co/cran/2026-09-30"
     FLOOR_UNIVERSE: "https://bart-turczynski.r-universe.dev"
