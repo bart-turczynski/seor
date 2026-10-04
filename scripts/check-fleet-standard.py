@@ -49,7 +49,8 @@ WHAT IT CHECKS, by section of the standard.
   does not). No root `llms.txt`, and `llm-docs` not off in any pkgdown config.
 * Logo. `man/figures/logo.svg` and `man/figures/logo.png` are in the tree, and
   README.Rmd's first level-1 heading is `# <pkg>` followed by an `<img>` whose
-  `src` is `man/figures/logo.png`. The artwork itself is not judged.
+  `src` is `man/figures/logo.png` and whose `alt` is "<pkg> hex logo, white on
+  black" (LOGO_ALT). The artwork itself is not judged.
 * Files. The list in "Files every package carries", plus: LICENSE names Bart
   Turczynski as holder, LICENSE.md is the full MIT text, SECURITY.md and
   CODE_OF_CONDUCT.md name the public contact, and SECURITY.md is more than a
@@ -1427,6 +1428,7 @@ def check_readme(pkg: str, source, state: State, report: Report) -> None:
 
 # What r-universe and pkgdown look for, and the README header that shows it.
 LOGO_FILES = ("man/figures/logo.svg", "man/figures/logo.png")
+LOGO_ALT = "{pkg} hex logo, white on black"
 
 
 def check_logo(pkg: str, source, report: Report) -> None:
@@ -1438,11 +1440,20 @@ def check_logo(pkg: str, source, report: Report) -> None:
     if text is None:
         return
     title = next((title for level, title, _ in readme_headings(text) if level == 1), None)
-    # The bare <img>, or the link-wrapped one usethis::use_logo() writes.
-    img = r"<img\s(?:[^>]*\s)?src=(?:\"man/figures/logo\.png\"|'man/figures/logo\.png'|man/figures/logo\.png(?=[\s/>]))[^>]*>"
-    header = rf"{re.escape(pkg)}\s+(?:{img}|<a\s[^>]*>\s*{img}\s*</a>)"
-    if title is None or not re.fullmatch(header, title):
+    alt = LOGO_ALT.format(pkg=pkg)
+    src = r"src=(?:\"man/figures/logo\.png\"|'man/figures/logo\.png'|man/figures/logo\.png(?=[\s/>]))"
+    # The alt attribute anywhere in the tag, in either quotes.
+    has_alt = rf"(?=[^>]*\salt=(?:\"{re.escape(alt)}\"|'{re.escape(alt)}'))"
+
+    def header(lookahead: str) -> str:
+        # The bare <img>, or the link-wrapped one usethis::use_logo() writes.
+        img = rf"<img{lookahead}\s(?:[^>]*\s)?{src}[^>]*>"
+        return rf"{re.escape(pkg)}\s+(?:{img}|<a\s[^>]*>\s*{img}\s*</a>)"
+
+    if title is None or not re.fullmatch(header(""), title):
         report.gap("logo", f'README.Rmd: the first heading is not "# {pkg}" with the man/figures/logo.png <img>')
+    elif not re.fullmatch(header(has_alt), title):
+        report.gap("logo", f'README.Rmd: the logo <img> lacks alt="{alt}"')
 
 
 def check_files(source, report: Report) -> None:
@@ -1837,7 +1848,7 @@ stages = list(
 """
 
 def fixture_h1(pkg: str) -> str:
-    return f'# {pkg} <img src="man/figures/logo.png" align="right" height="139" />'
+    return f'# {pkg} <img src="man/figures/logo.png" align="right" height="139" alt="{pkg} hex logo, white on black" />'
 
 
 def fixture_readme_body(pkg: str, on_cran: bool) -> str:
@@ -2132,7 +2143,24 @@ def self_test() -> list[str]:
     expect_clean("the use_logo() link-wrapped heading", "punycoder",
                  edit(cran, "README.Rmd", fixture_h1("punycoder"),
                       '# punycoder <a href="https://bart-turczynski.gitlab.io/punycoder/"><img src="man/figures/logo.png" '
-                      'align="right" height="138" alt="punycoder website" /></a>'), fixture_state())
+                      'align="right" height="138" alt="punycoder hex logo, white on black" /></a>'), fixture_state())
+    alt = ' alt="punycoder hex logo, white on black"'
+    expect_gap("logo without alt text", 'lacks alt="punycoder hex logo, white on black"', "punycoder",
+               edit(cran, "README.Rmd", alt, ""), fixture_state())
+    expect_gap("logo with an empty alt", "lacks alt=", "punycoder",
+               edit(cran, "README.Rmd", alt, ' alt=""'), fixture_state())
+    expect_gap("logo alt naming another package", "lacks alt=", "punycoder",
+               edit(cran, "README.Rmd", alt, ' alt="rurl hex logo, white on black"'), fixture_state())
+    expect_gap("logo alt only in data-alt", "lacks alt=", "punycoder",
+               edit(cran, "README.Rmd", alt, ' data-alt="punycoder hex logo, white on black"'), fixture_state())
+    expect_gap("the use_logo() heading with its own alt", "lacks alt=", "punycoder",
+               edit(cran, "README.Rmd", fixture_h1("punycoder"),
+                    '# punycoder <a href="https://bart-turczynski.gitlab.io/punycoder/"><img src="man/figures/logo.png" '
+                    'align="right" height="138" alt="punycoder website" /></a>'), fixture_state())
+    expect_clean("single-quoted alt, ahead of src", "punycoder",
+                 edit(cran, "README.Rmd", fixture_h1("punycoder"),
+                      "# punycoder <img alt='punycoder hex logo, white on black' src=\"man/figures/logo.png\" />"),
+                 fixture_state())
 
     ci = ".gitlab-ci.yml"
     # POSITIVE: coverage named on each schedule by its own rules, the other push jobs not.
