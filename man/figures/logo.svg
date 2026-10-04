@@ -1,0 +1,28 @@
+<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="1.732in" height="2in" viewBox="0 0 1732 2000" role="img" aria-labelledby="seor-title">
+<title id="seor-title">seor</title>
+<desc id="seor-desc">SEO library for R</desc>
+<metadata id="seor-metadata"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#">
+<cc:Work rdf:about="">
+<dc:title>seor</dc:title>
+<dc:description>SEO library for R</dc:description>
+<dc:creator><cc:Agent><dc:title>Bart Turczynski</dc:title></cc:Agent></dc:creator>
+<dc:rights><cc:Agent><dc:title>&#169; 2026 Bart Turczynski. MIT License.</dc:title></cc:Agent></dc:rights>
+<cc:license>https://opensource.org/license/mit</cc:license>
+<dc:date>2026-10-04</dc:date>
+<dc:format>image/svg+xml</dc:format>
+<dc:language>en</dc:language>
+<dc:identifier>seor</dc:identifier>
+<dc:source>https://github.com/bart-turczynski/seor</dc:source>
+<dc:relation>https://github.com/bart-turczynski/seor</dc:relation>
+<dc:relation>https://gitlab.com/bart-turczynski/seor</dc:relation>
+<dc:relation>https://CRAN.R-project.org/package=seor</dc:relation>
+<dc:relation>https://bart-turczynski.r-universe.dev/seor</dc:relation>
+<dc:subject><rdf:Bag><rdf:li>R</rdf:li><rdf:li>rstats</rdf:li><rdf:li>R package</rdf:li><rdf:li>SEO</rdf:li><rdf:li>SEO toolkit</rdf:li><rdf:li>metapackage</rdf:li></rdf:Bag></dc:subject>
+<dc:contributor>Name set in IBM Plex Mono (SIL Open Font License 1.1), converted to outlines.</dc:contributor>
+</cc:Work>
+</rdf:RDF></metadata>
+<path id="seor-border" fill="#F5F5F5" d="M866 0L1732 500L1732 1500L866 2000L0 1500L0 500Z"></path>
+<path id="seor-background" fill="#000000" d="M866 69.3L1672 534.6L1672 1465.4L866 1930.7L60 1465.4L60 534.6Z"></path>
+<path id="seor-name-bold" fill="#F5F5F5" d="M671.4 1078.0L671.4 1078.0Q652.4 1078.0 638.3 1071.7Q624.3 1065.4 615.7 1054.6L615.7 1054.6L634.4 1033.9Q642.7 1043.0 652.5 1047.3Q662.3 1051.6 672.5 1051.6L672.5 1051.6Q684.1 1051.6 690.2 1046.4Q696.2 1041.3 696.2 1031.5L696.2 1031.5Q696.2 1023.5 691.6 1019.4Q686.9 1015.3 675.9 1013.6L675.9 1013.6L660.2 1011.0Q639.8 1007.6 630.8 996.0Q621.7 984.4 621.7 967.8L621.7 967.8Q621.7 946 636.0 934.0Q650.2 922.0 675.9 922.0L675.9 922.0Q693.4 922.0 706.4 927.4Q719.3 932.8 727.3 942.1L727.3 942.1L709.0 962.6Q702.9 955.9 694.7 952.2Q686.5 948.4 676.1 948.4L676.1 948.4Q654.3 948.4 654.3 966.3L654.3 966.3Q654.3 974.1 659.2 978.0Q664.0 981.9 675.1 983.8L675.1 983.8L690.8 986.6Q709.2 989.8 719.1 1000.4Q729.1 1011.0 729.1 1028.9L729.1 1028.9Q729.1 1039.5 725.4 1048.5Q721.7 1057.5 714.4 1064.0Q707.0 1070.6 696.3 1074.3Q685.6 1078.0 671.4 1078.0ZM852.2 1075.4L755.8 1075.4L755.8 924.6L852.2 924.6L852.2 951.2L788.2 951.2L788.2 985.7L850.0 985.7L850.0 1012.3L788.2 1012.3L788.2 1048.8L852.2 1048.8L852.2 1075.4ZM933.0 1078.0L933.0 1078.0Q902.7 1078.0 888.4 1057.5Q874.0 1036.9 874.0 1000L874.0 1000Q874.0 963.1 888.4 942.5Q902.7 922.0 933.0 922.0L933.0 922.0Q963.2 922.0 977.6 942.5Q991.9 963.1 991.9 1000L991.9 1000Q991.9 1036.9 977.6 1057.5Q963.2 1078.0 933.0 1078.0ZM933.0 1051.8L933.0 1051.8Q946.8 1051.8 952.1 1041.6Q957.4 1031.3 957.4 1013.0L957.4 1013.0L957.4 986.8Q957.4 968.7 952.1 958.4Q946.8 948.2 933.0 948.2L933.0 948.2Q919.1 948.2 913.8 958.4Q908.6 968.7 908.6 986.8L908.6 986.8L908.6 1013.2Q908.6 1031.3 913.8 1041.6Q919.1 1051.8 933.0 1051.8Z"></path>
+<path id="seor-name-regular" fill="#F5F5F5" d="M1035.3 1011.0L1035.3 1075.4L1017.2 1075.4L1017.2 924.6L1072.1 924.6Q1093.0 924.6 1104.0 936.1Q1115.0 947.5 1115.0 968.0L1115.0 968.0Q1115.0 986.4 1105.5 997.4Q1096.0 1008.4 1077.9 1010.2L1077.9 1010.2L1116.3 1075.4L1096.0 1075.4L1059.3 1011.0L1035.3 1011.0ZM1035.3 995.7L1071.6 995.7Q1083.1 995.7 1089.5 990.0Q1095.8 984.2 1095.8 973.6L1095.8 973.6L1095.8 962.4Q1095.8 951.8 1089.5 946.1Q1083.1 940.4 1071.6 940.4L1071.6 940.4L1035.3 940.4L1035.3 995.7Z"></path>
+</svg>
