@@ -229,12 +229,11 @@ immutable at the source once this rule exists.
 GitHub's account setting **"Block command line pushes that expose my
 email"** rejects a pushed tag whose tagger email isn't one GitHub is willing
 to expose, with `GH007: Your push would publish a private email address`.
-This is checked against the **tag's** author email, not the commit author
-email — pslr's commits use `b.turczynski@tidio.net` (unaffected) while its
-release tags use `bartek@turczynski.pl` (a verified-but-blocked address
-until the setting was unticked; old GitHub-era tags carried the
-`...@users.noreply.github.com` form instead, which is why this hadn't been
-seen before). The address is already public in `DESCRIPTION` and on CRAN, so
+This is checked against the **tag's** tagger email, not the commit author
+email. Fleet commits and release tags both use `bartek@turczynski.pl`, a
+verified address that GitHub blocked until the setting was unticked. Old
+GitHub-era tags carried the `...@users.noreply.github.com` form instead, which
+is why this hadn't been seen before. The address is already public in `DESCRIPTION` and on CRAN, so
 unticking it costs nothing here — but if it's ever re-enabled, every future
 release-tag push fails the same way (SEOR-zfpaxrxk, 2026-09-19 acceptance
 comment; SEOR-wscogmzh policy addition #2).
