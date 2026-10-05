@@ -14,8 +14,8 @@
   `allow_failure: true # soft` was read as a string, so a coverage job that
   could not fail the pipeline passed the coverage rule. A CI file that does
   not load leaves its rules not judged, and the run reports itself
-  incomplete. The script is no longer stdlib-only; its pre-push hook pins
-  PyYAML (ADR 0008, SEOR-oznwzhem).
+  incomplete. The script now needs more than Python's standard library;
+  its pre-push hook pins PyYAML (`design/adr/0008`, SEOR-oznwzhem).
 
 * CI pins pandoc 3.10 in every R job, not only the README gate: the
   download is checked against its published digest and bounded in time. The
