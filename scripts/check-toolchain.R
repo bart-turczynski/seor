@@ -60,7 +60,8 @@
 #    This check reads the pin from `PANDOC_VERSION` in .gitlab-ci.yml, the
 #    value CI installs; two different values there are reported, not
 #    resolved. Its reader is the fleet's only one: check-fleet-standard.py
-#    runs `--pandoc-assignments` (below) instead of parsing the pin itself.
+#    runs `--pandoc-assignments` (below) instead of parsing the pin itself,
+#    and `--pandoc-unread` for the unread settings this check stops on.
 #    GitLab's expanded form, a `value:` mapping, is an error that asks for a
 #    plain scalar: read as a pin it would be none, or the wrong one.
 #    Unlike check 1's field, it is not the only place the version lives: a
@@ -91,6 +92,7 @@
 #   Rscript scripts/check-toolchain.R              # exit 1 on drift
 #   Rscript scripts/check-toolchain.R --self-test  # positive/negative cases
 #   Rscript --vanilla scripts/check-toolchain.R --pandoc-assignments < .gitlab-ci.yml
+#   Rscript --vanilla scripts/check-toolchain.R --pandoc-unread < .gitlab-ci.yml
 
 package_root <- function() {
   args <- commandArgs(trailingOnly = FALSE)
@@ -407,13 +409,30 @@ pandoc_assignments <- function(lines) {
 # separated by a line holding only a form feed: `<text>\t<line>\t<value>` per
 # assignment, texts and lines numbered from 1.
 pandoc_assignment_report <- function(lines) {
-  text <- cumsum(lines == "\f") + 1L
-  keep <- lines != "\f"
-  texts <- split(lines[keep], factor(text[keep], levels = seq_len(max(text))))
+  texts <- ci_texts(lines)
   unlist(lapply(seq_along(texts), function(k) {
     found <- pandoc_assignments(texts[[k]])
     sprintf("%d\t%d\t%s", k, found$line, found$value)
   }))
+}
+
+# What --pandoc-unread prints for `lines`, the texts separated as for
+# pandoc_assignment_report(): `unread\t<text>\t<line>` per line
+# unread_pandoc_lines() finds, a setting pinned_pandoc() refuses whatever pin
+# it reads (SEOR-mcstkogt). The word keeps these lines apart from an
+# assignment's when both flags are given.
+pandoc_unread_report <- function(lines) {
+  texts <- ci_texts(lines)
+  unlist(lapply(seq_along(texts), function(k) {
+    sprintf("unread\t%d\t%d", k, unread_pandoc_lines(texts[[k]]))
+  }))
+}
+
+# `lines` split into texts at each line holding only a form feed.
+ci_texts <- function(lines) {
+  text <- cumsum(lines == "\f") + 1L
+  keep <- lines != "\f"
+  split(lines[keep], factor(text[keep], levels = seq_len(max(text))))
 }
 
 # The line numbers where `lines`, comments dropped, write PANDOC_VERSION in
@@ -1101,10 +1120,32 @@ self_test <- function() {
       "1\t2\t3.10"
     )
   )
+  # --pandoc-unread prints that refusal's lines, numbered as above, so the
+  # fleet checker reports what this check stops on (SEOR-mcstkogt).
+  expect(
+    "pandoc-unread-report",
+    identical(
+      pandoc_unread_report(c(
+        global,
+        "  variables: {PANDOC_VERSION: \"3.9\"}",
+        "\f",
+        "x: 1",
+        "\f",
+        "  variables:",
+        "    \"PANDOC_VERSION\": \"3.9\"",
+        "    'PANDOC_VERSION': '3.8'"
+      )),
+      c("unread\t1\t4", "unread\t3\t2", "unread\t3\t3")
+    )
+  )
+  expect(
+    "pandoc-unread-report: none",
+    !length(pandoc_unread_report(c(global, "\f", ci, "\f", block)))
+  )
 
   paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 77 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, 79 pandoc cases)\n"
   )
 }
 
@@ -1118,11 +1159,19 @@ self_test <- function() {
 # assign as `<text>\t<line>\t<value>`, nothing else.
 # check-fleet-standard.py reads the pin this way rather than with a parser of
 # its own, and runs it with every fixture of its self-test at once.
+# --pandoc-unread reads the same and prints `unread\t<text>\t<line>` per line
+# that sets a value in a spelling the reader does not read. With both flags,
+# one run prints both kinds of line, assignments first.
 main <- function() {
   args <- commandArgs(trailingOnly = TRUE)
-  if ("--pandoc-assignments" %in% args) {
+  if (any(c("--pandoc-assignments", "--pandoc-unread") %in% args)) {
     lines <- readLines(file("stdin"), warn = FALSE, encoding = "UTF-8")
-    writeLines(pandoc_assignment_report(lines))
+    if ("--pandoc-assignments" %in% args) {
+      writeLines(pandoc_assignment_report(lines))
+    }
+    if ("--pandoc-unread" %in% args) {
+      writeLines(pandoc_unread_report(lines))
+    }
     return(0L)
   }
   cat(self_test())
