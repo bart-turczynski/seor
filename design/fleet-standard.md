@@ -256,13 +256,18 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   reports ([ADR 0005](adr/0005-cheap-ci-jobs-fold-into-one-gates-job.md)), but
   nothing unverified is installed, and README drift reported after that
   warning is suspect; in the second it fails the job. The download has a time
-  limit (curl `--max-time`, wget `--timeout` with `--tries` of 5 or fewer,
-  or `timeout`), so a stalled CDN reaches that warning instead of hanging
-  every R job. A limit of 0 means none and does not count, and wget's own
-  default of 20 tries makes its `--timeout` a limit per try, not on the
-  download. seor's curl also retries, with the retries bounded too
-  (`--retry 3 --retry-delay 5 --retry-max-time 300 --connect-timeout 20
-  --max-time 120`).
+  limit, so a stalled CDN reaches that warning instead of hanging every R
+  job: curl with `--max-time`, which bounds one attempt, plus, when it uses
+  `--retry` with a count above 0, `--retry-max-time`, which ends the retries
+  and makes curl skip a retry whose `Retry-After` wait would pass it; or curl
+  or wget under `timeout N`. A limit of 0 means none and does not count.
+  Between retries curl waits its own backoff, which stops growing at 600
+  seconds, or a fixed `--retry-delay`, which counts only up to 600 seconds.
+  The retry count is not capped, since a count does not bound the waits a
+  server's `Retry-After` asks for. wget counts only under `timeout`: its
+  `--timeout` and `-T` limit idle time, not the download. seor's curl sets
+  them all (`--retry 3 --retry-delay 5 --retry-max-time 300
+  --connect-timeout 20 --max-time 120`).
 - Locally, `scripts/check-toolchain.R` reads `PANDOC_VERSION` from
   `.gitlab-ci.yml` and fails the pre-push gate when
   `rmarkdown::pandoc_version()` differs. rmarkdown takes the newest pandoc on
