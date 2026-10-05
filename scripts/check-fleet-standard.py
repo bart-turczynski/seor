@@ -103,7 +103,12 @@ WHAT IT CHECKS, by section of the standard.
   one of them calls `rmarkdown::pandoc_version()` and reads `PANDOC_VERSION`
   from `.gitlab-ci.yml`, comparing the local pandoc with the CI pin
   (check-toolchain.R). Reading the variable from the environment does not
-  count: nothing sets it locally.
+  count: nothing sets it locally. And the generated-docs drift check: some
+  script in that chain runs roxygen2 (`roxygenise` or `roxygenize`) and some
+  script runs `git archive`, the export it regenerates into, since a stale
+  `.Rd` is still valid `.Rd` and nothing else in the gate sees it
+  (SEOR-nwfmerhu). That the two belong together, and that it diffs, is a
+  review item.
 * Schedules. A `deep-check` and a `dependency-audit` schedule, each active,
   on `main`, with `SCHEDULE_KIND` set on the schedule itself; no schedule
   without a `SCHEDULE_KIND` or off `main`.
@@ -1056,6 +1061,11 @@ ERROR_ON_RE = re.compile(r"error_on\s*=\s*\\?[\"']warning\\?[\"']")
 R_FALSE = ("false", "no", "0")
 INCOMING_OFF_RE = re.compile(rf"_R_CHECK_CRAN_INCOMING_[\"']?\s*[=:]\s*[\"']?(?i:{'|'.join(R_FALSE)})\b")
 INCOMING_REMOTE_OFF_RE = re.compile(rf"_R_CHECK_CRAN_INCOMING_REMOTE_[\"']?\s*[=:]\s*[\"']?(?i:{'|'.join(R_FALSE)})\b")
+# The generated-docs drift check regenerates man/ with roxygen2, in either
+# spelling, on a `git archive` export of the pushed commit (SEOR-nwfmerhu):
+# the shell command, or R's system2("git", c("archive", ...)).
+DOCS_DRIFT_RE = re.compile(r"\broxygeni[sz]e\b")
+DOCS_EXPORT_RE = re.compile(r"\bgit\s+archive\b|[\"']git[\"']\s*,\s*c\(\s*[\"']archive[\"']")
 URL_CHECK_RE = re.compile(r"check_url_db|url_db_from_package_sources|urlchecker::url_check|\burl_check\s*\(")
 SANITIZER_IMAGE_RE = re.compile(r"-san\b|clang-asan|gcc-asan|r-debug|asan|ubsan", re.I)
 R_JOB_RE = re.compile(r"\bRscript\b|\bR CMD\b")
@@ -2201,6 +2211,11 @@ def check_local_gate(source, report: Report) -> None:
     scripts = [s for _, s in named]
     if not any(URL_CHECK_RE.search(chunk) for chunk in [body] + scripts):
         report.gap("local gate", "no URL check in the pre-push gate")
+    chunks = [body] + scripts
+    if not (any(DOCS_DRIFT_RE.search(chunk) for chunk in chunks)
+            and any(DOCS_EXPORT_RE.search(chunk) for chunk in chunks)):
+        report.gap("local gate", "no generated-docs drift check in the pre-push gate: roxygen2 run on a `git archive` "
+                                 "export of the pushed commit, failing when man/, NAMESPACE or DESCRIPTION differ")
 
     # One script both asks rmarkdown for its pandoc and reads the CI pin from
     # .gitlab-ci.yml: a pandoc_version() call alone may be an unrelated
@@ -2464,7 +2479,8 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
         ".gitlab-ci.yml": FIXTURE_CI,
         "tools/gates.R": FIXTURE_GATES_R,
         ".pre-commit-config.yaml": FIXTURE_PRECOMMIT,
-        "tools/verify.R": "db <- tools:::url_db_from_package_sources('.')\nbad <- tools:::check_url_db(db)\n",
+        "tools/verify.R": "db <- tools:::url_db_from_package_sources('.')\nbad <- tools:::check_url_db(db)\n"
+                          "system2(\"git\", c(\"archive\", \"-o\", tarball, ref))\nroxygen2::roxygenise(export)\n",
         "scripts/check-toolchain.R": FIXTURE_TOOLCHAIN_R,
         "scripts/check-citation.py": "print('ok')\n",
         ".gitlab/issue_templates/Bug.md": "x\n",
@@ -3429,6 +3445,23 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     # NEGATIVE: local gate and schedules.
     expect_gap("URL check missing", "no URL check", "punycoder",
                dict(cran, **{"tools/verify.R": "# check_url_db is only mentioned in a comment\nx <- 1\n"}), fixture_state())
+    expect_gap("docs-drift check missing", "no generated-docs drift check", "punycoder",
+               edit(cran, "tools/verify.R", "roxygen2::roxygenise(export)\n", "# roxygen2::roxygenise() only in a comment\n"),
+               fixture_state())
+    # Regenerating in the working tree, with no export, is not the check.
+    expect_gap("docs-drift check run in place", "no generated-docs drift check", "punycoder",
+               edit(cran, "tools/verify.R", "system2(\"git\", c(\"archive\", \"-o\", tarball, ref))\n", ""),
+               fixture_state())
+    # The shape the members use: a hook runs a shell wrapper that exports the
+    # commit and runs the R check on it.
+    expect_clean("docs-drift check through a shell wrapper", "punycoder",
+                 dict(edit(edit(cran, "tools/verify.R", "roxygen2::roxygenise(export)\n", ""),
+                           "tools/verify.R", "system2(\"git\", c(\"archive\", \"-o\", tarball, ref))\n", ""),
+                      **{".pre-commit-config.yaml": cran[".pre-commit-config.yaml"]
+                         + "      - id: docs-drift\n        entry: sh scripts/docs-drift.sh\n        language: system\n",
+                         "scripts/docs-drift.sh": "git archive -o \"$d/e.tar\" \"$ref\"\nRscript scripts/check-docs-drift.R \"$d\"\n",
+                         "scripts/check-docs-drift.R": "roxygen2::roxygenize(pkg)\n"}),
+                 fixture_state())
     no_local_pandoc = "no check that compares the local rmarkdown::pandoc_version() with the CI pin (PANDOC_VERSION, 3.10)"
     expect_gap("local pandoc check missing", no_local_pandoc, "punycoder",
                dict(cran, **{"scripts/check-toolchain.R": "# pandoc_version() is only mentioned here\nx <- 1\n"}),

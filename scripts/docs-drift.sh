@@ -28,7 +28,7 @@
 #   sh scripts/docs-drift.sh
 
 ref="${PRE_COMMIT_TO_REF:-HEAD}"
-check="$(pwd)/scripts/check-docs-drift.R"
+check="scripts/check-docs-drift.R"
 status=0
 
 echo "== generated docs in sync at ${ref} (scripts/check-docs-drift.R)"
