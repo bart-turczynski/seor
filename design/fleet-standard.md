@@ -225,7 +225,10 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
 - The version is recorded once, as the `PANDOC_VERSION` CI variable. A
   second assignment with another value, in any job, is a defect even where it
   would win: a shell assignment overrides `variables:` at run time, so which
-  value a job installs would depend on where each sits.
+  value a job installs would depend on where each sits. It is written as a
+  plain scalar, `PANDOC_VERSION: "3.10"`, or a shell assignment, never in
+  GitLab's expanded form (a mapping with `value:`, block or flow), which
+  `check-toolchain.R` does not read.
 - The `.deb` comes from the pandoc GitHub release
   (`https://github.com/jgm/pandoc/releases/download/<version>/pandoc-<version>-1-<arch>.deb`),
   and `sha256sum -c` checks it against the release's published digest before
@@ -266,6 +269,8 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   `RSTUDIO_PANDOC`, `PATH` and `~/opt/pandoc`, so a Homebrew upgrade past the
   pin otherwise knits a README that CI then reports as drift. Reading the
   variable from the environment is not that check: nothing sets it locally.
+  The script is vendored: every package carries seor's copy byte for byte,
+  so a change to it is copied into each repository.
 
 A bump moves together, in one change per repository: `PANDOC_VERSION`, the
 two sha256 digests (amd64, arm64), a re-knit of `README.md`, and, once for
@@ -552,8 +557,9 @@ What it checks, section by section:
   allocated. Every job that runs R on a push downloads pandoc from its GitHub
   release at `$PANDOC_VERSION`, which `.gitlab-ci.yml` sets to 3.10 in a
   `variables:` entry or a shell assignment, quoted or not, with or without a
-  trailing comment, one value wherever it is assigned, in a line the job
-  sees, and never in a `parallel: matrix` entry, which pins per leg. An
+  trailing comment (GitLab's expanded `value:` form is reported, to be
+  rewritten as a plain scalar), one value wherever it is assigned, in a line
+  the job sees, and never in a `parallel: matrix` entry, which pins per leg. An
   assignment is one sh would run and keep for the commands after it, plain
   or through `export`, `readonly`, `declare` or `typeset`: not the same text
   in a comment, an `echo` or a here-document, and not one anywhere in a
@@ -565,7 +571,8 @@ What it checks, section by section:
   needs `Rscript`. The install has one of the two shapes above, read from the
   job's script items (a `- |` block, a folded or plain item, or a flow
   sequence `[a, b]`): curl or wget saves the `.deb` to a file, a `sha256sum
-  -c` (or `shasum -a 256 -c`) names that file, and `dpkg -i` installs that
+  -c` (or `shasum -a 256 -c`) reads a pinned digest line naming that file
+  (from `echo` or `printf`, or a here-string), and `dpkg -i` installs that
   same file, paths compared as whole words; a checksum of some other
   download, a checked `.deb` never installed, a step that goes on when the
   one before it failed, and a download with no time
@@ -582,7 +589,8 @@ What it checks, section by section:
   `rmarkdown::pandoc_version()` and reads `PANDOC_VERSION` from
   `.gitlab-ci.yml`: the comparison with the CI pin. A `pandoc_version()` call
   alone, such as a minimum-version check, is not it, and neither is
-  `Sys.getenv("PANDOC_VERSION", …)`. The docs-drift check: some script in
+  `Sys.getenv("PANDOC_VERSION", …)`. `scripts/check-toolchain.R` is
+  there and matches seor's copy (line endings aside). The docs-drift check: some script in
   that chain runs roxygen2 (`roxygenise` or `roxygenize`) and some script
   runs `git archive`. That the two belong together, and that it diffs, is a
   review item.

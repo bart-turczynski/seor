@@ -88,7 +88,13 @@ WHAT IT CHECKS, by section of the standard.
   variables, the global ones or its setup) and never in `parallel: matrix`.
   The pin is read by running check-toolchain.R's own reader
   (`--pandoc-assignments`, SEOR-xhyrogfm), so the two never disagree on it;
-  this needs Rscript, and without it the pin is not judged. The install has
+  this needs Rscript, and without it the pin is not judged. It reads a plain
+  scalar (`PANDOC_VERSION: "3.10"`) or a shell assignment, so GitLab's
+  expanded form (`PANDOC_VERSION: {value: "3.10"}`, block or flow) is a gap
+  of its own, found in the parsed YAML, and the pin's value is then not
+  judged. The reader is the copy beside this script, which every package
+  vendors byte for byte: a scripts/check-toolchain.R that differs from it is
+  a local-gate gap (check_toolchain_copy()). The install has
   the standard's shape (pandoc_install_state): `if <download> && <sha256sum
   -c> && dpkg -i FILE; then ...; else ...; fi` in one script item, or the three
   steps as three script items in that order, each one command or pipeline
@@ -1074,7 +1080,7 @@ SANITIZER_IMAGE_RE = re.compile(r"-san\b|clang-asan|gcc-asan|r-debug|asan|ubsan"
 R_JOB_RE = re.compile(r"\bRscript\b|\bR CMD\b")
 PANDOC_URL_RE = re.compile(r"github\.com/jgm/pandoc/releases/download/([^/\s\"']+)/pandoc-")
 # The pin itself is read by check-toolchain.R, the fleet's only reader of its
-# spellings: pandoc_assignments() runs it (SEOR-xhyrogfm). The download must
+# spellings: read_pandoc_assignments() runs it (SEOR-xhyrogfm). The download must
 # name its version through PANDOC_VERSION, the variable that script reads.
 TOOLCHAIN_R = Path(__file__).resolve().with_name("check-toolchain.R")
 PANDOC_VAR_TOKEN_RE = re.compile(r"\$\{?PANDOC_VERSION\}?")
@@ -1107,22 +1113,24 @@ def coverage_thresholds(text: str) -> list[float]:
     return [v for v in found if 1 <= v <= 100]
 
 
-PIN_READS: dict[str, tuple[tuple[int, str], ...]] = {}
+# What check-toolchain.R reads in each .gitlab-ci.yml text: (line number,
+# value) per PANDOC_VERSION assignment, in file order.
+PinReads = dict[str, tuple[tuple[int, str], ...]]
 
 
-def read_pandoc_assignments(texts: list[str]) -> None:
-    """Read each .gitlab-ci.yml text's PANDOC_VERSION assignments into PIN_READS.
+def read_pandoc_assignments(texts: list[str]) -> PinReads:
+    """Each .gitlab-ci.yml text's PANDOC_VERSION assignments, keyed by the text.
 
     check-toolchain.R reads them: this runs its `--pandoc-assignments` instead
     of parsing the spellings a second way, so the two scripts cannot disagree
     on a pin (SEOR-xhyrogfm). It is the copy beside this script, which the
-    fleet's copies match. The texts go in one Rscript run, separated by a line
-    holding a form feed, so the self-test's fixtures cost one run, not one
-    each. A ProbeError when Rscript cannot run it.
+    fleet's copies match. The texts go in one Rscript run, separated by a
+    line holding a form feed, so the self-test's fixtures cost one run, not
+    one each; no texts, no run. A ProbeError when Rscript cannot run it.
     """
-    todo = [text for text in dict.fromkeys(texts) if text not in PIN_READS]
+    todo = list(dict.fromkeys(texts))
     if not todo:
-        return
+        return {}
     stdin = "\n\f\n".join("\n".join(re.split(r"\r\n|\r|\n", text)) for text in todo) + "\n"
     command = ["Rscript", "--vanilla", str(TOOLCHAIN_R), "--pandoc-assignments"]
     try:
@@ -1135,14 +1143,7 @@ def read_pandoc_assignments(texts: list[str]) -> None:
     found: dict[int, list[tuple[int, str]]] = {}
     for m in re.finditer(r"^(\d+)\t(\d+)\t(.*)$", run.stdout, re.M):
         found.setdefault(int(m.group(1)), []).append((int(m.group(2)), m.group(3)))
-    for k, text in enumerate(todo, 1):
-        PIN_READS[text] = tuple(found.get(k, ()))
-
-
-def pandoc_assignments(text: str) -> tuple[tuple[int, str], ...]:
-    """(line number, value) of each PANDOC_VERSION assignment in a .gitlab-ci.yml."""
-    read_pandoc_assignments([text])
-    return PIN_READS[text]
+    return {text: tuple(found.get(k, ())) for k, text in enumerate(todo, 1)}
 
 
 # --- the pandoc install reader (SEOR-zwetljee) ----------------------------------
@@ -1780,17 +1781,33 @@ def pin_assignment(item: str) -> str | None:
     frames = shell_frames(mask)
     opaque = False
     for m in PIN_ASSIGN_RE.finditer(mask):
-        around = [frame for frame in frames if frame.start <= m.end() - 1 < frame.end]
-        if any(frame.function for frame in around):
+        if within(m.end() - 1, [frame for frame in frames if frame.function]):
             opaque = True
-        elif not any(frame.kind == "(" or frame.piped for frame in around):
+        elif not within(m.end() - 1, [frame for frame in frames if frame.kind == "(" or frame.piped]):
             return "assigns"
     if opaque or PIN_LOCAL_RE.search(mask) or ("PANDOC_VERSION=" in shell.text and OPAQUE_SHELL_RE.search(shell.text)):
         return "opaque"
     return None
 
 
-def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
+def expanded_pin_scopes(ci: CI) -> list[str]:
+    """Where .gitlab-ci.yml writes PANDOC_VERSION in GitLab's expanded form, a
+    mapping (`value:`, `description:`), block or flow: "the global
+    `variables:`", or the block (a job or a template) whose own `variables:`
+    hold it. Read from the parsed YAML: check-toolchain.R reads a plain
+    scalar only, and sees no pin in the block form and the pin
+    `{value: "3.10"}` in the flow form."""
+    scopes = []
+    blocks = [("the global `variables:`", ci.data)] + [
+        (str(name), block) for name, block in ci.data.items() if name not in RESERVED and isinstance(block, dict)]
+    for scope, block in blocks:
+        variables = block.get("variables")
+        if isinstance(variables, dict) and isinstance(variables.get("PANDOC_VERSION"), dict):
+            scopes.append(scope)
+    return scopes
+
+
+def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads | None = None) -> None:
     """Every R job on push installs PANDOC_PIN from the release, sha256-checked.
 
     The install must reach the job through its own `before_script` or `script`
@@ -1799,10 +1816,18 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     job, including those on other images (seor's citation-version runs on
     python:3.13-alpine).
 
-    The pin is what check-toolchain.R reads (pandoc_assignments()): one value
-    in all of .gitlab-ci.yml. A shell assignment overrides `variables:` at run
-    time, so with two values the one a job installs depends on where each
-    sits; two are a gap, as they are an error to check-toolchain.R. A job
+    The pin is what check-toolchain.R reads (read_pandoc_assignments()): one
+    value in all of .gitlab-ci.yml, written as a plain scalar or a shell
+    assignment. `pins` holds that read when the caller made it already, for
+    many texts in one Rscript run (the self-test); None reads this text now,
+    and only when a job installs pandoc. A shell assignment overrides
+    `variables:` at run time, so with two values the one a job installs
+    depends on where each sits; two are a gap, as they are an error to
+    check-toolchain.R. GitLab's expanded form (`PANDOC_VERSION: {value:
+    ...}`, expanded_pin_scopes()) is a gap of its own, the one the misread
+    file gets: check-toolchain.R cannot read it, so the pin's value is not
+    judged until it is rewritten, but whether each job sees the pin and how
+    it installs pandoc still are. A job
     must also see the pin: a variable it gets (its own or a global one), or an
     assignment in an item of its setup that the commands after it see
     (pin_assignment()): not the name in a comment, an echoed string or a
@@ -1816,6 +1841,11 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     if matrix:
         report.gap("ci", f"{', '.join(matrix)}: sets PANDOC_VERSION in `parallel: matrix`; record the pin once, in "
                          "`variables:` or the shared setup, so every leg installs the same pandoc")
+    expanded = expanded_pin_scopes(ci)
+    if expanded:
+        report.gap("ci", f"{', '.join(expanded)}: sets PANDOC_VERSION in GitLab's expanded form (`value:`), which "
+                         "check-toolchain.R does not read; write the pin as a plain scalar, "
+                         f"`PANDOC_VERSION: \"{PANDOC_PIN}\"` (until then its value is not judged)")
     unpinned, in_default, unrecorded, candidates = [], [], {}, []
     for job in on_push:
         if not R_JOB_RE.search(job.full_text):
@@ -1838,7 +1868,13 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     values: list[str] | None = None
     if candidates:
         try:
-            values = list(dict.fromkeys(value for _, value in pandoc_assignments(ci.text)))
+            found = (pins or {}).get(ci.text)
+            if found is None:
+                found = read_pandoc_assignments([ci.text])[ci.text]
+            # check-toolchain.R reads the flow form `{value: "3.10"}` as that
+            # text, and the block form as nothing; the expanded-form gap above
+            # covers both, and every other pin is still judged.
+            values = list(dict.fromkeys(value for _, value in found if not (expanded and value.startswith("{"))))
         except ProbeError as error:
             report.skip("ci", f"the pandoc pin was not read, only the install steps (probe failed: {error})", incomplete=True)
     if values and len(values) > 1:
@@ -1848,7 +1884,7 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     for job, setup, bodies in candidates:
         if values is not None:
             visible = setup + (ci.default_before() if job.inherits_default_before else [])
-            if not values:
+            if not values and not expanded:
                 never.append(job.name)
                 continue
             supplied = {pin_assignment(item) for item in visible}
@@ -1859,7 +1895,7 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
                 opaque.append(job.name)
             if len(values) > 1:
                 continue
-            if values[0] != PANDOC_PIN:
+            if values and values[0] != PANDOC_PIN:
                 other.append(job.name)
                 continue
         state = max([pandoc_install_state(setup)] + [pandoc_install_state([body]) for body in bodies],
@@ -2440,7 +2476,7 @@ def check_audit_files(source, report: Report) -> None:
         report.gap("ci", f"audit jobs lack seor's disposition-row shape: missing {', '.join(missing)}")
 
 
-def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) -> None:
+def check_ci(pkg: str, source, state: State, floor: str | None, report: Report, pins: PinReads | None = None) -> None:
     text = source.read(".gitlab-ci.yml")
     if text is None:
         report.gap("ci", "no .gitlab-ci.yml")
@@ -2504,7 +2540,7 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
                for j in on_push):
         report.gap("ci", "pages does not deploy on a push to main")
 
-    check_pandoc_pin(on_push, ci, report)
+    check_pandoc_pin(on_push, ci, report, pins)
 
     chunks = [chunk for j in on_push for chunk in j.view]
     for gate, patterns in GATES.items():
@@ -2580,6 +2616,37 @@ def check_local_gate(source, report: Report) -> None:
                                  f"(PANDOC_VERSION, {PANDOC_PIN})")
 
 
+@cache
+def seor_toolchain() -> str:
+    """seor's scripts/check-toolchain.R, the copy beside this script, read once."""
+    return TOOLCHAIN_R.read_text(encoding="utf-8", errors="replace")
+
+
+def check_toolchain_copy(source, report: Report) -> None:
+    """A package's scripts/check-toolchain.R is seor's, the copy beside this
+    script (TOOLCHAIN_R): it is vendored byte for byte, and this script runs
+    seor's copy to read the pin the package's own copy reads before a push.
+    Compared as text with line endings made LF, so a local and a GitLab read
+    agree. A missing copy is a gap of its own: the file is vendored, whatever
+    else in the local gate compares pandoc with the CI pin."""
+    try:
+        member = source.read("scripts/check-toolchain.R")
+    except ProbeError as error:
+        report.skip("local gate", f"could not read scripts/check-toolchain.R ({error})", incomplete=True)
+        return
+    if member is None:
+        report.gap("local gate", "no scripts/check-toolchain.R; copy seor's, which every package vendors byte for byte")
+        return
+    try:
+        seor = seor_toolchain()
+    except OSError as error:
+        report.skip("local gate", f"scripts/check-toolchain.R not compared with seor's copy ({error})", incomplete=True)
+        return
+    if member.replace("\r\n", "\n") != seor.replace("\r\n", "\n"):
+        report.gap("local gate", "scripts/check-toolchain.R differs from seor's, the copy this checker runs (it is "
+                                 "vendored byte for byte); copy seor's scripts/check-toolchain.R over it")
+
+
 def check_schedules(state: State, report: Report) -> None:
     if state.schedules is None:
         report.skip("schedules", "pipeline schedules not read", incomplete=False)
@@ -2604,7 +2671,9 @@ def check_schedules(state: State, report: Report) -> None:
 
 
 def check_repo(pkg: str, source, state: State,
-               fetch: Callable[[str], tuple[int, str, bytes]] | None = None) -> Report:
+               fetch: Callable[[str], tuple[int, str, bytes]] | None = None,
+               pins: PinReads | None = None) -> Report:
+    """One package's report. `pins` is check_pandoc_pin()'s: the pin reads made already, or None."""
     report = Report(pkg)
     for area, error in state.errors:
         report.skip(area, f"probe failed: {error}", incomplete=True)
@@ -2617,8 +2686,9 @@ def check_repo(pkg: str, source, state: State,
     check_logo(pkg, source, report)
     check_files(source, report)
     floor = check_description(pkg, source, state, report)
-    check_ci(pkg, source, state, floor, report)
+    check_ci(pkg, source, state, floor, report, pins)
     check_local_gate(source, report)
+    check_toolchain_copy(source, report)
     check_schedules(state, report)
     return report
 
@@ -2798,14 +2868,6 @@ repos:
         stages: [pre-push]
 """
 
-FIXTURE_TOOLCHAIN_R = """\
-# The pin is read from the CI file; a toolchain check compares the local pandoc to it.
-ci <- readLines(file.path(root, ".gitlab-ci.yml"))
-pin <- read_pin(ci, "PANDOC_VERSION")
-if (!identical(as.character(rmarkdown::pandoc_version()), pin)) quit(status = 1)
-"""
-
-
 def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str | None = "10.5281/zenodo.111") -> dict:
     urls = [f"https://{OWNER}.gitlab.io/{pkg}/", f"https://gitlab.com/{OWNER}/{pkg}",
             f"https://{OWNER}.r-universe.dev/{pkg}"] + ([f"https://CRAN.R-project.org/package={pkg}"] if on_cran else [])
@@ -2830,7 +2892,8 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
         ".pre-commit-config.yaml": FIXTURE_PRECOMMIT,
         "tools/verify.R": "db <- tools:::url_db_from_package_sources('.')\nbad <- tools:::check_url_db(db)\n"
                           "system2(\"git\", c(\"archive\", \"-o\", tarball, ref))\nroxygen2::roxygenise(export)\n",
-        "scripts/check-toolchain.R": FIXTURE_TOOLCHAIN_R,
+        # The vendored copy every member carries: seor's own, byte for byte.
+        "scripts/check-toolchain.R": seor_toolchain(),
         "scripts/check-citation.py": "print('ok')\n",
         ".gitlab/issue_templates/Bug.md": "x\n",
         ".gitlab/merge_request_templates/Default.md": "x\n",
@@ -2865,27 +2928,20 @@ def fixture_state(on_cran: bool = True, release: bool = True, doi: bool = True, 
     )
 
 
+Judge = Callable[[Report], None]
+
+
 def self_test() -> list[str]:
-    """The fixtures, run twice: the first pass only collects their
-    .gitlab-ci.yml texts, so check-toolchain.R reads every pin in one Rscript
-    run rather than one per fixture (SEOR-xhyrogfm); the second judges them."""
-    texts: list[str] = []
-    self_test_cases(texts)
-    try:
-        read_pandoc_assignments(texts)
-    except ProbeError as error:
-        return [f"the pandoc pin reader did not run: {error}"]
-    return self_test_cases(None)
-
-
-def self_test_cases(collect: list[str] | None) -> list[str]:
+    """The fixtures, in one pass. Each repository row is queued with its
+    judge (run()); once all are built, check-toolchain.R reads every queued
+    .gitlab-ci.yml's pin in one Rscript run, not one per fixture
+    (SEOR-xhyrogfm), and each row is checked with that read and judged."""
     failures: list[str] = []
+    queued: list[tuple[str, DictSource, State, object, Judge]] = []
 
-    def run(pkg: str, files: dict, state: State, fetch=None) -> Report:
-        if collect is not None:
-            collect.append(files.get(".gitlab-ci.yml", ""))
-            return Report(pkg)
-        return check_repo(pkg, DictSource(files), state, fetch)
+    def run(pkg: str, files: dict | DictSource, state: State, fetch=None, judge: Judge | None = None) -> None:
+        source = files if isinstance(files, DictSource) else DictSource(files)
+        queued.append((pkg, source, state, fetch, judge or (lambda report: None)))
 
     def loads(tag: str, report: Report) -> None:
         # A fixture GitLab would refuse leaves CI not judged, and a clean
@@ -2894,17 +2950,22 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
             failures.append(f"{tag}: the fixture's .gitlab-ci.yml did not load: {report.unjudged}")
 
     def expect_clean(tag: str, pkg: str, files: dict, state: State, fetch=None) -> None:
-        report = run(pkg, files, state, fetch)
-        loads(tag, report)
-        if report.gaps:
-            failures.append(f"{tag}: expected no gaps, got {report.gaps}")
+        def judge(report: Report) -> None:
+            loads(tag, report)
+            if report.gaps:
+                failures.append(f"{tag}: expected no gaps, got {report.gaps}")
+        run(pkg, files, state, fetch, judge)
 
-    def expect_gap(tag: str, needle: str, pkg: str, files: dict, state: State, fetch=None) -> Report:
-        report = run(pkg, files, state, fetch)
-        loads(tag, report)
-        if not any(needle in text for _, text in report.gaps):
-            failures.append(f"{tag}: expected a gap containing {needle!r}, got {report.gaps}")
-        return report
+    def expect_gap(tag: str, needle: str, pkg: str, files: dict, state: State, fetch=None,
+                   then: Judge | None = None) -> None:
+        """A row whose report holds a gap with `needle`; `then` judges the report further."""
+        def judge(report: Report) -> None:
+            loads(tag, report)
+            if not any(needle in text for _, text in report.gaps):
+                failures.append(f"{tag}: expected a gap containing {needle!r}, got {report.gaps}")
+            if then is not None:
+                then(report)
+        run(pkg, files, state, fetch, judge)
 
     def edit(files: dict, path: str, old: str, new: str) -> dict:
         if old not in files[path]:
@@ -2971,13 +3032,15 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     expect_clean("FOSSA pair under the custom locator", "seor",
                  edit(seor, "README.Rmd", "<!-- badges: end -->", fossa_new + "<!-- badges: end -->"),
                  fixture_state(on_cran=False, release=False, doi=False, fossa=True))
-    old_report = expect_gap("FOSSA pair under the bare git+gitlab.com locator", "slot 17 FOSSA license: image URL differs",
-                            "seor", edit(seor, "README.Rmd", "<!-- badges: end -->", fossa_old + "<!-- badges: end -->"),
-                            fixture_state(on_cran=False, release=False, doi=False, fossa=True))
-    for needle in ("slot 17 FOSSA license: link differs", "slot 18 FOSSA security: image URL differs",
-                   "slot 18 FOSSA security: link differs"):
-        if not any(needle in text for _, text in old_report.gaps):
-            failures.append(f"FOSSA bare locator: expected a gap containing {needle!r}, got {old_report.gaps}")
+    def fossa_old_gaps(old_report: Report) -> None:
+        for needle in ("slot 17 FOSSA license: link differs", "slot 18 FOSSA security: image URL differs",
+                       "slot 18 FOSSA security: link differs"):
+            if not any(needle in text for _, text in old_report.gaps):
+                failures.append(f"FOSSA bare locator: expected a gap containing {needle!r}, got {old_report.gaps}")
+
+    expect_gap("FOSSA pair under the bare git+gitlab.com locator", "slot 17 FOSSA license: image URL differs",
+               "seor", edit(seor, "README.Rmd", "<!-- badges: end -->", fossa_old + "<!-- badges: end -->"),
+               fixture_state(on_cran=False, release=False, doi=False, fossa=True), then=fossa_old_gaps)
     if fossa_image("rurl", "license") != ("https://app.fossa.com/api/projects/custom%2B62973%2Fgit%2Bgitlab.com"
                                           "%2Fbart-turczynski%2Frurl.svg?type=shield&issueType=license"):
         failures.append(f"FOSSA probe URL is not the measured 200 form: {fossa_image('rurl', 'license')}")
@@ -3007,11 +3070,14 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
             return 500, "text/plain", b""
         return 200, "image/svg+xml", b"<svg><text>ok</text></svg>"
 
-    report = expect_gap("image renders unknown", "renders 'unknown'", "punycoder", cran, fixture_state(), fetch_bad)
-    if not any("HTTP 500" in t for _, t in report.gaps) or not any("not an image" in t for _, t in report.gaps):
-        failures.append(f"image checks: expected HTTP 500 and not-an-image gaps, got {report.gaps}")
-    if any("tinyverse" in t for _, t in report.gaps) or not any("tinyverse" in t for _, t in report.unjudged):
-        failures.append("image checks: a network error must be not judged, never a gap")
+    def image_gaps(report: Report) -> None:
+        if not any("HTTP 500" in t for _, t in report.gaps) or not any("not an image" in t for _, t in report.gaps):
+            failures.append(f"image checks: expected HTTP 500 and not-an-image gaps, got {report.gaps}")
+        if any("tinyverse" in t for _, t in report.gaps) or not any("tinyverse" in t for _, t in report.unjudged):
+            failures.append("image checks: a network error must be not judged, never a gap")
+
+    expect_gap("image renders unknown", "renders 'unknown'", "punycoder", cran, fixture_state(), fetch_bad,
+               then=image_gaps)
 
     # NEGATIVE: files, DESCRIPTION.
     no_arch = dict(cran)
@@ -3042,19 +3108,26 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                fixture_state())
     expect_gap("function index", "heading ## Function Overview is maintainer content", "punycoder",
                edit(cran, "README.Rmd", "## Learn more", "## Function Overview"), fixture_state())
-    report = run("punycoder", edit(cran, "README.Rmd", "## Learn more", "## Development version"), fixture_state())
-    if report.gaps:
-        failures.append(f"a heading that only starts with a banned word is not banned, got {report.gaps}")
+    def no_banned(report: Report) -> None:
+        if report.gaps:
+            failures.append(f"a heading that only starts with a banned word is not banned, got {report.gaps}")
+
+    run("punycoder", edit(cran, "README.Rmd", "## Learn more", "## Development version"), fixture_state(), judge=no_banned)
     expect_gap("no r-universe command", "no r-universe install.packages()", "punycoder",
                edit(cran, "README.Rmd", f'repos = c("https://{OWNER}.r-universe.dev", ', "repos = c("), fixture_state())
-    report = expect_gap("on CRAN, no CRAN command", 'no install.packages("punycoder") for CRAN', "punycoder",
-                        edit(cran, "README.Rmd", 'install.packages("punycoder")\n\n', ""), fixture_state())
-    if any("r-universe" in t for _, t in report.gaps):
-        failures.append(f"on CRAN, no CRAN command: the r-universe command was there, got {report.gaps}")
-    unknown_cran = run("punycoder", edit(cran, "README.Rmd", 'install.packages("punycoder")\n\n', ""),
-                       State(**{**fixture_state().__dict__, "on_cran": None}))
-    if any("for CRAN" in t for _, t in unknown_cran.gaps) or not any("CRAN command" in t for _, t in unknown_cran.unjudged):
-        failures.append("Installation: unknown CRAN status must be not judged, never a gap")
+    def runiverse_kept(report: Report) -> None:
+        if any("r-universe" in t for _, t in report.gaps):
+            failures.append(f"on CRAN, no CRAN command: the r-universe command was there, got {report.gaps}")
+
+    expect_gap("on CRAN, no CRAN command", 'no install.packages("punycoder") for CRAN', "punycoder",
+               edit(cran, "README.Rmd", 'install.packages("punycoder")\n\n', ""), fixture_state(), then=runiverse_kept)
+
+    def cran_unjudged(unknown_cran: Report) -> None:
+        if any("for CRAN" in t for _, t in unknown_cran.gaps) or not any("CRAN command" in t for _, t in unknown_cran.unjudged):
+            failures.append("Installation: unknown CRAN status must be not judged, never a gap")
+
+    run("punycoder", edit(cran, "README.Rmd", 'install.packages("punycoder")\n\n', ""),
+        State(**{**fixture_state().__dict__, "on_cran": None}), judge=cran_unjudged)
     expect_gap("root llms.txt", "hand-written root llms.txt", "punycoder", dict(cran, **{"llms.txt": "# x\n"}),
                fixture_state())
     expect_gap("llm-docs off", "_pkgdown.yaml sets llm-docs off", "punycoder",
@@ -3076,10 +3149,13 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     expect_clean("headings in front matter and comments do not render", "punycoder", hidden, fixture_state())
     expect_gap("no keywords", "no X-schema.org-keywords", "punycoder",
                edit(cran, "DESCRIPTION", "X-schema.org-keywords:", "X-keywords:"), fixture_state())
-    report = expect_gap("dropped keywords", "lists r, rstats, which r-universe drops", "punycoder",
-                        edit(cran, "DESCRIPTION", "domain-names\n", "domain-names, r, rstats\n"), fixture_state())
-    if any("usable" in t for _, t in report.gaps):
-        failures.append(f"dropped keywords: five usable tokens remain, got {report.gaps}")
+    def five_usable(report: Report) -> None:
+        if any("usable" in t for _, t in report.gaps):
+            failures.append(f"dropped keywords: five usable tokens remain, got {report.gaps}")
+
+    expect_gap("dropped keywords", "lists r, rstats, which r-universe drops", "punycoder",
+               edit(cran, "DESCRIPTION", "domain-names\n", "domain-names, r, rstats\n"), fixture_state(),
+               then=five_usable)
     expect_gap("too few keywords", "has 4 distinct usable token(s)", "punycoder",
                edit(cran, "DESCRIPTION", "unicode,\n    domain-names\n", "unicode, R-package\n"), fixture_state())
 
@@ -3123,13 +3199,18 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                "punycoder", one_bag, fixture_state())
     expect_clean("a DESCRIPTION with a byte-order mark", "punycoder",
                  dict(cran, DESCRIPTION="﻿" + cran["DESCRIPTION"]), fixture_state())
-    report = run("punycoder", edit(cran, "DESCRIPTION", "X-schema.org-keywords: punycode, idna, idn, unicode,\n"
-                                   "    domain-names\n", ""), fixture_state())
-    if collect is None and any(area == "logo" for area, _ in report.gaps):
-        failures.append(f"DESCRIPTION without keywords: expected no logo gap beside the description one, got {report.gaps}")
-    report = run("punycoder", no_svg, fixture_state())
-    if collect is None and sum("logo.svg" in t for _, t in report.gaps) != 1:
-        failures.append(f"no logo.svg: expected the one missing-file gap, got {report.gaps}")
+    def no_logo_gap(report: Report) -> None:
+        if any(area == "logo" for area, _ in report.gaps):
+            failures.append(f"DESCRIPTION without keywords: expected no logo gap beside the description one, got {report.gaps}")
+
+    run("punycoder", edit(cran, "DESCRIPTION", "X-schema.org-keywords: punycode, idna, idn, unicode,\n"
+                          "    domain-names\n", ""), fixture_state(), judge=no_logo_gap)
+
+    def one_svg_gap(report: Report) -> None:
+        if sum("logo.svg" in t for _, t in report.gaps) != 1:
+            failures.append(f"no logo.svg: expected the one missing-file gap, got {report.gaps}")
+
+    run("punycoder", no_svg, fixture_state(), judge=one_svg_gap)
     expect_gap("no level-1 heading", "the first heading is not", "punycoder",
                edit(cran, "README.Rmd", fixture_h1("punycoder") + "\n", ""), fixture_state())
     expect_clean("single-quoted logo src", "punycoder",
@@ -3177,18 +3258,23 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                  fixture_state())
 
     # NEGATIVE: CI.
-    report = expect_gap("coverage only on push", "coverage job does not run on the deep-check schedule", "punycoder",
-                        push_only, fixture_state())
-    if not any("coverage job does not run on the dependency-audit schedule" in t for _, t in report.gaps):
-        failures.append(f"coverage only on push: expected a dependency-audit schedule gap too, got {report.gaps}")
-    report = expect_gap("coverage off the audit schedule", "coverage job does not run on the dependency-audit schedule",
-                        "punycoder",
-                        edit(cran, ci, "coverage:\n  extends: [.r, .on-main]\n",
-                             "coverage:\n  extends: .r\n  rules:\n    - if: $SCHEDULE_KIND == \"dependency-audit\"\n      when: never\n"
-                             "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n"),
-                        fixture_state())
-    if any("deep-check schedule" in t for _, t in report.gaps):
-        failures.append(f"coverage off the audit schedule: unexpected deep-check gap, got {report.gaps}")
+    def audit_gap_too(report: Report) -> None:
+        if not any("coverage job does not run on the dependency-audit schedule" in t for _, t in report.gaps):
+            failures.append(f"coverage only on push: expected a dependency-audit schedule gap too, got {report.gaps}")
+
+    expect_gap("coverage only on push", "coverage job does not run on the deep-check schedule", "punycoder",
+               push_only, fixture_state(), then=audit_gap_too)
+
+    def no_deep_gap(report: Report) -> None:
+        if any("deep-check schedule" in t for _, t in report.gaps):
+            failures.append(f"coverage off the audit schedule: unexpected deep-check gap, got {report.gaps}")
+
+    expect_gap("coverage off the audit schedule", "coverage job does not run on the dependency-audit schedule",
+               "punycoder",
+               edit(cran, ci, "coverage:\n  extends: [.r, .on-main]\n",
+                    "coverage:\n  extends: .r\n  rules:\n    - if: $SCHEDULE_KIND == \"dependency-audit\"\n      when: never\n"
+                    "    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n"),
+               fixture_state(), then=no_deep_gap)
     expect_gap("coverage threshold below 95", "coverage threshold 90 is below 95", "punycoder",
                edit(cran, ci, "pct < 95", "pct < 90"), fixture_state())
     expect_gap("coverage threshold absent", "no 95% coverage threshold", "punycoder",
@@ -3239,11 +3325,13 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     pin_block = cran[ci].split(".r:\n", 1)[1].split(".on-main:\n", 1)[0]
     pin_lines = pin_block.split("  before_script:\n", 1)[1]
     no_pin = edit(cran, ci, ".r:\n" + pin_block, ".r:\n  image: rocker/r-ver:4.6.1\n")
-    report = expect_gap("pandoc pin absent", "pandoc 3.10 is not installed from the pandoc release in the setup of",
-                        "punycoder", no_pin, fixture_state())
-    unpinned = next((t for _, t in report.gaps if "not installed from the pandoc release" in t), "")
-    if not all(name in unpinned for name in ("gates", "check", "coverage", "pages")) or "fossa" in unpinned:
-        failures.append(f"pandoc pin absent: expected the four R jobs and not fossa, got {unpinned!r}")
+    def four_r_jobs(report: Report) -> None:
+        unpinned = next((t for _, t in report.gaps if "not installed from the pandoc release" in t), "")
+        if not all(name in unpinned for name in ("gates", "check", "coverage", "pages")) or "fossa" in unpinned:
+            failures.append(f"pandoc pin absent: expected the four R jobs and not fossa, got {unpinned!r}")
+
+    expect_gap("pandoc pin absent", "pandoc 3.10 is not installed from the pandoc release in the setup of",
+               "punycoder", no_pin, fixture_state(), then=four_r_jobs)
     # The install's shape is the install reader's to judge, through its case
     # table (PANDOC_INSTALL_CASES, run below); here one case per state checks
     # the wiring from check_repo to it.
@@ -3297,24 +3385,28 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                dict(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "    - . tools/pin.sh\n"),
                     **{"tools/pin.sh": "PANDOC_VERSION=3.10\n"}), fixture_state())
     # seor before SEOR-egfbijyi: only `gates` pinned it.
-    report = expect_gap("pandoc pin in one job only", "in the setup of check, coverage, pages", "punycoder",
-                        edit(no_pin, ci, "gates:\n  extends: [.r, .on-main]\n  script:\n",
-                             "gates:\n  extends: [.r, .on-main]\n  script:\n" + pin_lines), fixture_state())
-    if "gates" in next((t for _, t in report.gaps if "not installed from the pandoc release" in t), ""):
-        failures.append(f"pandoc pin in one job only: gates pins it, got {report.gaps}")
+    def gates_pinned(report: Report) -> None:
+        if "gates" in next((t for _, t in report.gaps if "not installed from the pandoc release" in t), ""):
+            failures.append(f"pandoc pin in one job only: gates pins it, got {report.gaps}")
+
+    expect_gap("pandoc pin in one job only", "in the setup of check, coverage, pages", "punycoder",
+               edit(no_pin, ci, "gates:\n  extends: [.r, .on-main]\n  script:\n",
+                    "gates:\n  extends: [.r, .on-main]\n  script:\n" + pin_lines), fixture_state(), then=gates_pinned)
     # GitLab replaces arrays along `extends`: a job's own before_script drops the template's pin.
-    report = expect_gap("job replaces the template's before_script", "in the setup of check (README.md", "punycoder",
-                        edit(cran, ci, "check:\n  extends: [.r, .on-main]\n",
-                             "check:\n  extends: [.r, .on-main]\n  before_script:\n    - echo own setup\n"),
-                        fixture_state())
+    expect_gap("job replaces the template's before_script", "in the setup of check (README.md", "punycoder",
+               edit(cran, ci, "check:\n  extends: [.r, .on-main]\n",
+                    "check:\n  extends: [.r, .on-main]\n  before_script:\n    - echo own setup\n"),
+               fixture_state())
     # The pin in `default:` reaches every job, citation-version's python:alpine
     # included, so it does not count; the R jobs are told to move it.
     in_default = edit(no_pin, ci, "default:\n  image: rocker/r-ver:4.6.1\n",
                       "default:\n  image: rocker/r-ver:4.6.1\n  before_script:\n" + pin_lines)
-    report = expect_gap("pandoc pin only in default:", "gates, check, coverage, pages: pandoc is pinned only in "
-                        "`default: before_script`", "punycoder", in_default, fixture_state())
-    if any("not installed from the pandoc release" in t for _, t in report.gaps):
-        failures.append(f"pandoc pin only in default:: expected the move-it gap alone, got {report.gaps}")
+    def move_it_alone(report: Report) -> None:
+        if any("not installed from the pandoc release" in t for _, t in report.gaps):
+            failures.append(f"pandoc pin only in default:: expected the move-it gap alone, got {report.gaps}")
+
+    expect_gap("pandoc pin only in default:", "gates, check, coverage, pages: pandoc is pinned only in "
+               "`default: before_script`", "punycoder", in_default, fixture_state(), then=move_it_alone)
     expect_gap("default: pin with the job opted out", "in the setup of check (README.md", "punycoder",
                edit(in_default, ci, "check:\n  extends: [.r, .on-main]\n",
                     "check:\n  extends: [.r, .on-main]\n  inherit:\n    default: false\n"), fixture_state())
@@ -3355,13 +3447,59 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                edit(cran, ci, "      - R_VERSION: [\"4.6.1\", \"4.5.3\", \"devel\", \"4.1.3\"]\n",
                     "      - R_VERSION: [\"4.6.1\", \"4.5.3\", \"devel\", \"4.1.3\"]\n        PANDOC_VERSION: \"3.10\"\n"),
                fixture_state())
+    # GitLab's expanded form, `PANDOC_VERSION: {value: …, description: …}`,
+    # block or flow, global or a job's: check-toolchain.R reads a plain
+    # scalar only, so it sees no pin in the block form and the pin
+    # `{value: "3.10"}` in the flow form. One gap names the cause and where it
+    # sits, and the misreading adds none (SEOR-eodwtiqv).
+    expanded = "sets PANDOC_VERSION in GitLab's expanded form (`value:`), which check-toolchain.R does not read"
+
+    def expanded_alone(scope: str) -> Judge:
+        def judge(report: Report) -> None:
+            pandoc = [t for _, t in report.gaps if "pandoc" in t.lower()]
+            if pandoc != [f"{scope}: {expanded}; write the pin as a plain scalar, `PANDOC_VERSION: \"3.10\"` "
+                          "(until then its value is not judged)"]:
+                failures.append(f"expanded pin in {scope}: expected its one gap alone, got {report.gaps}")
+        return judge
+
+    no_shell_pin = edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "")
+    global_scope = "the global `variables:`"
+    expect_gap("pin in the expanded form, block, global", expanded, "punycoder",
+               edit(no_shell_pin, ci, "variables:\n",
+                    "variables:\n  PANDOC_VERSION:\n    value: \"3.10\"\n    description: the fleet's pandoc\n"),
+               fixture_state(), then=expanded_alone(global_scope))
+    expect_gap("pin in the expanded form, flow, global", expanded, "punycoder",
+               edit(no_shell_pin, ci, "variables:\n", "variables:\n  PANDOC_VERSION: {value: \"3.10\"}\n"),
+               fixture_state(), then=expanded_alone(global_scope))
+    expect_gap("pin in the expanded form, block, in the R template", expanded, "punycoder",
+               edit(no_shell_pin, ci, ".r:\n", ".r:\n  variables:\n    PANDOC_VERSION:\n      value: \"3.10\"\n"),
+               fixture_state(), then=expanded_alone(".r"))
+    expect_gap("pin in the expanded form, flow, beside a shell pin", expanded, "punycoder",
+               edit(cran, ci, ".r:\n", ".r:\n  variables:\n    PANDOC_VERSION: {value: \"3.10\", description: pin}\n"),
+               fixture_state(), then=expanded_alone(".r"))
+
+    # Whether each job sees the pin is still judged: here none of the R jobs does.
+    def fossa_named(report: Report) -> None:
+        if not any(t.startswith(f"fossa: {expanded}") for _, t in report.gaps):
+            failures.append(f"expanded pin in fossa: expected its gap too, got {report.gaps}")
+
+    expect_gap("pin in the expanded form, in a job without pandoc", "gates, check, coverage, pages: downloads pandoc "
+               "at $PANDOC_VERSION, which neither its variables nor its setup assign", "punycoder",
+               edit(no_shell_pin, ci, "fossa:\n", "fossa:\n  variables:\n    PANDOC_VERSION: {value: \"3.10\"}\n"),
+               fixture_state(), then=fossa_named)
+    # An expanded pin anywhere leaves every pin check-toolchain.R can read
+    # judged: a wrong shell pin in the R template is still reported.
+    expect_gap("pin in the expanded form in fossa, a wrong shell pin in the R template",
+               "pins pandoc 3.9, not the fleet's 3.10", "punycoder",
+               edit(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "    - PANDOC_VERSION=3.9\n"),
+                    ci, "fossa:\n", "fossa:\n  variables:\n    PANDOC_VERSION: {value: \"3.10\"}\n"),
+               fixture_state(), then=fossa_named)
 
     # The install reader through its interface: shell items in, state out.
-    if collect is None:
-        for name, entries, want in PANDOC_INSTALL_CASES:
-            got = pandoc_install_state(entries)
-            if got != want:
-                failures.append(f"pandoc install case {name!r}: expected {want}, got {got}")
+    for name, entries, want in PANDOC_INSTALL_CASES:
+        got = pandoc_install_state(entries)
+        if got != want:
+            failures.append(f"pandoc install case {name!r}: expected {want}, got {got}")
 
     # A flow sequence `[a, b]` is a list of script items too: YAML's reading,
     # not the shell reader's, so it goes end to end.
@@ -3369,6 +3507,13 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                  edit(cran, ci, "  before_script:\n" + pin_lines,
                       f"  variables:\n    PANDOC_VERSION: \"3.10\"\n  before_script: ['{PANDOC_CASE_DL}', '{PANDOC_CASE_CHECK}',\n"
                       "    'dpkg -i /tmp/pandoc.deb']\n"), fixture_state())
+    # So is the pin as a flow sequence's item, first or after another
+    # (SEOR-ltseyxpe): the job sees it, and check-toolchain.R reads it.
+    for form, head in (("first", "["), ("after another item", "[echo setup, ")):
+        expect_clean(f"the pin in a flow sequence, {form}", "punycoder",
+                     edit(cran, ci, "  before_script:\n" + pin_lines,
+                          f"  before_script: {head}PANDOC_VERSION=3.10, '{PANDOC_CASE_DL}', '{PANDOC_CASE_CHECK}',\n"
+                          "    'dpkg -i /tmp/pandoc.deb']\n"), fixture_state())
 
     # The CI reader's case table (SEOR-oznwzhem). Every expected value is what
     # GitLab makes of the YAML, written down from the YAML 1.1 spec and GitLab's
@@ -3525,14 +3670,13 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
          "variables: {B: --as-cran, C: x}\njob:\n  variables: {A: \"${B} -v\"}\n  script: [R CMD check $A x.tar.gz]\n",
          lambda c: list(c.jobs["job"].view), ["R CMD check $A x.tar.gz\nB=--as-cran\nA=${B} -v"]),
     )
-    if collect is None:
-        for tag, text, probe, want in reader_cases:
-            try:
-                got = probe(ci_of(text))
-            except Exception as error:  # noqa: BLE001 - a reader that raises fails the row
-                got = f"raised {type(error).__name__}: {error}"
-            if got != want:
-                failures.append(f"reader: {tag}: expected {want!r}, got {got!r}")
+    for tag, text, probe, want in reader_cases:
+        try:
+            got = probe(ci_of(text))
+        except Exception as error:  # noqa: BLE001 - a reader that raises fails the row
+            got = f"raised {type(error).__name__}: {error}"
+        if got != want:
+            failures.append(f"reader: {tag}: expected {want!r}, got {got!r}")
 
     check_tpl = edit(cran, ci, "check:\n  extends: [.r, .on-main]\n  script:\n",
                      ".check-tpl:\n  extends: [.r, .on-main]\n  script:\n")
@@ -3612,13 +3756,14 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                 raise ProbeError("reading tools/gates.R: 503")
             return super().read(path)
 
-    if collect is None:
-        report = check_repo("punycoder", Unreadable(cran), fixture_state(), None)
+    def ci_unjudged(report: Report) -> None:
         if (any(area == "ci" for area, _ in report.gaps)
                 or not any(area == "ci" and "could not read a script" in t for area, t in report.unjudged)
                 or exit_status([report]) != 2):
             failures.append(f"reader e2e: an unreadable script a job runs: expected CI not judged and exit 2, got "
                             f"{report.gaps} / {report.unjudged}")
+
+    run("punycoder", Unreadable(cran), fixture_state(), judge=ci_unjudged)
     # A `spec:` header document before the config is valid GitLab.
     expect_clean("reader e2e: a `spec:` header, then the config", "punycoder",
                  dict(cran, **{ci: "spec:\n  inputs:\n    image:\n      default: rocker/r-ver:4.6.1\n---\n" + cran[ci]}),
@@ -3687,17 +3832,21 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     for form, item in (("eval", "eval \"PANDOC_VERSION=3.10\""), ("local", "local PANDOC_VERSION=3.10"),
                        ("a function's body", "f() { PANDOC_VERSION=3.10; }"),
                        ("a `function` body", "function f { PANDOC_VERSION=3.10; }")):
-        report = run("punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"    - {item}\n    - curl"),
-                     fixture_state())
-        if collect is None and (report.gaps
-                                or not any("PANDOC_VERSION" in t and "not judged" in t for _, t in report.unjudged)
-                                or exit_status([report]) != 2):
-            failures.append(f"reader e2e: an assignment under {form}: expected not judged and exit 2, got "
-                            f"{report.gaps} / {report.unjudged}")
+        def pin_unjudged(report: Report, form: str = form) -> None:
+            if (report.gaps or not any("PANDOC_VERSION" in t and "not judged" in t for _, t in report.unjudged)
+                    or exit_status([report]) != 2):
+                failures.append(f"reader e2e: an assignment under {form}: expected not judged and exit 2, got "
+                                f"{report.gaps} / {report.unjudged}")
+
+        run("punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"    - {item}\n    - curl"),
+            fixture_state(), judge=pin_unjudged)
+
     # A judgment left out by choice (--offline) does not make the run incomplete.
-    report = run("punycoder", cran, fixture_state())
-    if collect is None and (not report.unjudged or exit_status([report]) != 0):
-        failures.append(f"an --offline skip alone: expected exit 0, got {exit_status([report])} for {report.unjudged}")
+    def complete(report: Report) -> None:
+        if not report.unjudged or exit_status([report]) != 0:
+            failures.append(f"an --offline skip alone: expected exit 0, got {exit_status([report])} for {report.unjudged}")
+
+    run("punycoder", cran, fixture_state(), judge=complete)
     # A load error: CI is not judged, the run is incomplete, the other areas are still judged.
     for tag, old, new in (("an unknown tag", "    - *deps\n    - Rscript tools/gates.R\n",
                            "    - !reference [.deps]\n    - Rscript tools/gates.R\n"),
@@ -3708,14 +3857,14 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                            "    - &loop [*loop]\n    - Rscript tools/gates.R\n"),
                           ("an empty rules:if", ".on-main:\n  rules:\n",
                            ".on-main:\n  rules:\n    - if:\n      when: always\n")):
-        broken = edit(no_arch, ci, old, new)
-        report = run("punycoder", broken, fixture_state())
-        if collect is None and (any(area == "ci" for area, _ in report.gaps)
-                                or not any("missing ARCHITECTURE.md" in t for _, t in report.gaps)
-                                or not any(area == "ci" and "could not read .gitlab-ci.yml" in t
-                                           for area, t in report.unjudged)
-                                or exit_status([Report("x", unjudged=report.unjudged, incomplete=report.incomplete)]) != 2):
-            failures.append(f"reader e2e: {tag}: expected CI not judged and exit 2, got {report.gaps} / {report.unjudged}")
+        def load_error(report: Report, tag: str = tag) -> None:
+            if (any(area == "ci" for area, _ in report.gaps)
+                    or not any("missing ARCHITECTURE.md" in t for _, t in report.gaps)
+                    or not any(area == "ci" and "could not read .gitlab-ci.yml" in t for area, t in report.unjudged)
+                    or exit_status([Report("x", unjudged=report.unjudged, incomplete=report.incomplete)]) != 2):
+                failures.append(f"reader e2e: {tag}: expected CI not judged and exit 2, got {report.gaps} / {report.unjudged}")
+
+        run("punycoder", edit(no_arch, ci, old, new), fixture_state(), judge=load_error)
 
     # NEGATIVE: local gate and schedules.
     expect_gap("URL check missing", "no URL check", "punycoder",
@@ -3762,6 +3911,32 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     expect_gap("CI file named only in a trailing comment", no_local_pandoc, "punycoder",
                dict(cran, **{"scripts/check-toolchain.R": "pin <- PANDOC_VERSION  # see .gitlab-ci.yml\n" + compare}),
                fixture_state())
+    # check-toolchain.R is vendored: every member carries seor's copy, byte
+    # for byte. The fixture carries it.
+    toolchain = "scripts/check-toolchain.R"
+    if cran[toolchain] != seor_toolchain():
+        failures.append("the fixture's check-toolchain.R is not seor's copy")
+    expect_clean("a member's check-toolchain.R identical to seor's", "punycoder", cran, fixture_state())
+    drifted = "scripts/check-toolchain.R differs from seor's, the copy this checker runs"
+
+    def drift_alone(report: Report) -> None:
+        if len(report.gaps) != 1:
+            failures.append(f"a drifted check-toolchain.R: expected its one gap, got {report.gaps}")
+
+    expect_gap("a member's check-toolchain.R drifted from seor's", drifted, "punycoder",
+               dict(cran, **{toolchain: cran[toolchain] + "# a local edit\n"}), fixture_state(), then=drift_alone)
+
+    expect_clean("a member's check-toolchain.R identical to seor's but for CRLF line endings", "punycoder",
+                 dict(cran, **{toolchain: cran[toolchain].replace("\n", "\r\n")}), fixture_state())
+
+    # A missing copy: the vendored file is gone, and nothing compares the
+    # local pandoc with the pin.
+    def missing_and_local_pandoc(report: Report) -> None:
+        if sorted(t for _, t in report.gaps) != sorted([no_local_pandoc, "no scripts/check-toolchain.R; copy seor's, "
+                                                        "which every package vendors byte for byte"]):
+            failures.append(f"no check-toolchain.R: expected the missing-copy and local pandoc gaps, got {report.gaps}")
+
+    run("punycoder", {k: v for k, v in cran.items() if k != toolchain}, fixture_state(), judge=missing_and_local_pandoc)
     no_deep = fixture_state()
     no_deep.schedules = no_deep.schedules[1:]
     expect_gap("deep-check schedule missing", "no deep-check schedule", "punycoder", cran, no_deep)
@@ -3770,9 +3945,19 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     expect_gap("schedule without kind", "sets no SCHEDULE_KIND", "punycoder", cran, stray)
 
     # Unknown state is not judged, never a gap.
-    unknown = run("punycoder", cran, State())
-    if unknown.gaps and any(area in ("badges", "schedules") for area, _ in unknown.gaps):
-        failures.append(f"unknown state produced badge/schedule gaps: {unknown.gaps}")
+    def no_state_gaps(unknown: Report) -> None:
+        if unknown.gaps and any(area in ("badges", "schedules") for area, _ in unknown.gaps):
+            failures.append(f"unknown state produced badge/schedule gaps: {unknown.gaps}")
+
+    run("punycoder", cran, State(), judge=no_state_gaps)
+
+    # Every row is built: read their pins in one Rscript run, then judge them.
+    try:
+        pins = read_pandoc_assignments([source.read(".gitlab-ci.yml") or "" for _, source, _, _, _ in queued])
+    except ProbeError as error:
+        return [f"the pandoc pin reader did not run: {error}"]
+    for pkg, source, state, fetch, judge in queued:
+        judge(check_repo(pkg, source, state, fetch, pins))
     return failures
 
 
