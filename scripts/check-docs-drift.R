@@ -24,11 +24,11 @@
 # uses, so what this gate demands is exactly what the documented fix produces.
 # seor has no src/, so that load compiles nothing.
 #
-# Never run this in place: roxygenise() writes into the directory it is given,
-# so on drift it rewrites man/, NAMESPACE and DESCRIPTION there. The pre-push
-# hook (scripts/docs-drift.sh) therefore runs it against its own `git archive`
-# export of the commit being pushed (PRE_COMMIT_TO_REF, else HEAD), never the
-# working tree.
+# The gate never runs this in place: roxygenise() writes into the directory
+# it is given, so on drift it rewrites man/, NAMESPACE and DESCRIPTION there.
+# The pre-push hook (scripts/docs-drift.sh) therefore runs it against its own
+# `git archive` export of the commit being pushed (PRE_COMMIT_TO_REF, else
+# HEAD), never the working tree.
 #
 # Usage (from the package root):
 #   Rscript scripts/check-docs-drift.R [package-dir]
@@ -110,7 +110,9 @@ mirror <- function(root, files, dest) {
   for (f in files) {
     target <- file.path(dest, f)
     dir.create(dirname(target), recursive = TRUE, showWarnings = FALSE)
-    file.copy(file.path(root, f), target)
+    if (!file.copy(file.path(root, f), target)) {
+      stop(sprintf("could not copy %s into %s", f, dest), call. = FALSE)
+    }
   }
   dest
 }
@@ -121,7 +123,7 @@ committed_files <- watched_files(pkg)
 committed_dir <- mirror(pkg, committed_files, tempfile("docs-committed-"))
 
 message(sprintf(
-  "Regenerating man/ and NAMESPACE with roxygen2 %s ...",
+  "Regenerating man/, NAMESPACE and DESCRIPTION with roxygen2 %s ...",
   installed
 ))
 roxygen2::roxygenise(pkg)

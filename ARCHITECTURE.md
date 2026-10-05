@@ -49,6 +49,10 @@ dependencies and (2) attach them all on `library(seor)`.
   `check-design.py` owns design-doc hygiene; `check-citation.py` owns the
   agreement between `CITATION.cff`, `.zenodo.json` and `DESCRIPTION`. Both are
   offline and stdlib-only, so they also run as cheap CI jobs.
+  `docs-drift.sh` runs `check-docs-drift.R`, which fails when `man/`,
+  `NAMESPACE` or `DESCRIPTION` differ from what the pinned roxygen2
+  regenerates, on a `git archive` export of the pushed commit. It runs from
+  the hook only: CI has no roxygen2 at the pin.
   `bestpractices-url.py` is a maintainer tool, not a check. It turns
   `.bestpractices.json` into bestpractices.dev edit links and verifies the live
   entry against the file. It reads the network, and only its offline
