@@ -1077,31 +1077,6 @@ PANDOC_URL_RE = re.compile(r"github\.com/jgm/pandoc/releases/download/([^/\s\"']
 # name its version through PANDOC_VERSION, the variable that script reads.
 TOOLCHAIN_R = Path(__file__).resolve().with_name("check-toolchain.R")
 PANDOC_VAR_TOKEN_RE = re.compile(r"\$\{?PANDOC_VERSION\}?")
-PANDOC_DEB_URL_RE = re.compile(r"https?://github\.com/jgm/pandoc/releases/download/[^\s\"']+")
-# The install's three steps, each matched against the last command of its
-# pipeline, whose exit status is the pipeline's.
-DOWNLOAD_STAGE_RE = re.compile(r"^(?:timeout\s.*?\s)?(curl|wget)\s")
-SHA256_STAGE_RE = re.compile(r"^(?:sha256sum\b.*\s(?:-c|--check)\b|shasum\b.*-a\s*256\b.*\s(?:-c|--check)\b)")
-DPKG_STAGE_RE = re.compile(r"^dpkg\b.*\s(?:-i|--install)\s")
-# The one-item shape, read on a Shell mask: `if A && B && C; then …; else …; fi`.
-IF_INSTALL_RE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|else|do)\b)\s*if\s(.*?)[;\n]\s*then\s.*?\belse\s.*?\bfi\b", re.S)
-# A download with no time limit hangs on a stalled CDN instead of failing into
-# the warn fallback. Every pattern of the tool must match; a limit of 0 means
-# none to curl, wget and timeout(1) alike. curl `--max-time`/`-m` (bundled
-# too, `-fsSLm 300`) bounds an attempt, and its `--retry` count is finite.
-# wget's `--timeout`/`--read-timeout`/`-T` bounds one try, but wget tries 20
-# times by default, waiting between tries, and `--tries=0` is forever, so a
-# limit counts only with `--tries` of 5 or fewer: about the ceiling of seor's
-# curl (4 attempts of 120 s).
-DOWNLOAD_BOUND_RE = {
-    "curl": (re.compile(r"(?:^|\s)(?:--max-time(?:\s+|=)|-[A-Za-z]*m\s*)0*[1-9]"),),
-    "wget": (re.compile(r"(?:^|\s)(?:--(?:read-)?timeout(?:\s+|=)|-[A-Za-z]*T\s*)0*[1-9]"),
-             re.compile(r"(?:^|\s)(?:--tries(?:\s+|=)|-[A-Za-z]*t\s*)0*[1-5](?![\d.])")),
-}
-# `timeout 300 curl …` bounds the whole download, retries included.
-TIMEOUT_WRAPPER_RE = re.compile(
-    r"(?:^|\s)timeout\s+(?:(?:-[ks]|--kill-after|--signal)\s+\S+\s+|-\S+\s+)*"
-    r"0*(?:[1-9]\d*(?:\.\d*)?|\.\d*[1-9]\d*)[smhd]?\s+(?:\S*/)?(?:curl|wget)\b")
 PANDOC_LOCAL_RE = re.compile(r"\bpandoc_version\s*\(")
 PANDOC_PIN_READ_RE = re.compile(r"\bPANDOC_VERSION\b")
 # The local check reads the pin from .gitlab-ci.yml, named as a string (or, in
@@ -1167,6 +1142,42 @@ def pandoc_assignments(text: str) -> tuple[tuple[int, str], ...]:
     """(line number, value) of each PANDOC_VERSION assignment in a .gitlab-ci.yml."""
     read_pandoc_assignments([text])
     return PIN_READS[text]
+
+
+# --- the pandoc install reader (SEOR-zwetljee) ----------------------------------
+# How a job's script items install the pandoc .deb. Its interface is one call,
+# pandoc_install_state(entries) -> one of INSTALL_STATES ("noncanonical",
+# "unbounded", "installed"), with entries a job's script items as YAML hands
+# them over; check_pandoc_pin() is its caller. Inside: Shell (which the pin
+# reader after this section reuses), install_steps, dpkg_installs, shell_path,
+# path_tokens, stdout_redirect, download_target, download_bounded and the
+# regexes below. PANDOC_INSTALL_CASES, at the section's end, is its test:
+# shell items in, state out.
+PANDOC_DEB_URL_RE = re.compile(r"https?://github\.com/jgm/pandoc/releases/download/[^\s\"']+")
+# The install's three steps, each matched against the last command of its
+# pipeline, whose exit status is the pipeline's.
+DOWNLOAD_STAGE_RE = re.compile(r"^(?:timeout\s.*?\s)?(curl|wget)\s")
+SHA256_STAGE_RE = re.compile(r"^(?:sha256sum\b.*\s(?:-c|--check)\b|shasum\b.*-a\s*256\b.*\s(?:-c|--check)\b)")
+DPKG_STAGE_RE = re.compile(r"^dpkg\b.*\s(?:-i|--install)\s")
+# The one-item shape, read on a Shell mask: `if A && B && C; then …; else …; fi`.
+IF_INSTALL_RE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|else|do)\b)\s*if\s(.*?)[;\n]\s*then\s.*?\belse\s.*?\bfi\b", re.S)
+# A download with no time limit hangs on a stalled CDN instead of failing into
+# the warn fallback. Every pattern of the tool must match; a limit of 0 means
+# none to curl, wget and timeout(1) alike. curl `--max-time`/`-m` (bundled
+# too, `-fsSLm 300`) bounds an attempt, and its `--retry` count is finite.
+# wget's `--timeout`/`--read-timeout`/`-T` bounds one try, but wget tries 20
+# times by default, waiting between tries, and `--tries=0` is forever, so a
+# limit counts only with `--tries` of 5 or fewer: about the ceiling of seor's
+# curl (4 attempts of 120 s).
+DOWNLOAD_BOUND_RE = {
+    "curl": (re.compile(r"(?:^|\s)(?:--max-time(?:\s+|=)|-[A-Za-z]*m\s*)0*[1-9]"),),
+    "wget": (re.compile(r"(?:^|\s)(?:--(?:read-)?timeout(?:\s+|=)|-[A-Za-z]*T\s*)0*[1-9]"),
+             re.compile(r"(?:^|\s)(?:--tries(?:\s+|=)|-[A-Za-z]*t\s*)0*[1-5](?![\d.])")),
+}
+# `timeout 300 curl …` bounds the whole download, retries included.
+TIMEOUT_WRAPPER_RE = re.compile(
+    r"(?:^|\s)timeout\s+(?:(?:-[ks]|--kill-after|--signal)\s+\S+\s+|-\S+\s+)*"
+    r"0*(?:[1-9]\d*(?:\.\d*)?|\.\d*[1-9]\d*)[smhd]?\s+(?:\S*/)?(?:curl|wget)\b")
 
 
 class Shell:
@@ -1473,6 +1484,7 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
     # Right today, and staying so: a block in a function's body runs only if it is called.
     ("the block in a function's body", [f"install_pandoc() {{ {PANDOC_CASE_ONE_LINE}; }}"], "noncanonical"),
 )
+# --- end of the pandoc install reader ---------------------------------------------
 
 
 # A PANDOC_VERSION assignment command, read on the Shell mask. It starts a
@@ -3126,25 +3138,13 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     unpinned = next((t for _, t in report.gaps if "not installed from the pandoc release" in t), "")
     if not all(name in unpinned for name in ("gates", "check", "coverage", "pages")) or "fossa" in unpinned:
         failures.append(f"pandoc pin absent: expected the four R jobs and not fossa, got {unpinned!r}")
+    # The install's shape is the install reader's to judge, through its case
+    # table (PANDOC_INSTALL_CASES, run below); here one case per state checks
+    # the wiring from check_repo to it.
     noncanonical = "does not install pandoc 3.10 in the standard's shape"
     expect_gap("pandoc pin without sha256", noncanonical, "punycoder",
                edit(cran, ci, "    - echo \"d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf  "
                     "/tmp/pandoc.deb\" | sha256sum -c -\n", ""), fixture_state())
-    # The sha256 check and the install are tied to the downloaded .deb.
-    digest = "d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf"
-    check_line = f"    - echo \"{digest}  /tmp/pandoc.deb\" | sha256sum -c -\n"
-    install_line = "    - dpkg -i /tmp/pandoc.deb\n"
-    expect_gap("sha256 check of another download", noncanonical,
-               "punycoder", edit(cran, ci, check_line, "    - curl -fsSL -o /tmp/other.tgz https://example.org/o.tgz\n"
-                                 f"    - echo \"{digest}  /tmp/other.tgz\" | sha256sum -c -\n"), fixture_state())
-    expect_gap("checked .deb never installed", noncanonical,
-               "punycoder", edit(cran, ci, install_line, ""), fixture_state())
-    expect_gap("another .deb installed", noncanonical,
-               "punycoder", edit(cran, ci, install_line, "    - dpkg -i /tmp/other.deb\n"), fixture_state())
-    expect_gap("installed before the check", noncanonical,
-               "punycoder", edit(cran, ci, check_line + install_line, install_line + check_line), fixture_state())
-    expect_gap("release named but never downloaded", noncanonical, "punycoder",
-               edit(cran, ci, "    - curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb ", "    - echo -o /tmp/pandoc.deb "), fixture_state())
     seor_shape = (
         "    - PANDOC_VERSION=3.10\n"
         "    - |\n"
@@ -3158,34 +3158,9 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
         "        echo \"WARNING: pandoc ${PANDOC_VERSION} not installed\"\n"
         "      fi\n")
     expect_clean("pandoc installed in seor's shape", "punycoder", edit(cran, ci, pin_lines, seor_shape), fixture_state())
-    # Nothing installs the .deb outside the canonical shape, and the three items
-    # are consecutive: a second download between them replaces the checked file.
-    expect_gap("an unchecked install beside seor's shape", noncanonical, "punycoder",
-               edit(cran, ci, pin_lines, seor_shape + "    - dpkg -i --force-all /tmp/pandoc.deb\n"), fixture_state())
-    expect_gap("an unchecked install beside the three items", noncanonical, "punycoder",
-               edit(cran, ci, install_line, install_line + install_line), fixture_state())
-    expect_gap("a second download between the check and the install", noncanonical, "punycoder",
-               edit(cran, ci, check_line, check_line + "    - curl -m 60 -o /tmp/pandoc.deb https://example.org/x.deb\n"),
-               fixture_state())
-    expect_clean("pandoc saved under its release name", "punycoder",
-                 edit(edit(edit(cran, ci, "-o /tmp/pandoc.deb \"https", "-O \"https"), ci,
-                           "  /tmp/pandoc.deb\" | sha256sum -c -",
-                           "  pandoc-${PANDOC_VERSION}-1-amd64.deb\" | sha256sum --check"),
-                      ci, install_line, "    - dpkg -i ./pandoc-${PANDOC_VERSION}-1-amd64.deb\n"), fixture_state())
-    expect_clean("pandoc fetched with wget", "punycoder",
-                 edit(cran, ci, "curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb ",
-                      "wget -q --timeout=60 --tries=3 -O /tmp/pandoc.deb "), fixture_state())
-    expect_clean("pandoc URL in a variable", "punycoder",
-                 edit(edit(cran, ci, "    - curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb \"https:", "    - PANDOC_URL=\"https:"),
-                      ci, "-1-amd64.deb\"\n", "-1-amd64.deb\"\n    - curl -m 300 -fsSL -o /tmp/pandoc.deb \"$PANDOC_URL\"\n"),
-                 fixture_state())
     unbounded = "downloads pandoc 3.10 with no time limit"
     expect_gap("pandoc download with no time limit", unbounded, "punycoder",
                edit(cran, ci, "--retry 3 --max-time 300 ", "--retry 3 "), fixture_state())
-    expect_gap("pandoc download with a zero time limit", unbounded, "punycoder",
-               edit(cran, ci, "--retry 3 --max-time 300 ", "--retry 3 --max-time 0 "), fixture_state())
-    expect_gap("wget with no time limit", unbounded, "punycoder",
-               edit(cran, ci, "curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb ", "wget -q -O /tmp/pandoc.deb "), fixture_state())
     expect_gap("pandoc pin at another version", "pins pandoc 3.9, not the fleet's 3.10", "punycoder",
                edit(cran, ci, "PANDOC_VERSION=3.10", "PANDOC_VERSION=3.9"), fixture_state())
     expect_gap("pandoc version never recorded", "downloads pandoc at $PANDOC_VERSION, which .gitlab-ci.yml never assigns",
@@ -3282,99 +3257,12 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
             if got != want:
                 failures.append(f"pandoc install case {name!r}: expected {want}, got {got}")
 
-    # The standard's two install shapes, and nothing else (SEOR-xhyrogfm): one
-    # item `if <download> && <check> && dpkg -i; then …; else …; fi`, or three
-    # items in that order. Each step is one command or pipeline, judged by its
-    # last command; control flow beyond that, `set -e` included, is not read.
-    url = "\"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb\""
-    dl_cmd = f"curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb {url}"
-    check_cmd = f"echo \"{digest}  /tmp/pandoc.deb\" | sha256sum -c -"
-
-    def setup(*entries: str) -> dict:
-        return edit(cran, ci, pin_lines, "    - PANDOC_VERSION=3.10\n" + "".join(entries))
-
-    def if_block(cond: str, orelse: str = "      else\n        echo \"WARNING: pandoc not installed\"\n") -> str:
-        return f"    - |\n      if {cond}; then\n        echo installed\n{orelse}      fi\n"
-
-    expect_clean("one-line if in a plain item", "punycoder",
-                 setup(f"    - if {dl_cmd} && {check_cmd} && dpkg -i /tmp/pandoc.deb; then echo ok; else echo WARN; fi\n"),
-                 fixture_state())
-    expect_clean("if over lines joined at the &&", "punycoder",
-                 setup(if_block(f"{dl_cmd} &&\n        {check_cmd} &&\n        dpkg -i /tmp/pandoc.deb")),
-                 fixture_state())
-    expect_clean("seor's shape with its arch case", "punycoder", setup(
-        "    - |\n"
-        "      ARCH=$(dpkg --print-architecture)\n"
-        "      case \"$ARCH\" in\n"
-        f"        amd64) PANDOC_SHA256={digest} ;;\n"
-        "        *) PANDOC_SHA256=unknown ;;\n"
-        "      esac\n"
-        "      if curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 120 \\\n"
-        "        -o /tmp/pandoc.deb \"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/"
-        "pandoc-${PANDOC_VERSION}-1-${ARCH}.deb\" \\\n"
-        "        && echo \"${PANDOC_SHA256}  /tmp/pandoc.deb\" | sha256sum -c - \\\n"
-        "        && dpkg -i /tmp/pandoc.deb; then\n"
-        "        echo \"pandoc ${PANDOC_VERSION} installed\"\n"
-        "      else\n"
-        "        echo \"WARNING: pandoc ${PANDOC_VERSION} not installed\"\n"
-        "      fi\n"
-        "      pandoc --version | sed -n 1p\n"), fixture_state())
+    # A flow sequence `[a, b]` is a list of script items too: YAML's reading,
+    # not the shell reader's, so it goes end to end.
     expect_clean("the three items as a flow sequence", "punycoder",
                  edit(cran, ci, "  before_script:\n" + pin_lines,
-                      f"  variables:\n    PANDOC_VERSION: \"3.10\"\n  before_script: ['{dl_cmd}', '{check_cmd}',\n"
+                      f"  variables:\n    PANDOC_VERSION: \"3.10\"\n  before_script: ['{PANDOC_CASE_DL}', '{PANDOC_CASE_CHECK}',\n"
                       "    'dpkg -i /tmp/pandoc.deb']\n"), fixture_state())
-    for tag, entries in (
-        ("sha256 failure ignored with || true", (f"    - {dl_cmd}\n", f"    - {check_cmd} || true\n", install_line)),
-        ("install after ; on the check's line", (f"    - {dl_cmd}\n", f"    - {check_cmd}; dpkg -i /tmp/pandoc.deb\n")),
-        ("sha256 failure exits", (f"    - {dl_cmd}\n", f"    - {check_cmd} || exit 1\n", install_line)),
-        ("three steps in one block", (f"    - |\n      {dl_cmd}\n      {check_cmd}\n      dpkg -i /tmp/pandoc.deb\n",)),
-        ("three steps chained with ;", (f"    - {dl_cmd}; {check_cmd}; dpkg -i /tmp/pandoc.deb\n",)),
-        ("three steps after set -Eeuo pipefail",
-         (f"    - |\n      set -Eeuo pipefail\n      {dl_cmd}\n      {check_cmd}\n      dpkg -i /tmp/pandoc.deb\n",)),
-        ("install after the if that checks",
-         (if_block(f"{dl_cmd} && {check_cmd}"), install_line)),
-        ("if without an else", (if_block(f"{dl_cmd} && {check_cmd} && dpkg -i /tmp/pandoc.deb", ""),)),
-        ("|| inside the if", (if_block(f"{dl_cmd} && {check_cmd} || true && dpkg -i /tmp/pandoc.deb"),)),
-        # Quoted: unquoted, `- ! cmd` is YAML's non-specific tag and the item is `cmd`.
-        ("negated check", (f"    - {dl_cmd}\n", f"    - '! {check_cmd}'\n", install_line)),
-        # A pipeline's status is its last command's: `| tee` hides the check.
-        ("check piped into tee", (f"    - {dl_cmd}\n", f"    - {check_cmd} | tee /tmp/sha.log\n", install_line)),
-        ("check piped into tee inside the if",
-         (if_block(f"{dl_cmd} && {check_cmd} | tee /tmp/sha.log && dpkg -i /tmp/pandoc.deb"),)),
-        # Paths compare as whole tokens; `-` is stdout, not a file.
-        ("download to stdout, another file checked",
-         (f"    - wget -q -T 60 -t 3 -O- {url} > /tmp/pandoc.deb\n",
-          f"    - echo \"{digest}  /tmp/other.deb\" | sha256sum -c -\n", install_line)),
-        ("output path inside an unrelated checksum file's name",
-         (f"    - curl -fsSL --max-time 300 -o p {url}\n", "    - sha256sum -c /tmp/unrelated.sha256\n",
-          "    - dpkg -i p\n")),
-        ("installs a .deb whose name extends the download's",
-         (f"    - {dl_cmd}\n", check_line, "    - dpkg -i /tmp/pandoc.deb.bak\n")),
-        ("checked file named only in a comment",
-         (f"    - {dl_cmd}\n", "    - sha256sum -c /tmp/x.sha256  # checks /tmp/pandoc.deb\n", install_line)),
-    ):
-        expect_gap(tag, noncanonical, "punycoder", setup(*entries), fixture_state())
-
-    # The download's file: stdout's redirect, not stderr's, `>|` included.
-    for redirect in ("> /tmp/pandoc.deb", "2>/dev/null > /tmp/pandoc.deb", "&>/dev/null >/tmp/pandoc.deb",
-                     "2>&1 >/tmp/pandoc.deb", ">| /tmp/pandoc.deb"):
-        expect_clean(f"download saved with {redirect!r}", "punycoder",
-                     setup(f"    - curl -fsSL --max-time 300 {url} {redirect}\n", check_line, install_line), fixture_state())
-
-    # Time limits: timeout(1) and a bundled -m bound the download; wget's
-    # --timeout bounds one try, and it tries 20 times by default (0: forever).
-    for bounded in (f"timeout 300 curl -fsSL --retry 3 -o /tmp/pandoc.deb {url}",
-                    f"curl -fsSLm 300 -o /tmp/pandoc.deb {url}",
-                    f"timeout -k 10 5m wget -q -O /tmp/pandoc.deb {url}",
-                    f"wget -q -T 60 -t 3 -O /tmp/pandoc.deb {url}"):
-        expect_clean(f"download bounded: {bounded[:30]!r}", "punycoder", setup(f"    - {bounded}\n", check_line, install_line),
-                     fixture_state())
-    for unbounded_dl in (f"timeout 0 curl -fsSL -o /tmp/pandoc.deb {url}",
-                         f"wget -q --timeout=60 -O /tmp/pandoc.deb {url}",
-                         f"wget -q --timeout=60 --tries=0 -O /tmp/pandoc.deb {url}",
-                         f"wget -q --timeout=60 --tries=20 -O /tmp/pandoc.deb {url}"):
-        expect_gap(f"download unbounded: {unbounded_dl[:40]!r}", unbounded, "punycoder",
-                   setup(f"    - {unbounded_dl}\n", check_line, install_line), fixture_state())
 
     # The CI reader's case table (SEOR-oznwzhem). Every expected value is what
     # GitLab makes of the YAML, written down from the YAML 1.1 spec and GitLab's
