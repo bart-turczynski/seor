@@ -421,9 +421,9 @@ roxygen2 is missing or not the pinned version, naming the install. git only
 prints the diff: without git the report still lists the changed, missing and
 stale files and says the diff is omitted. `--self-test` runs it on fixture
 packages, with git and without. rurl, pslr, punycoder, raddr, pagerankr and
-ssrfr carry hand-forked copies until they vendor seor's; robotstxtr has
-`dev/check-docs-drift.R`, and sitemapr's `tools/check-docs.R` still
-regenerates in the working tree (SEOR-zxyztpbr).
+ssrfr vendor it. robotstxtr and sitemapr wait for their CRAN holds to lift:
+robotstxtr has `dev/check-docs-drift.R`, and sitemapr's `tools/check-docs.R`
+still regenerates in the working tree (SEOR-zxyztpbr).
 
 ## Files every package carries
 
