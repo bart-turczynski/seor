@@ -27,7 +27,8 @@ Usage:
   python3 scripts/logo-metadata.py --check <pkg> <man/figures dir>  # exit 1 on drift
 
 It handles logo.svg, logo.png and, when present, logo-print.svg and
-logo-480.png (the source artwork kept outside the repositories). It also
+logo-480.png (the rest of the owner's export, kept outside the repositories).
+logo.svg is the XMP original; the other files are recorded as derived from it. It also
 strips any Content Credentials (C2PA) block the export tool left behind.
 """
 
@@ -48,7 +49,7 @@ OWNER = "Bart Turczynski"
 EMAIL = "bartek@turczynski.pl"
 NAMESPACE = "bart-turczynski"
 CREATED = "2026-10-04"  # the artwork's date
-METADATA_DATE = "2026-10-05"  # bump when the facts below change
+METADATA_DATE = "2026-10-05"  # bump when what this script writes changes
 YEAR = CREATED[:4]
 TOOL = "Claude Design"
 SOFTWARE = f"{TOOL}; metadata by seor scripts/logo-metadata.py"
@@ -60,9 +61,10 @@ USAGE_TERMS = f"Licensed under the MIT License: {LICENSE_URL}"
 DISCLAIMER = "Provided under the MIT License, without warranty of any kind."
 LABEL = "seor fleet"
 LANG = "en-US"
-# Bump with any change to what this script writes: it feeds every InstanceID.
-GENERATOR_VERSION = 2
 MASTER = "logo.svg"  # the vector original; the other files are renditions of it
+# Every ID is a uuid5 under this fleet namespace (RFC 9562), not NAMESPACE_URL.
+FLEET_NS = uuid.uuid5(uuid.NAMESPACE_URL, "https://gitlab.com/bart-turczynski/seor#logo-ids")
+PLACEHOLDER = "uuid:00000000-0000-0000-0000-000000000000"
 
 # pkg: (what the library is, keywords, Zenodo concept DOI or None)
 PACKAGES = {
@@ -130,14 +132,12 @@ class Facts:
         self.members = [f"https://gitlab.com/{NAMESPACE}/{p}" for p in MEMBERS]
         # XMP (ISO 16684-1, xmpMM:OriginalDocumentID): saving to another format
         # gives the new file its own DocumentID, and OriginalDocumentID keeps the
-        # original's. logo.svg is the original, so its DocumentID is that ID.
-        self.original_id = self.document_id(MASTER)
-        # InstanceID changes whenever the written metadata can change: it hashes
-        # the generator version and every fact this script writes.
-        self.facts_hash = hashlib.sha256(repr((
-            GENERATOR_VERSION, METADATA_DATE, PACKAGES[pkg], OWNER, EMAIL, CREATED,
-            TOOL, FONT, LICENSE_URL, RIGHTS, LABEL, LANG, MEMBERS,
-        )).encode()).hexdigest()
+        # original's. logo.svg is the original; once it has been written, the
+        # renditions name it and its exact instance (xmpMM:DerivedFrom).
+        self.master: tuple[str, str] | None = None
+        # InstanceID per file: a hash of the file rendered with PLACEHOLDER in
+        # its place, so any change to the artwork or the metadata changes it.
+        self.iid: dict[str, str] = {}
 
     def file_url(self, name: str) -> str:
         return f"{self.gitlab}/-/raw/main/man/figures/{name}"
@@ -149,10 +149,13 @@ class Facts:
 
     def document_id(self, name: str) -> str:
         """Stable per package and file name, independent of where it is hosted."""
-        return "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"seor-fleet-logo:{self.pkg}/{name}"))
+        return "uuid:" + str(uuid.uuid5(FLEET_NS, f"document:{self.pkg}/{name}"))
+
+    def original_id(self, name: str) -> str:
+        return self.document_id(MASTER) if self.master else self.document_id(name)
 
     def instance_id(self, name: str) -> str:
-        return "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.document_id(name)}@{self.facts_hash}"))
+        return self.iid.get(name, PLACEHOLDER)
 
 
 def esc(text: str) -> str:
@@ -199,8 +202,13 @@ def xmp_packet(f: Facts, name: str, mime: str, wrapper: bool) -> str:
         f"<xmpRights:UsageTerms>{alt(USAGE_TERMS)}</xmpRights:UsageTerms>",
         f"<xmpRights:Owner>{bag([OWNER])}</xmpRights:Owner>",
         f"<xmpMM:DocumentID>{f.document_id(name)}</xmpMM:DocumentID>",
-        f"<xmpMM:OriginalDocumentID>{f.original_id}</xmpMM:OriginalDocumentID>",
+        f"<xmpMM:OriginalDocumentID>{f.original_id(name)}</xmpMM:OriginalDocumentID>",
         f"<xmpMM:InstanceID>{f.instance_id(name)}</xmpMM:InstanceID>",
+        *([] if not f.master or name == MASTER else [
+            '<xmpMM:DerivedFrom rdf:parseType="Resource">'
+            f"<stRef:documentID>{f.master[0]}</stRef:documentID>"
+            f"<stRef:instanceID>{f.master[1]}</stRef:instanceID>"
+            "</xmpMM:DerivedFrom>"]),
         f"<photoshop:Headline>{esc(f.pkg)}: {esc(f.what)}</photoshop:Headline>",
         f"<photoshop:Credit>{esc(OWNER)}</photoshop:Credit>",
         f"<photoshop:Source>{esc(OWNER)}</photoshop:Source>",
@@ -239,6 +247,7 @@ def xmp_packet(f: Facts, name: str, mime: str, wrapper: bool) -> str:
         ' xmlns:xmp="http://ns.adobe.com/xap/1.0/"'
         ' xmlns:xmpRights="http://ns.adobe.com/xap/1.0/rights/"'
         ' xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"'
+        ' xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#"'
         ' xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"'
         ' xmlns:Iptc4xmpCore="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/"'
         ' xmlns:plus="http://ns.useplus.org/ldf/xmp/1.0/"'
@@ -321,7 +330,8 @@ def rewrite_svg(f: Facts, path: Path) -> str:
     if not m:
         sys.exit(f"logo-metadata: {path} has no <svg> root")
     attrs = dict(ATTR.findall(m.group(0)))
-    for key in ("role", "aria-labelledby", "aria-describedby", "xml:lang", "lang"):
+    # version="1.1" goes: role, aria-* and lang are not SVG 1.1 attributes.
+    for key in ("version", "role", "aria-labelledby", "aria-describedby", "xml:lang", "lang"):
         attrs.pop(key, None)
     ours = {
         "role": "img",
@@ -476,6 +486,21 @@ def rewrite_png(f: Facts, path: Path) -> bytes:
     return b"".join(out)
 
 
+def render(f: Facts, path: Path) -> bytes:
+    return rewrite_svg(f, path).encode("utf-8") if path.suffix == ".svg" else rewrite_png(f, path)
+
+
+def finalize(f: Facts, path: Path) -> bytes:
+    """Render with PLACEHOLDER as the InstanceID, hash those bytes (artwork and
+    metadata), then render again with the ID that hash gives."""
+    f.iid[path.name] = PLACEHOLDER
+    draft = render(f, path)
+    f.iid[path.name] = "uuid:" + str(uuid.uuid5(FLEET_NS, "instance:" + hashlib.sha256(draft).hexdigest()))
+    if path.name == MASTER:
+        f.master = (f.document_id(MASTER), f.iid[path.name])
+    return render(f, path)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--check", action="store_true", help="report drift; write nothing")
@@ -489,7 +514,7 @@ def main() -> int:
         sys.exit(f"logo-metadata: no logo.svg or logo.png in {args.figures}")
     drift = 0
     for t in targets:
-        new = rewrite_svg(f, t).encode("utf-8") if t.suffix == ".svg" else rewrite_png(f, t)
+        new = finalize(f, t)  # logo.svg comes first, so the renditions can name it
         if new == t.read_bytes():
             print(f"current  {t}")
             continue
