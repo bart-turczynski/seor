@@ -63,6 +63,8 @@ dependencies and (2) attach them all on `library(seor)`.
   `--source git-tag`); see
   [ADR 0006](design/adr/0006-non-r-citation-metadata-has-its-own-gate.md)
   for why it is not part of `check-citation.py`.
+  `check-fleet-standard.py` is not stdlib-only: it reads CI with PyYAML
+  ([ADR 0008](design/adr/0008-fleet-checker-reads-ci-with-pyyaml.md)).
 - `CITATION.cff`, `.zenodo.json` — publication metadata, kept out of the CRAN
   tarball via `.Rbuildignore`. The version they carry is governed by
   [ADR 0002](design/adr/0002-citation-urls-are-the-ones-about-this-package.md),
