@@ -408,8 +408,8 @@ tree. There it runs roxygen2 at exactly the version `Config/roxygen2/version`
 pins and fails, printing the diff, when `man/`, `NAMESPACE` or `DESCRIPTION`
 differ from what is committed. It runs the checkout's copy of the check, and
 removes the export on every exit, signals included. CI runs it too where the
-job installs the pinned roxygen2 (rurl, punycoder, raddr, pagerankr, seor;
-SEOR-fhrisfpt, SEOR-yufxgcre).
+job installs the pinned roxygen2 (rurl, pslr, punycoder, raddr, pagerankr,
+ssrfr, seor; SEOR-fhrisfpt, SEOR-yufxgcre).
 
 The check is one script: seor's `scripts/check-docs-drift.R`, which every
 package vendors byte for byte at that path (SEOR-lyciowif; two pending,
