@@ -1393,7 +1393,7 @@ def pandoc_install_state(entries: list[str]) -> str:
 # end-to-end case per state, for the wiring.
 PANDOC_CASE_URL = "\"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb\""
 PANDOC_CASE_DIGEST = "d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf"
-PANDOC_CASE_DL = f"curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb {PANDOC_CASE_URL}"
+PANDOC_CASE_DL = f"curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --max-time 120 -o /tmp/pandoc.deb {PANDOC_CASE_URL}"
 PANDOC_CASE_CHECK = f"echo \"{PANDOC_CASE_DIGEST}  /tmp/pandoc.deb\" | sha256sum -c -"
 PANDOC_CASE_DPKG = "dpkg -i /tmp/pandoc.deb"
 
@@ -1406,7 +1406,7 @@ def pandoc_case_if(cond: str, orelse: bool = True) -> str:
 
 PANDOC_CASE_SEOR = (
     "ARCH=$(dpkg --print-architecture)\n"
-    "if curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 20 --max-time 300 -o /tmp/pandoc.deb "
+    "if curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 120 -o /tmp/pandoc.deb "
     "\"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-${ARCH}.deb\" \\\n"
     "  && echo \"${PANDOC_SHA256}  /tmp/pandoc.deb\" | sha256sum -c - \\\n"
     "  && dpkg -i /tmp/pandoc.deb; then\n"
@@ -1459,12 +1459,12 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
      "noncanonical"),
     # The saved file: curl -O's release name, wget, a URL held in a variable.
     ("saved under its release name",
-     [f"curl -fsSL --retry 3 --max-time 300 -O {PANDOC_CASE_URL}",
+     [f"curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --max-time 120 -O {PANDOC_CASE_URL}",
       f"echo \"{PANDOC_CASE_DIGEST}  pandoc-${{PANDOC_VERSION}}-1-amd64.deb\" | sha256sum --check",
       "dpkg -i ./pandoc-${PANDOC_VERSION}-1-amd64.deb"], "installed"),
     ("fetched with wget",
-     [f"wget -q --timeout=60 --tries=3 -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
-     "installed"),
+     [f"timeout 300 wget -q --timeout=60 --tries=3 -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK,
+      PANDOC_CASE_DPKG], "installed"),
     ("URL in a variable",
      [f"PANDOC_URL={PANDOC_CASE_URL}", "curl -m 300 -fsSL -o /tmp/pandoc.deb \"$PANDOC_URL\"",
       PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed"),
@@ -1510,9 +1510,9 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
                        "2>&1 >/tmp/pandoc.deb", ">| /tmp/pandoc.deb")),
     # Time limits: timeout(1) and a bundled -m bound the download; wget's
     # --timeout bounds one try, and it tries 20 times by default (0: forever).
-    ("no time limit", [PANDOC_CASE_DL.replace("--max-time 300 ", ""), PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
+    ("no time limit", [PANDOC_CASE_DL.replace("--max-time 120 ", ""), PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
      "unbounded"),
-    ("a zero time limit", [PANDOC_CASE_DL.replace("--max-time 300", "--max-time 0"), PANDOC_CASE_CHECK,
+    ("a zero time limit", [PANDOC_CASE_DL.replace("--max-time 120", "--max-time 0"), PANDOC_CASE_CHECK,
                            PANDOC_CASE_DPKG], "unbounded"),
     ("wget with no time limit", [f"wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
      "unbounded"),
@@ -1588,7 +1588,28 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
     # does not settle. curl's --max-time bounds one attempt, and nothing caps
     # --retry here.
     ("curl with --max-time and an uncapped --retry",
-     [PANDOC_CASE_DL.replace("--retry 3", "--retry 100"), PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed"),
+     [f"curl -fsSL --retry 100 --max-time 300 -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK,
+      PANDOC_CASE_DPKG], "installed"),
+    # PINNED (SEOR-ltseyxpe): today's verdicts, before curl's --retry needs
+    # --retry-max-time and --retry-delay and wget needs timeout(1). Rows
+    # marked `today` flip with that change.
+    *((f"download time limit: {flags!r}",
+       [f"curl -fsSL {flags} -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], want)
+      for flags, want in (("--retry 3 --retry-delay 5 --max-time 120", "installed"),  # today
+                          ("--retry 3 --retry-max-time 300 --max-time 120", "installed"),  # today
+                          ("--retry 3 --retry-delay 5 --retry-max-time 300 --max-time 120", "installed"),
+                          ("--retry 0 --max-time 120", "installed"),
+                          ("--retry=3 --retry-delay=5 --retry-max-time=300 --max-time=120", "installed"),
+                          ("--retry=3 --retry-max-time=300 --max-time=120", "installed"),  # today
+                          ("--retry 3 --retry-delay 5 --retry-max-time 0 --max-time 120", "installed"),  # today
+                          ("--retry 3 --retry-delay 0 --retry-max-time 300 --max-time 120", "installed"),  # today
+                          ("--retry $RETRIES --max-time 120", "installed"),  # today
+                          ("--retry 100 --retry-delay 5 --retry-max-time 300 --max-time 120", "installed"))),
+    ("wget with --timeout and a few --tries",
+     [f"wget -q --timeout 30 --tries 3 -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
+     "installed"),  # today
+    ("wget under timeout(1)",
+     [f"timeout 300 wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed"),
 )
 # --- end of the pandoc install reader ---------------------------------------------
 
@@ -2754,7 +2775,7 @@ workflow:
 .r:
   before_script:
     - PANDOC_VERSION=3.10
-    - curl -fsSL --retry 3 --max-time 300 -o /tmp/pandoc.deb "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
+    - curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --max-time 120 -o /tmp/pandoc.deb "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
     - echo "d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf  /tmp/pandoc.deb" | sha256sum -c -
     - dpkg -i /tmp/pandoc.deb
 .on-main:
@@ -3342,7 +3363,7 @@ def self_test() -> list[str]:
         "    - PANDOC_VERSION=3.10\n"
         "    - |\n"
         "      ARCH=$(dpkg --print-architecture)\n"
-        "      if curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 20 --max-time 300 -o /tmp/pandoc.deb \"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/"
+        "      if curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --connect-timeout 20 --max-time 120 -o /tmp/pandoc.deb \"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/"
         "pandoc-${PANDOC_VERSION}-1-${ARCH}.deb\" \\\n"
         "        && echo \"${PANDOC_SHA256}  /tmp/pandoc.deb\" | sha256sum -c - \\\n"
         "        && dpkg -i /tmp/pandoc.deb; then\n"
@@ -3353,7 +3374,7 @@ def self_test() -> list[str]:
     expect_clean("pandoc installed in seor's shape", "punycoder", edit(cran, ci, pin_lines, seor_shape), fixture_state())
     unbounded = "downloads pandoc 3.10 with no time limit"
     expect_gap("pandoc download with no time limit", unbounded, "punycoder",
-               edit(cran, ci, "--retry 3 --max-time 300 ", "--retry 3 "), fixture_state())
+               edit(cran, ci, "--max-time 120 ", ""), fixture_state())
     expect_gap("pandoc pin at another version", "pins pandoc 3.9, not the fleet's 3.10", "punycoder",
                edit(cran, ci, "PANDOC_VERSION=3.10", "PANDOC_VERSION=3.9"), fixture_state())
     expect_gap("pandoc version never recorded", "downloads pandoc at $PANDOC_VERSION, which .gitlab-ci.yml never assigns",
