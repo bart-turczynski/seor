@@ -151,6 +151,19 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # A stale .Rd is still valid .Rd, so lint, spelling and R CMD check all
+      # pass it. This regenerates man/, NAMESPACE and DESCRIPTION with the
+      # pinned roxygen2 in a `git archive` export of the commit being pushed
+      # (PRE_COMMIT_TO_REF, else HEAD) and fails on any difference
+      # (SEOR-nwfmerhu). It runs ahead of the URL and spelling hooks, which
+      # read man/ as it is; check-toolchain above names a roxygen2 skew first.
+      - id: docs-drift
+        name: generated docs match roxygen (man/, NAMESPACE, DESCRIPTION)
+        entry: sh scripts/docs-drift.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       # Fetches every URL the package declares (DESCRIPTION, man/,
       # inst/CITATION, NEWS, README.md) and fails on a dead one: `verify` runs
       # --as-cran with CRAN incoming OFF (ADR 0004), so nothing else in this
