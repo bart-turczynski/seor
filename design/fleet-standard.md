@@ -241,10 +241,13 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
 
   Each step is one command or one pipeline, read by its last command, whose
   exit status is the pipeline's: `… | sha256sum -c -` is a check, `sha256sum
-  -c … | tee log` is not. The check names FILE, or reads on stdin the digest
-  line that names it (`echo "<digest>  FILE" | sha256sum -c -`). Nothing else
-  counts, however it is chained: not `|| true`, `;` or a newline inside one
-  item, and not `set -e`, so the rule does not depend on how the runner
+  -c … | tee log` is not. The check reads the pinned digest line that names
+  FILE, the digest a literal or a variable: on stdin from `echo` or `printf`
+  (`echo "<digest>  FILE" | sha256sum -c -`), or as a here-string. A digest
+  computed in the step, a line fetched or selected at run time, and
+  `sha256sum -c FILE` (which reads FILE as a list of sums) do not count
+  (SEOR-ltseyxpe). Nothing else counts, however it is chained: not
+  `|| true`, `;` or a newline inside one item, and not `set -e`, so the rule does not depend on how the runner
   starts the shell. In the first shape a failed or mismatched download
   warns and leaves apt's pandoc in place, so every gate still runs and
   reports ([ADR 0005](adr/0005-cheap-ci-jobs-fold-into-one-gates-job.md)), but
