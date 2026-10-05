@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# logo-metadata v1 (SEOR-eyfiidrv)
+# logo-metadata v2 (SEOR-eyfiidrv)
 """Write the fleet's logo metadata into man/figures/logo.svg and logo.png.
 
 WHY THIS EXISTS. The owner's artwork (SEOR-wxjuxbtu) came with a one-shot
@@ -34,6 +34,7 @@ strips any Content Credentials (C2PA) block the export tool left behind.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import struct
 import sys
@@ -59,6 +60,9 @@ USAGE_TERMS = f"Licensed under the MIT License: {LICENSE_URL}"
 DISCLAIMER = "Provided under the MIT License, without warranty of any kind."
 LABEL = "seor fleet"
 LANG = "en-US"
+# Bump with any change to what this script writes: it feeds every InstanceID.
+GENERATOR_VERSION = 2
+MASTER = "logo.svg"  # the vector original; the other files are renditions of it
 
 # pkg: (what the library is, keywords, Zenodo concept DOI or None)
 PACKAGES = {
@@ -124,9 +128,16 @@ class Facts:
             self.links.append(self.doi)
         self.hub = f"https://gitlab.com/{NAMESPACE}/{HUB}"
         self.members = [f"https://gitlab.com/{NAMESPACE}/{p}" for p in MEMBERS]
-        # One original (the logo), one document per rendition (XMP: a derived
-        # rendition gets its own DocumentID and names the original).
-        self.original_id = "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, self.gitlab + "#logo"))
+        # XMP (ISO 16684-1, xmpMM:OriginalDocumentID): saving to another format
+        # gives the new file its own DocumentID, and OriginalDocumentID keeps the
+        # original's. logo.svg is the original, so its DocumentID is that ID.
+        self.original_id = self.document_id(MASTER)
+        # InstanceID changes whenever the written metadata can change: it hashes
+        # the generator version and every fact this script writes.
+        self.facts_hash = hashlib.sha256(repr((
+            GENERATOR_VERSION, METADATA_DATE, PACKAGES[pkg], OWNER, EMAIL, CREATED,
+            TOOL, FONT, LICENSE_URL, RIGHTS, LABEL, LANG, MEMBERS,
+        )).encode()).hexdigest()
 
     def file_url(self, name: str) -> str:
         return f"{self.gitlab}/-/raw/main/man/figures/{name}"
@@ -137,10 +148,11 @@ class Facts:
         return [self.file_url(name)] if name in REPO_FILES else []
 
     def document_id(self, name: str) -> str:
-        return "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.file_url(name)}#document"))
+        """Stable per package and file name, independent of where it is hosted."""
+        return "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"seor-fleet-logo:{self.pkg}/{name}"))
 
     def instance_id(self, name: str) -> str:
-        return "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.file_url(name)}@{METADATA_DATE}"))
+        return "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.document_id(name)}@{self.facts_hash}"))
 
 
 def esc(text: str) -> str:
@@ -270,7 +282,6 @@ def svg_rdf(f: Facts, name: str) -> str:
         f'<dcterms:license rdf:resource="{LICENSE_URL}"/>',
         "<dcterms:accessRights>Public</dcterms:accessRights>",
         "<dcterms:audience>R users</dcterms:audience>",
-        '<dcterms:conformsTo rdf:resource="http://www.w3.org/TR/SVG11/"/>',
     ]
     if f.pkg == HUB:
         lines += [f'<dcterms:hasPart rdf:resource="{esc(u)}"/>' for u in f.members]
@@ -310,7 +321,6 @@ def rewrite_svg(f: Facts, path: Path) -> str:
     if not m:
         sys.exit(f"logo-metadata: {path} has no <svg> root")
     attrs = dict(ATTR.findall(m.group(0)))
-    # SVG 1.1 defines xml:lang only; a bare lang (SVG 2) is dropped.
     for key in ("role", "aria-labelledby", "aria-describedby", "xml:lang", "lang"):
         attrs.pop(key, None)
     ours = {
@@ -318,6 +328,7 @@ def rewrite_svg(f: Facts, path: Path) -> str:
         "aria-labelledby": f"{f.pkg}-title",
         "aria-describedby": f"{f.pkg}-desc",
         "xml:lang": LANG,
+        "lang": LANG,
     }
     attrs.update({k: f'"{v}"' for k, v in ours.items()})
     root = "<svg " + " ".join(f"{k}={v}" for k, v in attrs.items()) + ">"

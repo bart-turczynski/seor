@@ -1,4 +1,4 @@
-<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="1.732in" height="2in" viewBox="0 0 1732 2000" role="img" aria-labelledby="seor-title" aria-describedby="seor-desc" xml:lang="en-US">
+<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="1.732in" height="2in" viewBox="0 0 1732 2000" role="img" aria-labelledby="seor-title" aria-describedby="seor-desc" xml:lang="en-US" lang="en-US">
 <title id="seor-title">seor</title>
 <desc id="seor-desc">Logo of the seor library for R, white text on a black background</desc>
 <metadata id="seor-metadata"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:cc="http://creativecommons.org/ns#">
@@ -34,7 +34,6 @@
 <dcterms:license rdf:resource="https://opensource.org/license/mit"/>
 <dcterms:accessRights>Public</dcterms:accessRights>
 <dcterms:audience>R users</dcterms:audience>
-<dcterms:conformsTo rdf:resource="http://www.w3.org/TR/SVG11/"/>
 <dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/rurl"/>
 <dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/punycoder"/>
 <dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/pslr"/>
@@ -74,9 +73,9 @@
 <xmpRights:WebStatement>https://opensource.org/license/mit</xmpRights:WebStatement>
 <xmpRights:UsageTerms><rdf:Alt><rdf:li xml:lang="x-default">Licensed under the MIT License: https://opensource.org/license/mit</rdf:li></rdf:Alt></xmpRights:UsageTerms>
 <xmpRights:Owner><rdf:Bag><rdf:li>Bart Turczynski</rdf:li></rdf:Bag></xmpRights:Owner>
-<xmpMM:DocumentID>uuid:cabbb184-e334-5258-8a68-0c80d07ea8f6</xmpMM:DocumentID>
-<xmpMM:OriginalDocumentID>uuid:a0d41a3c-25d3-5688-8e69-91b83fc6f6a8</xmpMM:OriginalDocumentID>
-<xmpMM:InstanceID>uuid:4a663b98-41e3-5e0d-9487-166f2f312524</xmpMM:InstanceID>
+<xmpMM:DocumentID>uuid:942f16d6-7244-53a3-bff5-fe85709dc0c3</xmpMM:DocumentID>
+<xmpMM:OriginalDocumentID>uuid:942f16d6-7244-53a3-bff5-fe85709dc0c3</xmpMM:OriginalDocumentID>
+<xmpMM:InstanceID>uuid:b8597040-a15a-52d3-88b6-001681010bd9</xmpMM:InstanceID>
 <photoshop:Headline>seor: SEO library for R</photoshop:Headline>
 <photoshop:Credit>Bart Turczynski</photoshop:Credit>
 <photoshop:Source>Bart Turczynski</photoshop:Source>
