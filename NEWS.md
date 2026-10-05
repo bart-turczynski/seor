@@ -8,15 +8,6 @@
   `R package`, so the logo and r-universe list the same tags
   (SEOR-qoqmestu).
 
-* `scripts/check-fleet-standard.py` reads `.gitlab-ci.yml` with PyYAML
-  instead of line-based readers, and resolves `extends:`, `default:` and
-  `inherit:` as GitLab does. A trailing comment no longer changes a value:
-  `allow_failure: true # soft` was read as a string, so a coverage job that
-  could not fail the pipeline passed the coverage rule. A CI file that does
-  not load leaves its rules not judged, and the run reports itself
-  incomplete. The script now needs more than Python's standard library;
-  its pre-push hook pins PyYAML (`design/adr/0008`, SEOR-oznwzhem).
-
 * CI pins pandoc 3.10 in every R job, not only the README gate: the
   download is checked against its published digest and bounded in time. The
   pre-push gate (`scripts/check-toolchain.R`) fails when the local pandoc
