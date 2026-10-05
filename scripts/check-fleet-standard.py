@@ -93,8 +93,9 @@ WHAT IT CHECKS, by section of the standard.
   -c> && dpkg -i FILE; then ...; else ...; fi` in one script item, or the three
   steps as three script items in that order, each one command or pipeline
   judged by its last command. The download saves the release to FILE with
-  curl or wget, the check names FILE (or reads the digest line naming it from
-  stdin) and computes no digest of its own, paths compared as whole words, and the download has a time limit: curl
+  curl or wget, the check reads a pinned digest line naming FILE (from
+  echo or printf on stdin, or a here-string), paths compared as whole
+  words, and the download has a time limit: curl
   `--max-time` or `-m`, wget `--timeout` with `--tries` of 5 or fewer, or
   `timeout`. The install counts in the `before_script` or `script` the job
   ends up with (its own, else the template's that GitLab merges last), not in
@@ -1165,11 +1166,14 @@ DPKG_STAGE_RE = re.compile(r"^dpkg\b.*\s(?:-i|--install)\s")
 # (shell_frames()), the `then` that ends the condition and the `else`, both the
 # frame's own, not a nested compound command's.
 IF_THEN_RE = re.compile(r"[;\n][ \t\n]*then(?=[\s;]|$)")
-IF_ELSE_RE = re.compile(r"[;\n][ \t\n]*else(?=[\s;]|$)")
-# A command that computes a digest. The check step holds one, its final
-# `sha256sum -c`; a second computes the digest from the file itself, in a
-# pipeline, `$(…)`, `<(…)` or a here-string, and checks the file against it.
-HASH_COMMAND_RE = re.compile(r"(?<![\w.$/-])(?:sha\d*sum|shasum|md5sum|b2sum|cksum|openssl)(?![\w.-])")
+# `else` where sh reads the word: at the start of a command.
+IF_ELSE_RE = re.compile(r"(?:^|[;\n)}]|(?<!&)&(?!&))[ \t\n]*else(?=[\s;]|$)")
+# The digest line a check reads: a pinned digest, a 64-hex literal or a
+# variable, then FILE (`echo "$PANDOC_SHA256  /tmp/pandoc.deb"`).
+DIGEST_LINE_RE = r"(?:(?<![\w$])[0-9a-fA-F]{64}|\$\w+)[ \t]+\*?"
+# What writes that line on the check's stdin: echo or printf, with no command
+# substitution that could compute the digest from the file itself.
+DIGEST_WRITER_RE = re.compile(r"(?:echo|printf)(?:\s|$)")
 # A download with no time limit hangs on a stalled CDN instead of failing into
 # the warn fallback. Every pattern of the tool must match; a limit of 0 means
 # none to curl, wget and timeout(1) alike. curl `--max-time`/`-m` (bundled
@@ -1236,13 +1240,13 @@ def if_conditions(sh: Shell) -> list[Shell]:
     found = []
     for frame in frames:
         # An `if` left open runs to the end of the item (shell_frames()).
-        if frame.kind != "if" or not re.search(r"(?:^|[\s;&|()])fi$", mask[frame.start:frame.end]):
+        if frame.kind != "if" or not frame.closed:
             continue
         if any(other.function for other in frames if other.start <= frame.start and frame.end <= other.end):
             continue
         inner = [other for other in frames if other is not frame and frame.start < other.start < frame.end]
         then = next((m for m in IF_THEN_RE.finditer(mask, frame.start, frame.end) if not within(m.start(), inner)), None)
-        if not then or all(within(m.start(), inner) for m in IF_ELSE_RE.finditer(mask, then.end(), frame.end)):
+        if not then or all(within(m.end() - len("else"), inner) for m in IF_ELSE_RE.finditer(mask, then.end(), frame.end)):
             continue
         start = frame.start + len("if")
         found.append(Shell(sh.text[start:then.start()], sh.mask[start:then.start()]))
@@ -1330,13 +1334,24 @@ def download_target(command: str, url_vars: set[str]) -> tuple[str, str] | None:
 
 
 def check_reads(step: Shell, path: str) -> bool:
-    """Whether a check step's `sha256sum -c` reads `path`'s digest: the step
-    names `path` (as the checked file, in the digest line it feeds the check,
-    or in the line it selects from a sums file), and computes no digest of its
-    own. `sha256sum FILE | sha256sum -c -`, or the same through `$(…)`, `<(…)`
-    or a here-string, checks the file against itself (HASH_COMMAND_RE;
-    SEOR-ltseyxpe)."""
-    return len(HASH_COMMAND_RE.findall(step.text)) == 1 and path in path_tokens(step.text)
+    """Whether a check step's `sha256sum -c` reads a pinned digest for `path`:
+    the digest line `<digest>  path`, the digest a 64-hex literal or a
+    variable (DIGEST_LINE_RE), written on its stdin by echo or printf, or
+    given as a here-string. A digest computed in the step, `sha256sum FILE |
+    sha256sum -c -` or the same through `$(…)`, checks the file against
+    itself; `sha256sum -c FILE` reads FILE as a list of sums; a line fetched
+    or selected at run time is not the pinned digest (SEOR-ltseyxpe)."""
+    stages = step.split(r"(?<!>)\|&?")
+    line = re.compile(rf"{DIGEST_LINE_RE}{re.escape(path)}(?![^\s;&|<>()])")
+
+    def pinned(text: str) -> bool:
+        return "$(" not in text and "`" not in text and bool(line.search(shell_path(text)))
+
+    here = re.search(r"<<<[ \t]*(.*)$", stages[-1].text, re.S)
+    if here and pinned(here.group(1)):
+        return True
+    writer = stages[-2].text.strip() if len(stages) > 1 else ""
+    return bool(DIGEST_WRITER_RE.match(writer)) and pinned(writer)
 
 
 def download_bounded(tool: str, command: str) -> bool:
@@ -1530,8 +1545,18 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
      [PANDOC_CASE_DL, "sha256sum -c <(sha256sum /tmp/pandoc.deb)", PANDOC_CASE_DPKG], "noncanonical"),
     ("self-referential digest beside a variable",
      [PANDOC_CASE_DL, "sha256sum $X /tmp/pandoc.deb | sha256sum -c -", PANDOC_CASE_DPKG], "noncanonical"),
-    ("digest line selected from a sums file",
-     [PANDOC_CASE_DL, "grep /tmp/pandoc.deb /tmp/SHA256SUMS | sha256sum -c -", PANDOC_CASE_DPKG], "installed"),
+    # Only a pinned digest line counts: not one selected or fetched at run
+    # time, not the file itself read as a list of sums, not a line with
+    # another path before FILE, and no tool that hashes the file.
+    *((f"check not of a pinned digest line: {check[:40]!r}", [PANDOC_CASE_DL, check, PANDOC_CASE_DPKG], "noncanonical")
+      for check in ("grep /tmp/pandoc.deb /tmp/SHA256SUMS | sha256sum -c -",
+                    "curl -fsSL https://example.org/x.sha256 | sed 's|$|  /tmp/pandoc.deb|' | sha256sum -c -",
+                    "cat /tmp/pandoc.deb | sha256sum -c -", "echo /tmp/pandoc.deb | sha256sum -c -",
+                    "echo \"$PANDOC_SHA256  /tmp/other.deb /tmp/pandoc.deb\" | sha256sum -c -",
+                    "sha256sum -c /tmp/pandoc.deb", "sha256 -r /tmp/pandoc.deb | sha256sum -c -",
+                    "rhash --sha256 /tmp/pandoc.deb | sha256sum -c -")),
+    ("a pinned digest in a variable named like a tool",
+     [PANDOC_CASE_DL, "echo \"${sha256sum}  /tmp/pandoc.deb\" | sha256sum -c -", PANDOC_CASE_DPKG], "installed"),
     # SEOR-ltseyxpe. `if` pairs with its own `fi`: an earlier if…fi does not
     # swallow the install block, a block nested in a branch, a case arm or a
     # group is found, and an `else` belongs to its own `if`.
@@ -1542,6 +1567,14 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
     ("the block in a { } group", [f"{{ {PANDOC_CASE_ONE_LINE}; }}"], "installed"),
     ("else only as an argument word",
      [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then echo or else; fi"], "noncanonical"),
+    ("an if never closed, its last word fi, in a `- |` item",
+     [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then\n  echo ok\nelse\n  echo fi\n"],
+     "noncanonical"),
+    ("an if never closed, its else ending in a nested if…fi",
+     [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then echo ok; else if true; then echo w; fi"],
+     "noncanonical"),
+    *((f"else after {sep!r}", [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then {body} else echo w; fi"],
+       "installed") for sep, body in ((")", "(echo ok)"), ("}", "{ echo ok; }"), ("&", "echo ok &"))),
     ("an if never closed, its last word ending in fi",
      [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then echo ok; else echo notfi"],
      "noncanonical"),
@@ -1610,6 +1643,7 @@ class Frame:
     piped: bool = False
     function: bool = False
     case_state: str = ""
+    closed: bool = False
 
 
 def shell_frames(mask: str) -> list[Frame]:
@@ -1636,7 +1670,7 @@ def shell_frames(mask: str) -> list[Frame]:
     def close_frame(at: int) -> None:
         nonlocal ended
         frame = stack.pop()
-        frame.end = at
+        frame.end, frame.closed = at, True
         ended = [frame]
 
     while k < len(tokens):
