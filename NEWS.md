@@ -1,5 +1,10 @@
 # seor (development version)
 
+* The logo files carry full metadata: every link (GitLab, GitHub, CRAN,
+  r-universe, the docs site, the DOI), a screen-reader description, and
+  the Dublin Core, XMP, IPTC, PLUS and EXIF fields, written by the new
+  `scripts/logo-metadata.py` (SEOR-eyfiidrv).
+
 * CI pins pandoc 3.10 in every R job, not only the README gate: the
   download is checked against its published digest and bounded in time. The
   pre-push gate (`scripts/check-toolchain.R`) fails when the local pandoc
