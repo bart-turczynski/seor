@@ -7,7 +7,8 @@ finalize-logos.R that only restored a Dublin Core block. The owner then asked
 for every link (GitLab, the origin; GitHub, the mirror most users reach; CRAN,
 where every package will be), a screen-reader description, and every field
 the two formats can carry (2026-10-05). This script owns that metadata: it
-rebuilds it from the table below and the package's DESCRIPTION, in place, and leaves the artwork alone. The
+rebuilds it from the table below and the package's DESCRIPTION, in place,
+and leaves the artwork alone. The
 SVG drawing and the PNG pixel data (IDAT) come out byte-identical; rerunning it
 on its own output changes nothing.
 
@@ -123,7 +124,7 @@ def parse_dcf(text: str, where: str) -> dict[str, str]:
         if line.startswith("#"):
             continue
         if not line.strip():
-            if any(rest.strip() for rest in lines[n:]):
+            if any(rest.strip() and not rest.startswith("#") for rest in lines[n:]):
                 sys.exit(f"logo-metadata: {where}:{n}: a blank line inside the record; expected one DCF record")
             break
         if line[0] in " \t":
@@ -157,7 +158,8 @@ def logo_keywords(pkg: str, text: str, where: str) -> list[str]:
     if fields.get("Package") != pkg:
         sys.exit(f"logo-metadata: {where} is the DESCRIPTION of {fields.get('Package')!r}, not {pkg!r}")
     # A line break inside a tag is layout, not content: it becomes one space.
-    tags = [" ".join(t.split()) for t in fields.get(KEYWORD_FIELD, "").split(",")]
+    # Other whitespace inside a tag stays as written, as read.dcf() keeps it.
+    tags = [t.replace("\n", " ").strip() for t in fields.get(KEYWORD_FIELD, "").split(",")]
     tags = [t for t in tags if t]
     if not tags:
         sys.exit(f"logo-metadata: {where} has no {KEYWORD_FIELD} (or it is empty); "
@@ -185,7 +187,11 @@ class Facts:
             sys.exit(f"logo-metadata: no DESCRIPTION at {description}; name one with --description")
         self.pkg = pkg
         self.what, doi = PACKAGES[pkg]
-        self.keywords = logo_keywords(pkg, description.read_text(encoding="utf-8"), str(description))
+        try:
+            text = description.read_text(encoding="utf-8-sig")  # tolerate a BOM
+        except UnicodeDecodeError:
+            sys.exit(f"logo-metadata: {description} is not UTF-8; the fleet's DESCRIPTIONs are")
+        self.keywords = logo_keywords(pkg, text, str(description))
         self.a11y = f"Logo of the {pkg} library for R, white text on a black background"
         self.ext_descr = (
             f"A black hexagon with a thin white border. The package name, {pkg}, "
@@ -648,6 +654,8 @@ def self_test() -> int:
            == [*KEYWORD_PREFIX, "eTLD+1", "registrable domain", "UTS-46", "inet-pton"])
     expect("field after a continuation", parse_dcf("A: x,\n  y\nB: z\n", "t") == {"A": "x,\ny", "B": "z"})
     expect("one record only", exits_with(lambda: parse_dcf("A: x\n\nB: y\n", "t"), "blank line"))
+    expect("a comment after the record", parse_dcf("A: x\n\n# note\n", "t") == {"A": "x"})
+    expect("inner whitespace kept", kw("punycoder", "RFC  3492, a\tb") == [*KEYWORD_PREFIX, "RFC  3492", "a\tb"])
     expect("prefix and case-insensitive de-duplication",
            kw("rurl", "r, Rstats, url, URL, R PACKAGE, idna") == [*KEYWORD_PREFIX, "url", "idna"])
     # Package: must match.
@@ -706,11 +714,11 @@ def main() -> int:
         return self_test()
     if args.pkg is None or args.figures is None:
         ap.error("pkg and figures are required")
-    f = Facts(args.pkg, args.description or default_description(args.figures))
     names = ["logo.svg", "logo.png", "logo-print.svg", "logo-480.png"]
     targets = [args.figures / n for n in names if (args.figures / n).exists()]
     if not any(t.name in ("logo.svg", "logo.png") for t in targets):
         sys.exit(f"logo-metadata: no logo.svg or logo.png in {args.figures}")
+    f = Facts(args.pkg, args.description or default_description(args.figures))
     drift = 0
     for t in targets:
         new = finalize(f, t)  # logo.svg comes first, so the renditions can name it
