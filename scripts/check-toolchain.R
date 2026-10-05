@@ -868,6 +868,24 @@ self_test <- function() {
   )) {
     expect(paste("pandoc-pin:", line), identical(pinned_pandoc(line), "3.10"))
   }
+  # Beside a readable pin, a job's lines that set no second value pass with
+  # that pin alone: a bare key with nothing below it (YAML null), a use, a
+  # defaulted use, an export with no value, and the name in echoed text or
+  # in a comment.
+  global <- c("variables:", "  PANDOC_VERSION: \"3.10\"", "job:")
+  for (extra in list(
+    c("  variables:", "    PANDOC_VERSION:"),
+    c("  variables:", "    PANDOC_VERSION:", "    R_VERSION: \"4.6.1\""),
+    c("  script:", "    - echo \"pandoc ${PANDOC_VERSION:-3.9}\""),
+    c("  script:", "    - export PANDOC_VERSION"),
+    c("  script:", "    - echo PANDOC_VERSION=3.9"),
+    c("  script:", "    - echo \"PANDOC_VERSION: 3.9\""),
+    c("  script:", "    - Rscript -e 'Sys.getenv(\"PANDOC_VERSION\")'"),
+    c("  variables:", "    # PANDOC_VERSION: {value: \"3.9\"}")
+  )) {
+    tag <- paste("pandoc-beside-pin:", paste(extra, collapse = " / "))
+    expect(tag, identical(pinned_pandoc(c(global, extra)), "3.10"))
+  }
   # check-fleet-standard.py reads the pin through --pandoc-assignments: these
   # texts, separated by a form feed and numbered as in their files, are what
   # it judges.
@@ -889,10 +907,22 @@ self_test <- function() {
     "pandoc-assignment-none",
     !length(pandoc_assignment_report(ci[3:5]))
   )
+  # It prints only what it reads, and never stops: a key in a spelling it
+  # does not read prints no line.
+  expect(
+    "pandoc-assignment-report: unread key",
+    identical(
+      pandoc_assignment_report(c(
+        global,
+        "  variables: {PANDOC_VERSION: \"3.9\"}"
+      )),
+      "1\t2\t3.10"
+    )
+  )
 
   paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 52 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, 61 pandoc cases)\n"
   )
 }
 
