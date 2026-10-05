@@ -70,6 +70,11 @@
 #    not checked here. One that uses it with no pin this reads fails: a pin
 #    under a merge key, in a flow mapping, behind a quoted key or in an
 #    included file would otherwise pass as no pin at all (SEOR-mbiwrxql).
+#    And a PANDOC_VERSION value set in a spelling this does not read fails
+#    whatever pin it does read: beside a global `PANDOC_VERSION: "3.10"`, a
+#    job's `variables: {PANDOC_VERSION: "3.9"}` would otherwise pass as 3.10
+#    while that job installs 3.9 (SEOR-usrdxvbj). A bare `PANDOC_VERSION:`
+#    with nothing deeper below it is null, no version, and passes.
 #
 # WHAT IT DELIBERATELY DOES NOT DO.
 #
@@ -459,7 +464,75 @@ pandoc_use_lines <- function(lines) {
   )
 }
 
-# The fix both refusals in pinned_pandoc() name.
+# Where a PANDOC_VERSION value is set, whether pandoc_assignments() reads it or
+# not (SEOR-usrdxvbj), each matched on a line with quoted arguments to commands
+# blanked: a key, quoted or not, where a mapping key starts (a block key, a
+# list item, after `{`, `[` or `,` in a flow collection, not `${`); an explicit
+# `? PANDOC_VERSION` key; a shell assignment where sh reads one or a builtin
+# declares one (`env`, `readonly`, `local`, `declare`, `typeset`), whatever
+# its value; and `${PANDOC_VERSION:=...}`. A use, `${PANDOC_VERSION:-...}`,
+# an `export` with no value and an echoed `PANDOC_VERSION=` set nothing.
+pandoc_set_res <- c(
+  key = paste0(
+    "(?:^\\s*(?:-\\s+)?|(?<!\\$)[{\\[,]\\s*)",
+    "(?:PANDOC_VERSION\\s*:(?=[\\s,}\\]]|$)|([\"'])PANDOC_VERSION\\1\\s*:)"
+  ),
+  explicit = "^\\s*(?:-\\s+)?\\?\\s+([\"']?)PANDOC_VERSION\\1\\s*$",
+  shell = paste0(
+    "(?:^\\s*(?:-\\s+)?|[;&|({\\[,]\\s*|\\b(?:then|do|else|export|env|",
+    "readonly|local|declare|typeset)\\s+(?:-\\w+\\s+)*)",
+    # Lazy, so an assignment before it is not swallowed as a prefix and
+    # each one on the line counts.
+    "(?:\\w+=\\S*\\s+)*?[\"']?PANDOC_VERSION\\+?="
+  ),
+  default = "\\$\\{PANDOC_VERSION:="
+)
+
+# The line numbers where `lines`, comments dropped, set PANDOC_VERSION in a
+# spelling pandoc_assignments() does not read: a line with more settings
+# (pandoc_set_res) than values read. GitLab's expanded form is left to its own
+# refusal. A bare block key, `PANDOC_VERSION:`, counts only when a line below
+# it is indented deeper: that is its value (a multi-line scalar, a mapping, a
+# merge key), which GitLab reads and this does not. With nothing deeper below
+# it, its value is null: no version, so none can hide behind it, and it stays
+# a non-refusal, as do the bare keys the "not expanded" self-test cases pass
+# whose next line is a sibling key. Kept on purpose: refusing null would be a
+# false alarm on a spelling that sets no version.
+unread_pandoc_lines <- function(lines) {
+  lines <- drop_comments(lines)
+  read <- tabulate(pandoc_assignments(lines)$line, length(lines))
+  filled <- which(nzchar(trimws(lines)))
+  setting <- vapply(
+    seq_along(lines),
+    function(i) {
+      code <- mask_quoted_args(lines[[i]])
+      n <- sum(vapply(
+        pandoc_set_res,
+        function(re) sum(gregexpr(re, code, perl = TRUE)[[1L]] > 0L),
+        numeric(1)
+      ))
+      key <- regmatches(
+        lines[[i]],
+        regexec(pandoc_key_re, lines[[i]], perl = TRUE)
+      )[[1L]]
+      bare <- length(key) &&
+        !nzchar(sub(yaml_props_re, "", trimws(key[[3L]]), perl = TRUE))
+      if (bare) {
+        below <- filled[filled > i][1L]
+        deeper <- !is.na(below) &&
+          nchar(sub("\\S.*$", "", lines[[below]])) > nchar(key[[2L]])
+        if (!deeper) {
+          n <- n - 1
+        }
+      }
+      n
+    },
+    numeric(1)
+  )
+  setdiff(which(setting > read), expanded_lines(lines))
+}
+
+# The fix every refusal in pinned_pandoc() names.
 pin_fix <- paste0(
   "Write the pin in .gitlab-ci.yml as a plain scalar, ",
   "`PANDOC_VERSION: \"<version>\"`, or as a shell assignment, ",
@@ -470,6 +543,10 @@ pin_fix <- paste0(
 # assigns none; more than one is reported by check_pandoc(). The expanded form
 # stops here with the fix: read as a pin, it is none or the wrong one. So does
 # a `$PANDOC_VERSION` with no pin read: CI installs a version this cannot see.
+# So does a value set in a spelling this does not read (unread_pandoc_lines()),
+# whatever pins it does read: a global `PANDOC_VERSION: "3.10"` beside a job's
+# `variables: {PANDOC_VERSION: "3.9"}` would read as 3.10 while that job
+# installs 3.9 (SEOR-usrdxvbj).
 pinned_pandoc <- function(lines) {
   expanded <- expanded_pandoc_lines(lines)
   if (length(expanded)) {
@@ -496,6 +573,22 @@ pinned_pandoc <- function(lines) {
       "version in .gitlab-ci.yml itself: not one under a merge key or an ",
       "alias, in a flow mapping, behind a quoted key, in an included file ",
       "or in the CI/CD settings, nor a computed, defaulted or empty value. ",
+      pin_fix,
+      call. = FALSE
+    )
+  }
+  unread <- unread_pandoc_lines(lines)
+  if (length(unread)) {
+    stop(
+      ".gitlab-ci.yml sets PANDOC_VERSION on line",
+      if (length(unread) > 1L) "s",
+      " ",
+      toString(unread),
+      " in a spelling check-toolchain.R does not read (a quoted key, a flow ",
+      "mapping, an alias, a merge key, a value below the key, an empty, ",
+      "computed or defaulted value, or an `env` or declared assignment). ",
+      "Whatever pin it reads elsewhere, a job that sees this value installs ",
+      "a pandoc this check never compares. ",
       pin_fix,
       call. = FALSE
     )
@@ -783,6 +876,16 @@ self_test <- function() {
       "    - Rscript -e 'Sys.getenv(\"PANDOC_VERSION\")'"
     )
   )
+  # Without the use, a case that sets a value this does not read still stops,
+  # naming the line that sets it (SEOR-usrdxvbj); one that sets none passes.
+  sets_on <- c(
+    `merge key` = 2L,
+    `flow variables` = 1L,
+    `quoted key` = 2L,
+    alias = 2L,
+    computed = 1L,
+    empty = 2L
+  )
   for (case in names(unread)) {
     lines <- unread[[case]]
     why <- refusal(lines)
@@ -790,7 +893,19 @@ self_test <- function() {
     expect(tag, grepl("reads no pin", why, fixed = TRUE))
     expect(tag, grepl(sprintf("on line %d,", length(lines)), why, fixed = TRUE))
     expect(tag, grepl("PANDOC_VERSION: \"<version>\"", why, fixed = TRUE))
-    expect(tag, !nzchar(refusal(lines[-length(lines)])))
+    unused <- refusal(lines[-length(lines)])
+    if (case %in% names(sets_on)) {
+      expect(
+        tag,
+        grepl("in a spelling check-toolchain.R", unused, fixed = TRUE)
+      )
+      expect(
+        tag,
+        grepl(sprintf("on line %d in", sets_on[[case]]), unused, fixed = TRUE)
+      )
+    } else {
+      expect(tag, !nzchar(unused))
+    }
   }
   expect(
     "pandoc-expanded-report: alias",
@@ -801,17 +916,28 @@ self_test <- function() {
     grepl("reads no pin", refusal("    - echo $PANDOC_VERSION"), fixed = TRUE)
   )
   # A bare key whose next line is no mapping of its own is not the expanded
-  # form: a sibling key, even one named `value`, a scalar, or nothing.
+  # form: a sibling key, even one named `value`, a scalar, or nothing. With
+  # nothing deeper below it, its value is null and it passes.
   for (lines in list(
     c("  PANDOC_VERSION:", "  value: \"3.10\""),
     c("  PANDOC_VERSION:", "  R_VERSION: \"4.6.1\"", "    value: \"3.10\""),
-    c("  PANDOC_VERSION:", "    \"3.10\""),
-    c("  PANDOC_VERSION:", "    default: \"3.10\""),
     "  PANDOC_VERSION:"
   )) {
     tag <- paste("pandoc-not-expanded:", paste(lines, collapse = " / "))
     expect(tag, !nzchar(refusal(lines)))
     expect(tag, !length(pinned_pandoc(lines)))
+  }
+  # A deeper line below it is its value, a scalar or a mapping without
+  # `value:`, which this does not read: it stops as an unread setting, not
+  # as the expanded form (SEOR-usrdxvbj).
+  for (lines in list(
+    c("  PANDOC_VERSION:", "    \"3.10\""),
+    c("  PANDOC_VERSION:", "    default: \"3.10\"")
+  )) {
+    tag <- paste("pandoc-not-expanded:", paste(lines, collapse = " / "))
+    why <- refusal(lines)
+    expect(tag, !grepl("expanded form", why, fixed = TRUE))
+    expect(tag, grepl("on line 1 in a spelling", why, fixed = TRUE))
   }
   # --pandoc-assignments prints no pin for it; a plain pin beside it is
   # still printed.
@@ -886,6 +1012,51 @@ self_test <- function() {
     tag <- paste("pandoc-beside-pin:", paste(extra, collapse = " / "))
     expect(tag, identical(pinned_pandoc(c(global, extra)), "3.10"))
   }
+  # A job's value set in a spelling this does not read stops, whatever pin it
+  # reads beside it: read as 3.10, the job would install 3.9 (SEOR-usrdxvbj).
+  # Each case's last line sets it.
+  hidden <- list(
+    `flow variables` = "  variables: {PANDOC_VERSION: \"3.9\"}",
+    `quoted key` = c("  variables:", "    \"PANDOC_VERSION\": \"3.9\""),
+    `single-quoted key` = c("  variables:", "    'PANDOC_VERSION': '3.9'"),
+    `space before the colon` = c(
+      "  variables:",
+      "    PANDOC_VERSION : \"3.9\""
+    ),
+    alias = c("  variables:", "    PANDOC_VERSION: *old"),
+    empty = c("  variables:", "    PANDOC_VERSION: \"\""),
+    `explicit key` = c("  variables:", "    ? PANDOC_VERSION"),
+    computed = c("  script:", "    - PANDOC_VERSION=$(cat .pandoc-version)"),
+    `computed beside a read one` = c(
+      "  script:",
+      "    - PANDOC_VERSION=3.10; PANDOC_VERSION=${OLD}"
+    ),
+    `env prefix` = c("  script:", "    - env PANDOC_VERSION=3.9 sh install.sh"),
+    `local` = c("  script:", "    - f() { local PANDOC_VERSION=3.9; }"),
+    `assign default` = c("  script:", "    - : \"${PANDOC_VERSION:=3.9}\"")
+  )
+  for (case in names(hidden)) {
+    lines <- c(global, hidden[[case]])
+    why <- refusal(lines)
+    tag <- paste("pandoc-hidden-pin:", case)
+    expect(
+      tag,
+      grepl(
+        sprintf("on line %d in a spelling", length(lines)),
+        why,
+        fixed = TRUE
+      )
+    )
+    expect(tag, grepl("PANDOC_VERSION: \"<version>\"", why, fixed = TRUE))
+  }
+  # A value below a bare key is its value: here a merge, then a scalar.
+  for (below in c("      <<: *old", "      \"3.9\"")) {
+    why <- refusal(c(global, "  variables:", "    PANDOC_VERSION:", below))
+    expect(
+      paste("pandoc-hidden-pin: below the key,", below),
+      grepl("on line 5 in a spelling", why, fixed = TRUE)
+    )
+  }
   # check-fleet-standard.py reads the pin through --pandoc-assignments: these
   # texts, separated by a form feed and numbered as in their files, are what
   # it judges.
@@ -907,8 +1078,8 @@ self_test <- function() {
     "pandoc-assignment-none",
     !length(pandoc_assignment_report(ci[3:5]))
   )
-  # It prints only what it reads, and never stops: a key in a spelling it
-  # does not read prints no line.
+  # It prints only what it reads, and never stops: a value set in a spelling
+  # it does not read, which pinned_pandoc() refuses, prints no line.
   expect(
     "pandoc-assignment-report: unread key",
     identical(
@@ -922,7 +1093,7 @@ self_test <- function() {
 
   paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 61 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, 75 pandoc cases)\n"
   )
 }
 
