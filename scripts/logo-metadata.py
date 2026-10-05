@@ -108,7 +108,7 @@ class Facts:
         self.what, self.keywords, doi = PACKAGES[pkg]
         self.a11y = f"Logo of the {pkg} library for R, white text on a black background"
         self.ext_descr = (
-            f"A black hexagon with a thin light-gray border. The package name, {pkg}, "
+            f"A black hexagon with a thin white border. The package name, {pkg}, "
             "is set across the center in white capital letters, with the R that marks "
             "it as an R package in a lighter weight than the rest."
         )
@@ -124,7 +124,9 @@ class Facts:
             self.links.append(self.doi)
         self.hub = f"https://gitlab.com/{NAMESPACE}/{HUB}"
         self.members = [f"https://gitlab.com/{NAMESPACE}/{p}" for p in MEMBERS]
-        self.document_id = "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, self.gitlab + "#logo"))
+        # One original (the logo), one document per rendition (XMP: a derived
+        # rendition gets its own DocumentID and names the original).
+        self.original_id = "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, self.gitlab + "#logo"))
 
     def file_url(self, name: str) -> str:
         return f"{self.gitlab}/-/raw/main/man/figures/{name}"
@@ -133,6 +135,9 @@ class Facts:
         """The file's own URL, for the two files the repositories carry; the
         print and 480 px artwork stay outside them, so they get none."""
         return [self.file_url(name)] if name in REPO_FILES else []
+
+    def document_id(self, name: str) -> str:
+        return "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.file_url(name)}#document"))
 
     def instance_id(self, name: str) -> str:
         return "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.file_url(name)}@{METADATA_DATE}"))
@@ -157,7 +162,7 @@ def xmp_packet(f: Facts, name: str, mime: str, wrapper: bool) -> str:
     photoshop, IPTC Core, PLUS and Creative Commons."""
     props = [
         f"<dc:title>{alt(f.pkg)}</dc:title>",
-        f"<dc:description>{alt(f.what)}</dc:description>",
+        f"<dc:description>{alt(f.a11y)}</dc:description>",
         f"<dc:creator>{bag([OWNER], 'Seq')}</dc:creator>",
         f"<dc:publisher>{bag([OWNER])}</dc:publisher>",
         f"<dc:contributor>{bag([FONT])}</dc:contributor>",
@@ -181,8 +186,8 @@ def xmp_packet(f: Facts, name: str, mime: str, wrapper: bool) -> str:
         f"<xmpRights:WebStatement>{LICENSE_URL}</xmpRights:WebStatement>",
         f"<xmpRights:UsageTerms>{alt(USAGE_TERMS)}</xmpRights:UsageTerms>",
         f"<xmpRights:Owner>{bag([OWNER])}</xmpRights:Owner>",
-        f"<xmpMM:DocumentID>{f.document_id}</xmpMM:DocumentID>",
-        f"<xmpMM:OriginalDocumentID>{f.document_id}</xmpMM:OriginalDocumentID>",
+        f"<xmpMM:DocumentID>{f.document_id(name)}</xmpMM:DocumentID>",
+        f"<xmpMM:OriginalDocumentID>{f.original_id}</xmpMM:OriginalDocumentID>",
         f"<xmpMM:InstanceID>{f.instance_id(name)}</xmpMM:InstanceID>",
         f"<photoshop:Headline>{esc(f.pkg)}: {esc(f.what)}</photoshop:Headline>",
         f"<photoshop:Credit>{esc(OWNER)}</photoshop:Credit>",
@@ -305,6 +310,7 @@ def rewrite_svg(f: Facts, path: Path) -> str:
     if not m:
         sys.exit(f"logo-metadata: {path} has no <svg> root")
     attrs = dict(ATTR.findall(m.group(0)))
+    # SVG 1.1 defines xml:lang only; a bare lang (SVG 2) is dropped.
     for key in ("role", "aria-labelledby", "aria-describedby", "xml:lang", "lang"):
         attrs.pop(key, None)
     ours = {
@@ -312,7 +318,6 @@ def rewrite_svg(f: Facts, path: Path) -> str:
         "aria-labelledby": f"{f.pkg}-title",
         "aria-describedby": f"{f.pkg}-desc",
         "xml:lang": LANG,
-        "lang": LANG,
     }
     attrs.update({k: f'"{v}"' for k, v in ours.items()})
     root = "<svg " + " ".join(f"{k}={v}" for k, v in attrs.items()) + ">"
