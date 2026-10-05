@@ -229,13 +229,20 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   plain scalar, `PANDOC_VERSION: "3.10"`, or a shell assignment, never in
   GitLab's expanded form (a mapping with `value:`, block or flow), which
   `check-toolchain.R` does not read: it stops and asks for the plain scalar.
-  It stops the same way when `.gitlab-ci.yml` uses `$PANDOC_VERSION` but
-  holds no pin it reads: one under a merge key, in a flow mapping, behind a
-  quoted key or in an included file. And it stops on any `PANDOC_VERSION`
+  It parses `.gitlab-ci.yml` with the R yaml package
+  ([ADR 0009](adr/0009-check-toolchain-reads-the-ci-pin-with-yaml.md)), so
+  a key in any mapping, quoted or not, block or flow, behind an alias or a
+  merge key, is read, and so is a shell assignment in a script item. It
+  stops when the file does not load, and the same way when
+  `.gitlab-ci.yml` uses `$PANDOC_VERSION` but holds no pin it reads, such
+  as one only in an included file. And it stops on any `PANDOC_VERSION`
   value set in a spelling it does not read, whatever pin it reads elsewhere
-  and even when the value matches: a job's `variables: {PANDOC_VERSION:
-  "3.9"}` beside a global `PANDOC_VERSION: "3.10"` would read as 3.10 while
-  that job installs 3.9.
+  and even when the value matches: a block scalar, a `!reference`, an empty
+  or computed value, an `env`, `local`, `eval`, `for` or `read` setting. A
+  job's `env PANDOC_VERSION=3.9 sh install.sh` beside a global
+  `PANDOC_VERSION: "3.10"` would read as 3.10 while that command installs
+  3.9. A null value (`PANDOC_VERSION:` bare, `~` or `null`) sets no
+  version.
 - The `.deb` comes from the pandoc GitHub release
   (`https://github.com/jgm/pandoc/releases/download/<version>/pandoc-<version>-1-<arch>.deb`),
   and `sha256sum -c` checks it against the release's published digest before
@@ -304,6 +311,8 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   `RSTUDIO_PANDOC`, `PATH` and `~/opt/pandoc`, so a Homebrew upgrade past the
   pin otherwise knits a README that CI then reports as drift. Reading the
   variable from the environment is not that check: nothing sets it locally.
+  It needs the R package yaml, which rmarkdown and knitr already import, and
+  stops in one line naming it when it is missing.
   The script is vendored: every package carries seor's copy byte for byte,
   so a change to it is copied into each repository.
 
@@ -617,10 +626,11 @@ What it checks, section by section:
   `variables:` entry or a shell assignment, quoted or not, with or without a
   trailing comment (GitLab's expanded `value:` form is reported, and so is
   any value set in a spelling `check-toolchain.R` does not read and stops on,
-  such as a quoted key, a job's flow `variables:`, an alias, a value below
-  the key, an `env` prefix or a `readonly`, `declare`, `typeset` or `local`
-  assignment, as its `--pandoc-unread` names the lines, each to be
-  rewritten as a plain scalar), one value wherever it is assigned, in a line
+  such as a block scalar, a `!reference`, a computed or empty value, an
+  `env` prefix or a `local`, `eval`, `for` or `read` setting, as its
+  `--pandoc-unread` names the lines, each to be rewritten as a plain scalar,
+  and a file its YAML parser does not load though PyYAML does, such as one
+  with a duplicate key), one value wherever it is assigned, in a line
   the job sees, and never in a `parallel: matrix` entry, which pins per leg. An
   assignment is one sh would run and keep for the commands after it, plain
   or through `export`, `readonly`, `declare` or `typeset`: not the same text
