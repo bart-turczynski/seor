@@ -236,11 +236,11 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   shapes, and each step runs only when the one before it succeeded:
 
   - one script item holding `if <download to FILE> && <sha256sum -c of FILE>
-    && dpkg -i FILE; then …; else <warn>; fi`, on one line or in a `- |`
-    block, as seor's `.r` does; or
+    && dpkg -i FILE; then apt-mark hold pandoc; …; else <warn>; fi`, on one
+    line or in a `- |` block, as seor's `.r` does; or
   - three script items in that order: the download, the `sha256sum -c`, the
-    `dpkg -i`. GitLab ends the job when an item fails, so a mismatch stops
-    it before the install.
+    `dpkg -i`, and `apt-mark hold pandoc` in an item after them. GitLab ends
+    the job when an item fails, so a mismatch stops it before the install.
 
   Each step is one command or one pipeline, read by its last command, whose
   exit status is the pipeline's: `… | sha256sum -c -` is a check, `sha256sum
@@ -268,6 +268,23 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   `--timeout` and `-T` limit idle time, not the download. seor's curl sets
   them all (`--retry 3 --retry-delay 5 --retry-max-time 300
   --connect-timeout 20 --max-time 120`).
+- The install holds pandoc: `apt-mark hold pandoc` runs right after a
+  successful `dpkg -i`, in the `then` branch or in a script item after the
+  three. Without it the pin lasts only until a later apt step: where apt's
+  candidate pandoc is newer than the pin, as Debian's is on `r-base:latest`
+  (testing, at priority 990), an `apt-get install` or upgrade that reaches
+  pandoc replaces the `.deb` (SEOR-vzupmeqj). Only the success path holds:
+  a hold before the install, after `fi`, in the else branch or in an item
+  after the `if` also runs on the warn path and holds apt's pandoc, and none
+  of them counts. The hold is `apt-mark hold` with `pandoc` among its
+  packages (options and other packages allowed), a command of its own in
+  that branch or item, not one inside a nested `if`, group or function.
+  `echo pandoc hold | dpkg --set-selections` sets the same selection but is
+  not read: write `apt-mark`. A bump needs nothing for the hold: an
+  explicit `dpkg -i` ignores it (dpkg(1), "hold": "When these actions are
+  requested explicitly, the hold package selection state always gets
+  ignored") and leaves the package unheld, so the line after it holds the
+  new version, and every CI job starts from a fresh image anyway.
 - Locally, `scripts/check-toolchain.R` reads `PANDOC_VERSION` from
   `.gitlab-ci.yml` and fails the pre-push gate when
   `rmarkdown::pandoc_version()` differs. rmarkdown takes the newest pandoc on
@@ -280,6 +297,13 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
 A bump moves together, in one change per repository: `PANDOC_VERSION`, the
 two sha256 digests (amd64, arm64), a re-knit of `README.md`, and, once for
 the fleet, `PANDOC_PIN` in `scripts/check-fleet-standard.py`.
+
+Each repository carries the install block in its own `.gitlab-ci.yml`; it
+is not shared through a GitLab `include:` of seor's file. rurl's
+`tools/local-ci-plan.R` reads the CI file without following `include:`, so
+its local runs would lose the install, and a cross-project include makes
+every package's pipeline depend on seor at CI time. The fleet checker keeps
+the copies in step instead.
 
 Every pipeline a schedule creates on `main`, `deep-check` and
 `dependency-audit` alike, runs the coverage job too. The coverage badge reads
@@ -595,7 +619,10 @@ What it checks, section by section:
   same file, paths compared as whole words; a checksum of some other
   download, a checked `.deb` never installed, a step that goes on when the
   one before it failed, and a download with no time
-  limit do not count. The install counts only in the `before_script` or
+  limit do not count. An install with no `apt-mark hold pandoc` where only
+  its success leads (the `then` branch, or an item after the three) is a gap
+  of its own, naming the line to add; a download with no time limit is
+  reported first. The install counts only in the `before_script` or
   `script` the job ends up with, its own or its template's; one only in
   `default: before_script` is reported, to move into the template. A job's
   commands are read as text, together with the variables it sees and the R,

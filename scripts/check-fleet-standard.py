@@ -106,7 +106,11 @@ WHAT IT CHECKS, by section of the standard.
   echo or printf on stdin, or a here-string), paths compared as whole
   words, and the download has a time limit: curl `--max-time` or `-m`,
   with `--retry-max-time` (and no `--retry-delay` over 600) if it retries,
-  or `timeout` around either. The install counts in the `before_script` or `script` the job
+  or `timeout` around either. A successful `dpkg -i` is followed by
+  `apt-mark hold pandoc` (options and other packages allowed), in the
+  `then` branch or a script item after the three, so a later apt install
+  cannot replace it; without that the install is `unheld`, a gap of its own
+  (SEOR-vzupmeqj). The install counts in the `before_script` or `script` the job
   ends up with (its own, else the template's that GitLab merges last), not in
   `default:`, which also reaches jobs on images without dpkg or curl; a pin
   found only there is reported, to move into the template.
@@ -1171,12 +1175,13 @@ def read_pandoc_assignments(texts: list[str]) -> PinReads:
 # --- the pandoc install reader (SEOR-zwetljee) ----------------------------------
 # How a job's script items install the pandoc .deb. Its interface is one call,
 # pandoc_install_state(entries) -> one of INSTALL_STATES ("noncanonical",
-# "unbounded", "installed"), with entries a job's script items as YAML hands
-# them over; check_pandoc_pin() is its caller. Inside: Shell (which the pin
-# reader after this section reuses), within, if_conditions, install_steps,
-# dpkg_installs, shell_path, path_tokens, stdout_redirect, download_target,
-# check_reads, download_bounded and the regexes below. It borrows the pin
-# reader's shell_frames() and without_heredocs() to pair `if` with `fi`.
+# "unbounded", "unheld", "installed"), with entries a job's script items as
+# YAML hands them over; check_pandoc_pin() is its caller. Inside: Shell (which
+# the pin reader after this section reuses), within, if_blocks, install_steps,
+# dpkg_installs, holds_pandoc, shell_path, path_tokens, stdout_redirect,
+# download_target, check_reads, download_bounded and the regexes below. It
+# borrows the pin reader's shell_frames() and without_heredocs() to pair `if`
+# with `fi`, and to find the hold's own commands.
 # PANDOC_INSTALL_CASES, at the section's end, is its test: shell items in,
 # state out.
 PANDOC_DEB_URL_RE = re.compile(r"https?://github\.com/jgm/pandoc/releases/download/[^\s\"']+")
@@ -1191,6 +1196,11 @@ DPKG_STAGE_RE = re.compile(r"^dpkg\b.*\s(?:-i|--install)\s")
 IF_THEN_RE = re.compile(r"[;\n][ \t\n]*then(?=[\s;]|$)")
 # `else` where sh reads the word: at the start of a command.
 IF_ELSE_RE = re.compile(r"(?:^|[;\n)}]|(?<!&)&(?!&))[ \t\n]*else(?=[\s;]|$)")
+# Where the `then` branch ends: the frame's own `elif` or `else`.
+IF_BRANCH_END_RE = re.compile(r"(?:^|[;\n)}]|(?<!&)&(?!&))[ \t\n]*(?P<word>elif|else)(?=[\s;]|$)")
+# The hold that keeps apt from replacing the installed .deb (holds_pandoc()):
+# `apt-mark hold`, options allowed, naming pandoc among its packages.
+APT_MARK_HOLD_RE = re.compile(r"^apt-mark(?:\s+-\S+)*\s+hold\s+(.*)$", re.S)
 # The digest line a check reads: a pinned digest, a 64-hex literal or a
 # variable, then FILE (`echo "$PANDOC_SHA256  /tmp/pandoc.deb"`).
 DIGEST_LINE_RE = r"(?:(?<![\w$])[0-9a-fA-F]{64}|\$\w+)[ \t]+\*?"
@@ -1258,12 +1268,13 @@ def within(at: int, frames: list[Frame]) -> bool:
     return any(frame.start <= at < frame.end for frame in frames)
 
 
-def if_conditions(sh: Shell) -> list[Shell]:
-    """The condition of each `if … then … else … fi` in a script item, each
-    `if` paired with its own `fi` (shell_frames()), so an earlier `if … fi`
-    does not swallow a later block, and a block in a branch, a case arm or a
-    `{ }` group is found. Not one in a function's body, which runs only if
-    the function is called (SEOR-ltseyxpe)."""
+def if_blocks(sh: Shell) -> list[tuple[Shell, Shell]]:
+    """The condition and the `then` branch of each `if … then … else … fi` in
+    a script item, each `if` paired with its own `fi` (shell_frames()), so an
+    earlier `if … fi` does not swallow a later block, and a block in a
+    branch, a case arm or a `{ }` group is found. The branch runs up to the
+    frame's own `elif` or `else`. Not one in a function's body, which runs
+    only if the function is called (SEOR-ltseyxpe)."""
     mask = without_heredocs(sh)
     frames = shell_frames(mask)
     found = []
@@ -1278,25 +1289,34 @@ def if_conditions(sh: Shell) -> list[Shell]:
         if not then or all(within(m.end() - len("else"), inner) for m in IF_ELSE_RE.finditer(mask, then.end(), frame.end)):
             continue
         start = frame.start + len("if")
-        found.append(Shell(sh.text[start:then.start()], sh.mask[start:then.start()]))
+        stop = next((m.start("word") for m in IF_BRANCH_END_RE.finditer(mask, then.end(), frame.end)
+                     if not within(m.start("word"), inner)), frame.end)
+        found.append((Shell(sh.text[start:then.start()], sh.mask[start:then.start()]),
+                      Shell(sh.text[then.end():stop], mask[then.end():stop])))
     return found
 
 
-def install_steps(entries: list[str]) -> list[list[Shell]]:
+def install_steps(entries: list[str]) -> list[tuple[list[Shell], list[Shell]]]:
     """The (download, check, install) candidates in a job's script items, in
     the standard's two shapes, each step one pipeline that runs only when the
     one before it succeeded: `if A && B && C; then …; else …; fi` inside one
     item, or three consecutive items, since a failing item ends the job.
-    Nothing else is read as an install, `set -e` included (SEOR-xhyrogfm)."""
+    Nothing else is read as an install, `set -e` included (SEOR-xhyrogfm).
+    Each comes with what runs only after its install succeeded, where the
+    hold belongs (SEOR-vzupmeqj): the `then` branch, or the items after the
+    three."""
     shells = [Shell(entry) for entry in entries]
     found = []
     for sh in shells:
-        for condition in if_conditions(sh):
+        for condition, branch in if_blocks(sh):
             steps = condition.split(r"&&")
             if len(steps) == 3 and all(step.simple() for step in steps):
-                found.append(steps)
-    triples = zip(shells, shells[1:], shells[2:])
-    return found + [list(steps) for steps in triples if all(step.simple() for step in steps)]
+                found.append((steps, [branch]))
+    for k in range(len(shells) - 2):
+        steps = shells[k:k + 3]
+        if all(step.simple() for step in steps):
+            found.append((steps, shells[k + 3:]))
+    return found
 
 
 def dpkg_installs(entries: list[str], path: str) -> int:
@@ -1308,6 +1328,24 @@ def dpkg_installs(entries: list[str], path: str) -> int:
             if DPKG_STAGE_RE.match(command) and path in path_tokens(command):
                 count += 1
     return count
+
+
+def holds_pandoc(region: Shell) -> bool:
+    """Whether one of the region's own commands is `apt-mark hold` naming
+    pandoc: a command of its own, or the first of an `&&`/`||` list, not one
+    inside a compound command (an `if`, a `{ }` group, a function's body), a
+    here-document, an argument or a comment (SEOR-vzupmeqj). Only apt-mark
+    is read; `dpkg --set-selections` is not."""
+    mask = list(without_heredocs(region))
+    for frame in shell_frames("".join(mask)):
+        mask[frame.start:frame.end] = "_" * (frame.end - frame.start)
+    flat = Shell(region.text, "".join(mask))
+    for command in flat.split(r"[;\n]|(?<![<>|&])&(?![>&])"):
+        first = command.split(r"&&|\|\|")[0]
+        hold = APT_MARK_HOLD_RE.match(first.text.strip())
+        if hold and first.mask.strip().startswith("apt-mark") and "pandoc" in path_tokens(hold.group(1)):
+            return True
+    return False
 
 
 def shell_path(text: str) -> str:
@@ -1405,7 +1443,7 @@ def seconds(word: str) -> float:
         return float("inf")
 
 
-INSTALL_STATES = ("noncanonical", "unbounded", "installed")
+INSTALL_STATES = ("noncanonical", "unbounded", "unheld", "installed")
 
 
 def pandoc_install_state(entries: list[str]) -> str:
@@ -1414,22 +1452,28 @@ def pandoc_install_state(entries: list[str]) -> str:
     `installed` needs one of install_steps()' shapes whose download saves the
     release to a file, whose `sha256sum -c` (or `shasum -a 256 -c`) names that
     file or reads the digest line naming it from stdin (check_reads()), and
-    whose `dpkg -i` installs it, and no other command installs that file.
-    Paths compare as whole words. That shape with a download that sets no
-    time limit is `unbounded`; anything else is `noncanonical`
-    (SEOR-egfbijyi, SEOR-xhyrogfm, SEOR-ltseyxpe).
+    whose `dpkg -i` installs it, and no other command installs that file,
+    then `apt-mark hold pandoc` where only a successful install leads
+    (holds_pandoc()). Paths compare as whole words. That shape with a
+    download that sets no time limit is `unbounded`; with a time limit but
+    no such hold, `unheld`; anything else is `noncanonical` (SEOR-egfbijyi,
+    SEOR-xhyrogfm, SEOR-ltseyxpe, SEOR-vzupmeqj).
     """
     url_vars = set(re.findall(r"\b(\w+)=[\"']?https?://github\.com/jgm/pandoc/releases/download/", "\n".join(entries)))
     best = "noncanonical"
-    for steps in install_steps(entries):
+    for steps, after in install_steps(entries):
         download, check, install = (step.last_stage() for step in steps)
         saved = download_target(download, url_vars)
         if (saved and SHA256_STAGE_RE.match(check) and check_reads(steps[1], saved[1])
                 and DPKG_STAGE_RE.match(install) and saved[1] in path_tokens(install)
                 and dpkg_installs(entries, saved[1]) == 1):
-            if download_bounded(saved[0], download):
+            if not download_bounded(saved[0], download):
+                state = "unbounded"
+            elif not any(holds_pandoc(region) for region in after):
+                state = "unheld"
+            else:
                 return "installed"
-            best = "unbounded"
+            best = max(best, state, key=INSTALL_STATES.index)
     return best
 
 
@@ -1672,36 +1716,40 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
      [f"timeout 300 wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "installed"),
     # SEOR-vzupmeqj. `apt-mark hold pandoc` after a successful `dpkg -i`, in
     # the same success path: the `then` branch, or a script item after the
-    # three. TODAY'S VERDICT: the reader does not look for the hold yet, so
-    # every row below is `installed`.
-    ("no hold, one if", [PANDOC_CASE_UNHELD_IF], "installed"),
-    ("no hold, three items", PANDOC_CASE_UNHELD_ITEMS, "installed"),
+    # three. One before the install does not count (an explicit `dpkg -i`
+    # ignores a hold and clears it); one after `fi`, in the else branch or in
+    # an item after the if also runs on the warn path, holding apt's pandoc.
+    # A download with no time limit is reported first.
+    ("no time limit and no hold", [PANDOC_CASE_DL.replace("--max-time 120 ", ""), PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
+     "unbounded"),
+    ("no hold, one if", [PANDOC_CASE_UNHELD_IF], "unheld"),
+    ("no hold, three items", PANDOC_CASE_UNHELD_ITEMS, "unheld"),
     ("hold in an item after the three", PANDOC_CASE_UNHELD_ITEMS + ["echo next", PANDOC_CASE_HOLD], "installed"),
     ("hold on a line of a `- |` item after the three",
      PANDOC_CASE_UNHELD_ITEMS + [f"echo next\n{PANDOC_CASE_HOLD}\npandoc --version\n"], "installed"),
-    ("hold before the dpkg -i, three items", [PANDOC_CASE_HOLD] + PANDOC_CASE_UNHELD_ITEMS, "installed"),
-    ("hold before the if, in its item", [f"{PANDOC_CASE_HOLD}\n{PANDOC_CASE_UNHELD_IF}"], "installed"),
-    ("hold in an item before the if", [PANDOC_CASE_HOLD, PANDOC_CASE_UNHELD_IF], "installed"),
+    ("hold before the dpkg -i, three items", [PANDOC_CASE_HOLD] + PANDOC_CASE_UNHELD_ITEMS, "unheld"),
+    ("hold before the if, in its item", [f"{PANDOC_CASE_HOLD}\n{PANDOC_CASE_UNHELD_IF}"], "unheld"),
+    ("hold in an item before the if", [PANDOC_CASE_HOLD, PANDOC_CASE_UNHELD_IF], "unheld"),
     ("hold only in the else branch",
      [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then\n  echo ok\nelse\n"
-      f"  {PANDOC_CASE_HOLD}\nfi\n"], "installed"),
-    ("hold after fi, on the warn path too", [f"{PANDOC_CASE_UNHELD_IF}{PANDOC_CASE_HOLD}\n"], "installed"),
-    ("hold in an item after the if, on the warn path too", [PANDOC_CASE_UNHELD_IF, PANDOC_CASE_HOLD], "installed"),
+      f"  {PANDOC_CASE_HOLD}\nfi\n"], "unheld"),
+    ("hold after fi, on the warn path too", [f"{PANDOC_CASE_UNHELD_IF}{PANDOC_CASE_HOLD}\n"], "unheld"),
+    ("hold in an item after the if, on the warn path too", [PANDOC_CASE_UNHELD_IF, PANDOC_CASE_HOLD], "unheld"),
     ("hold in an if nested in the then branch",
      [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}",
-                     then=f"if true; then {PANDOC_CASE_HOLD}; fi")], "installed"),
+                     then=f"if true; then\n    {PANDOC_CASE_HOLD}\n  fi")], "unheld"),
     ("hold in an elif branch",
      [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then\n  echo ok\nelif true; then\n"
-      f"  {PANDOC_CASE_HOLD}\nelse\n  echo WARN\nfi\n"], "installed"),
+      f"  {PANDOC_CASE_HOLD}\nelse\n  echo WARN\nfi\n"], "unheld"),
     *((f"hold spelled {hold!r}", [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}",
                                                  then=hold)], "installed")
       for hold in ("apt-mark hold pandoc r-base-core", "apt-mark hold r-base-core pandoc", "apt-mark -qq hold pandoc",
                    "apt-mark hold pandoc || true", "apt-mark hold 'pandoc'", "echo ok; apt-mark hold pandoc")),
     *((f"no hold, only {other!r}", [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}",
-                                                   then=other)], "installed")
+                                                   then=other)], "unheld")
       for other in ("apt-mark hold pandoc-data", "apt-mark unhold pandoc", "apt-mark showhold pandoc",
                     "echo apt-mark hold pandoc", "# apt-mark hold pandoc", "echo pandoc hold | dpkg --set-selections",
-                    "hold() { apt-mark hold pandoc; }")),
+                    "hold() {\n    apt-mark hold pandoc\n  }", "cat <<EOF\napt-mark hold pandoc\nEOF")),
 )
 # --- end of the pandoc install reader ---------------------------------------------
 
@@ -2037,12 +2085,16 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
         report.gap("ci", f"{', '.join(other)}: pins pandoc {values[0]}, not the fleet's {PANDOC_PIN}")
     reasons = {
         "noncanonical": f"does not install pandoc {PANDOC_PIN} in the standard's shape: `if <download to FILE, with a "
-                        "time limit> && <sha256sum -c of FILE> && dpkg -i FILE; then ...; else <warn>; fi` in one "
-                        "script item, or the download, the `sha256sum -c` and the `dpkg -i` as three script items in "
-                        "that order, each one command or pipeline (design/fleet-standard.md)",
+                        "time limit> && <sha256sum -c of FILE> && dpkg -i FILE; then apt-mark hold pandoc; ...; else "
+                        "<warn>; fi` in one script item, or the download, the `sha256sum -c` and the `dpkg -i` as "
+                        "three script items in that order, each one command or pipeline, and `apt-mark hold pandoc` "
+                        "in an item after them (design/fleet-standard.md)",
         "unbounded": f"downloads pandoc {PANDOC_PIN} with no time limit (curl --max-time, with --retry-max-time "
                      "and no --retry-delay over 600 when it retries, or timeout(1) around curl or wget), so a stalled "
                      "download hangs the job instead of reaching the warn fallback",
+        "unheld": f"installs pandoc {PANDOC_PIN} without holding it, so a later apt step can replace it wherever "
+                  "apt's pandoc is newer; add `apt-mark hold pandoc` right after the `dpkg -i`, where only a "
+                  "successful install leads: in the `then` branch, or in a script item after the three",
     }
     for state, names in unverified.items():
         report.gap("ci", f"{', '.join(names)}: {reasons[state]}")
@@ -3637,12 +3689,13 @@ def self_test() -> list[str]:
         "        echo \"WARNING: pandoc ${PANDOC_VERSION} not installed\"\n"
         "      fi\n")
     expect_clean("pandoc installed in seor's shape", "punycoder", edit(cran, ci, pin_lines, seor_shape), fixture_state())
-    # SEOR-vzupmeqj. TODAY'S VERDICT: an install with no `apt-mark hold
-    # pandoc` passes, in either shape.
-    expect_clean("pandoc in seor's shape without the hold", "punycoder",
-                 edit(cran, ci, pin_lines, seor_shape.replace("        apt-mark hold pandoc\n", "")), fixture_state())
-    expect_clean("pandoc in three items without the hold", "punycoder",
-                 edit(cran, ci, "    - apt-mark hold pandoc\n", ""), fixture_state())
+    # SEOR-vzupmeqj. An install with no `apt-mark hold pandoc` is a gap of
+    # its own, in either shape.
+    unheld = "installs pandoc 3.10 without holding it"
+    expect_gap("pandoc in seor's shape without the hold", unheld, "punycoder",
+               edit(cran, ci, pin_lines, seor_shape.replace("        apt-mark hold pandoc\n", "")), fixture_state())
+    expect_gap("pandoc in three items without the hold", unheld, "punycoder",
+               edit(cran, ci, "    - apt-mark hold pandoc\n", ""), fixture_state())
     unbounded = "downloads pandoc 3.10 with no time limit"
     expect_gap("pandoc download with no time limit", unbounded, "punycoder",
                edit(cran, ci, "--max-time 120 ", ""), fixture_state())
