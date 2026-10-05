@@ -1795,8 +1795,8 @@ def expanded_pin_scopes(ci: CI) -> list[str]:
     mapping (`value:`, `description:`), block or flow: "the global
     `variables:`", or the block (a job or a template) whose own `variables:`
     hold it. Read from the parsed YAML: check-toolchain.R reads a plain
-    scalar only, and sees no pin in the block form and the pin
-    `{value: "3.10"}` in the flow form."""
+    scalar only; its own check stops on this form, and its
+    `--pandoc-assignments` prints no pin for it, nor where it sits."""
     scopes = []
     blocks = [("the global `variables:`", ci.data)] + [
         (str(name), block) for name, block in ci.data.items() if name not in RESERVED and isinstance(block, dict)]
@@ -1824,8 +1824,8 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
     `variables:` at run time, so with two values the one a job installs
     depends on where each sits; two are a gap, as they are an error to
     check-toolchain.R. GitLab's expanded form (`PANDOC_VERSION: {value:
-    ...}`, expanded_pin_scopes()) is a gap of its own, the one the misread
-    file gets: check-toolchain.R cannot read it, so the pin's value is not
+    ...}`, expanded_pin_scopes()) is a gap of its own, the one such a file
+    gets: check-toolchain.R refuses it, so the pin's value is not
     judged until it is rewritten, but whether each job sees the pin and how
     it installs pandoc still are. A job
     must also see the pin: a variable it gets (its own or a global one), or an
@@ -1871,10 +1871,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
             found = (pins or {}).get(ci.text)
             if found is None:
                 found = read_pandoc_assignments([ci.text])[ci.text]
-            # check-toolchain.R reads the flow form `{value: "3.10"}` as that
-            # text, and the block form as nothing; the expanded-form gap above
-            # covers both, and every other pin is still judged.
-            values = list(dict.fromkeys(value for _, value in found if not (expanded and value.startswith("{"))))
+            # check-toolchain.R prints no pin for the expanded form; the gap
+            # above covers it, and every other pin is still judged.
+            values = list(dict.fromkeys(value for _, value in found))
         except ProbeError as error:
             report.skip("ci", f"the pandoc pin was not read, only the install steps (probe failed: {error})", incomplete=True)
     if values and len(values) > 1:
@@ -3449,9 +3448,9 @@ def self_test() -> list[str]:
                fixture_state())
     # GitLab's expanded form, `PANDOC_VERSION: {value: …, description: …}`,
     # block or flow, global or a job's: check-toolchain.R reads a plain
-    # scalar only, so it sees no pin in the block form and the pin
-    # `{value: "3.10"}` in the flow form. One gap names the cause and where it
-    # sits, and the misreading adds none (SEOR-eodwtiqv).
+    # scalar only, stops on this form in its own check and prints no pin for
+    # it here (SEOR-zvnrwaku). One gap names the cause and where it sits, and
+    # no pin read from it adds another (SEOR-eodwtiqv).
     expanded = "sets PANDOC_VERSION in GitLab's expanded form (`value:`), which check-toolchain.R does not read"
 
     def expanded_alone(scope: str) -> Judge:
