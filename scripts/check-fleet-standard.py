@@ -56,7 +56,9 @@ WHAT IT CHECKS, by section of the standard.
   `src` is `man/figures/logo.png` and whose `alt` is "hex logo, white on black"
   (LOGO_ALT), without the package name the heading already says, and no
   aria-label, aria-labelledby, aria-hidden or role replaces or hides it. The
-  link-wrapped form usethis::use_logo() writes is accepted. The artwork itself
+  link-wrapped form usethis::use_logo() writes is accepted. Each dc:subject
+  bag in logo.svg holds exactly the keywords scripts/logo-metadata.py writes
+  from DESCRIPTION's X-schema.org-keywords, in its order. The artwork itself
   is not judged.
 * Files. The list in "Files every package carries", plus: LICENSE names Bart
   Turczynski as holder, LICENSE.md is the full MIT text, SECURITY.md and
