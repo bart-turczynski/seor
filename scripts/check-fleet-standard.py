@@ -2400,17 +2400,18 @@ def check_logo_metadata(pkg: str, source, report: Report) -> None:
     (SEOR-seobtecv). A drifted file's gap names its keywords when they differ
     from DESCRIPTION's X-schema.org-keywords (SEOR-uwpnkqnb). A missing
     logo.svg or DESCRIPTION, or a DESCRIPTION with no keywords, is reported
-    elsewhere; a missing logo.png leaves logo.svg judged alone, as --check
+    elsewhere; either logo file missing leaves the other judged alone, as --check
     does."""
     try:
         description = source.read("DESCRIPTION")
+        raw_description = source.read_bytes("DESCRIPTION")
         logos = {path: source.read_bytes(path) for path in LOGO_FILES}
     except ProbeError as error:
         report.skip("logo", f"could not read {' or '.join(LOGO_FILES)} or DESCRIPTION ({error}), "
                             "so the logo metadata is not judged", incomplete=True)
         return
     logos = {path: raw for path, raw in logos.items() if raw is not None}
-    if LOGO_FILES[0] not in logos or description is None:
+    if not logos or description is None or raw_description is None:
         return
     # logo-metadata.py reads DESCRIPTION as utf-8-sig.
     description = description.removeprefix("\ufeff")
@@ -2420,18 +2421,20 @@ def check_logo_metadata(pkg: str, source, report: Report) -> None:
     regenerate = (f"regenerate with seor's `python3 scripts/logo-metadata.py {pkg} <the {pkg} checkout>/man/figures`, "
                   "then commit both logo files")
     try:
-        want = lm.logo_keywords(pkg, description, "DESCRIPTION")
+        verdicts, broken = lm.check_logos(pkg, raw_description, {Path(path).name: raw for path, raw in logos.items()})
     except SystemExit as refusal:  # logo-metadata.py refuses this DESCRIPTION
-        report.gap("logo", f"{LOGO_FILES[0]}: keywords cannot be built from DESCRIPTION ({refusal.code})")
-        return
-    try:
-        verdicts = lm.check_logos(pkg, description, {Path(path).name: raw for path, raw in logos.items()})
-    except SystemExit as refusal:  # a file it cannot rewrite, such as a logo.png that is no PNG
         report.gap("logo", f"logo-metadata.py --check cannot judge the logo files ({refusal.code})")
         return
+    want = None
     for path, raw in logos.items():
-        if verdicts[Path(path).name] is None:
+        name = Path(path).name
+        if name in broken:  # a file it refuses or cannot parse, such as a logo.png that is no PNG
+            report.gap("logo", f"{path} cannot be judged by logo-metadata.py --check ({broken[name]}); {regenerate}")
             continue
+        if verdicts[name] is None:
+            continue
+        if want is None:
+            want = lm.logo_keywords(pkg, description, "DESCRIPTION")
         keywords = logo_keyword_gap(path, raw, want)
         what = keywords or f"{path} differs from what logo-metadata.py writes (its --check reports drift)"
         report.gap("logo", f"{what}; {regenerate}")
@@ -3018,7 +3021,7 @@ def fixture_logos(pkg: str, description: str) -> tuple[str, bytes]:
     """logo.svg (as text) and logo.png as logo-metadata.py writes them from
     `description`, on its own self-test artwork (TEST_SVG and test_png())."""
     lm = logo_metadata()
-    new = lm.check_logos(pkg, description, {"logo.svg": lm.TEST_SVG.encode("utf-8"), "logo.png": lm.test_png()})
+    new, _ = lm.check_logos(pkg, description, {"logo.svg": lm.TEST_SVG.encode("utf-8"), "logo.png": lm.test_png()})
     return new["logo.svg"].decode("utf-8"), new["logo.png"]
 
 
@@ -3335,10 +3338,48 @@ def self_test() -> list[str]:
     expect_gap("a logo.png whose tEXt Author was edited", "logo.png differs from what logo-metadata.py writes",
                "punycoder", edit(cran, png, b"Author\0Bart Turczynski", b"Author\0Bart Turczynsky"), fixture_state(),
                then=only_logo_gap(png))
-    expect_gap("a logo.png that is not a PNG", "cannot judge the logo files (logo-metadata: man/figures/logo.png is "
-               "not a PNG)", "punycoder", dict(cran, **{png: "x\n"}), fixture_state())
+    expect_gap("a logo.png that is not a PNG", "logo.png cannot be judged by logo-metadata.py --check "
+               "(logo-metadata: man/figures/logo.png is not a PNG)", "punycoder", dict(cran, **{png: "x\n"}),
+               fixture_state(), then=only_logo_gap(png))
     expect_gap("a truncated logo.png", "man/figures/logo.png cannot be parsed", "punycoder",
                dict(cran, **{png: cran[png][:10]}), fixture_state())
+
+    def logo_gaps(*paths: str) -> Judge:
+        def judge(report: Report) -> None:
+            logo = sorted(t.split(" ", 1)[0] for area, t in report.gaps if area == "logo")
+            if logo != sorted(paths):
+                failures.append(f"expected logo gaps on {sorted(paths)}, got {report.gaps}")
+        return judge
+
+    # A broken logo.png hides nothing: logo.svg's drift is still reported.
+    expect_gap("a logo.svg that drifted beside a logo.png that is not a PNG",
+               "logo.svg keywords differ from DESCRIPTION's X-schema.org-keywords", "punycoder",
+               dict(cran, **{"man/figures/logo.svg": old_svg, png: "x\n"}), fixture_state(),
+               then=logo_gaps("man/figures/logo.svg", png))
+    # Without logo.svg's verdict, logo.png (which names it) is not judged.
+    expect_gap("a logo.png beside a logo.svg that is not UTF-8", "logo.png cannot be judged by logo-metadata.py "
+               "--check (not judged without logo.svg's verdict)", "punycoder",
+               dict(cran, **{"man/figures/logo.svg": cran["man/figures/logo.svg"].encode() + b"\xff"}),
+               fixture_state())
+    expect_gap("a logo.svg that is not UTF-8", "logo.svg cannot be parsed (UnicodeDecodeError", "punycoder",
+               dict(cran, **{"man/figures/logo.svg": cran["man/figures/logo.svg"].encode() + b"\xff"}),
+               fixture_state(), then=logo_gaps("man/figures/logo.svg", png))
+
+    def short_logo_gaps(report: Report) -> None:
+        if any(len(t) > 600 for area, t in report.gaps if area == "logo"):
+            failures.append("a logo gap carries the file it could not parse")
+
+    expect_gap("a logo.svg that is not UTF-8, named in short", "UnicodeDecodeError", "punycoder",
+               dict(cran, **{"man/figures/logo.svg": cran["man/figures/logo.svg"].encode() + b"\xff"}),
+               fixture_state(), then=short_logo_gaps)
+    # With logo.svg missing, logo.png is judged alone, as --check judges it.
+    lone_png = dict(cran, **{png: old_png})
+    del lone_png["man/figures/logo.svg"]
+    expect_gap("a drifted logo.png with no logo.svg", "logo.png keywords differ", "punycoder", lone_png,
+               fixture_state())
+    # DESCRIPTION is judged as read: one that is not UTF-8 is refused, as --check refuses it.
+    expect_gap("a DESCRIPTION that is not UTF-8", "logo-metadata.py --check cannot judge the logo files", "punycoder",
+               dict(cran, DESCRIPTION=cran["DESCRIPTION"].encode() + b"Note: caf\xe9\n"), fixture_state())
 
     class UnreadablePng(DictSource):
         def read_bytes(self, path: str) -> bytes | None:
@@ -3366,9 +3407,9 @@ def self_test() -> list[str]:
                fixture_state())
     no_subject = dict(cran, **{svg: re.sub(r"<dc:subject>.*?</dc:subject>\n", "", cran[svg])})
     expect_gap("a logo.svg without keywords", "logo.svg has no keywords", "punycoder", no_subject, fixture_state())
-    expect_gap("a DESCRIPTION logo-metadata.py refuses", "keywords cannot be built from DESCRIPTION (logo-metadata: "
-               "DESCRIPTION tags fixture 'SEO'", "fixture", edit(fixture_repo("fixture"), "DESCRIPTION", "idn,", "idn, SEO,"),
-               fixture_state())
+    expect_gap("a DESCRIPTION logo-metadata.py refuses", "logo-metadata.py --check cannot judge the logo files "
+               "(logo-metadata: DESCRIPTION tags ssrfr 'SEO'", "ssrfr",
+               edit(fixture_repo("ssrfr"), "DESCRIPTION", "idn,", "idn, SEO,"), fixture_state())
     one_bag = dict(cran, **{svg: re.sub(r"<dc:subject>.*?</dc:subject>\n", "", cran[svg], count=1)})
     expect_gap("a logo.svg with one dc:subject bag", "(1 dc:subject bag(s) as logo-metadata.py writes them, not 2)",
                "punycoder", one_bag, fixture_state())
