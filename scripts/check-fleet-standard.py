@@ -1149,18 +1149,26 @@ def pandoc_assignments(text: str) -> tuple[tuple[int, str], ...]:
 # pandoc_install_state(entries) -> one of INSTALL_STATES ("noncanonical",
 # "unbounded", "installed"), with entries a job's script items as YAML hands
 # them over; check_pandoc_pin() is its caller. Inside: Shell (which the pin
-# reader after this section reuses), install_steps, dpkg_installs, shell_path,
-# path_tokens, stdout_redirect, download_target, download_bounded and the
-# regexes below. PANDOC_INSTALL_CASES, at the section's end, is its test:
-# shell items in, state out.
+# reader after this section reuses), within, if_conditions, install_steps,
+# dpkg_installs, shell_path, path_tokens, stdout_redirect, download_target,
+# check_reads, download_bounded and the regexes below. It borrows the pin
+# reader's shell_frames() and without_heredocs() to pair `if` with `fi`.
+# PANDOC_INSTALL_CASES, at the section's end, is its test: shell items in,
+# state out.
 PANDOC_DEB_URL_RE = re.compile(r"https?://github\.com/jgm/pandoc/releases/download/[^\s\"']+")
 # The install's three steps, each matched against the last command of its
 # pipeline, whose exit status is the pipeline's.
 DOWNLOAD_STAGE_RE = re.compile(r"^(?:timeout\s.*?\s)?(curl|wget)\s")
 SHA256_STAGE_RE = re.compile(r"^(?:sha256sum\b.*\s(?:-c|--check)\b|shasum\b.*-a\s*256\b.*\s(?:-c|--check)\b)")
 DPKG_STAGE_RE = re.compile(r"^dpkg\b.*\s(?:-i|--install)\s")
-# The one-item shape, read on a Shell mask: `if A && B && C; then …; else …; fi`.
-IF_INSTALL_RE = re.compile(r"(?:^|[;&|(\n]|\b(?:then|else|do)\b)\s*if\s(.*?)[;\n]\s*then\s.*?\belse\s.*?\bfi\b", re.S)
+# The one-item shape, `if A && B && C; then …; else …; fi`: in an `if` frame
+# (shell_frames()), the `then` that ends the condition and the `else`, both the
+# frame's own, not a nested compound command's.
+IF_THEN_RE = re.compile(r"[;\n][ \t\n]*then(?=[\s;]|$)")
+IF_ELSE_RE = re.compile(r"(?<![\w-])else(?=[\s;]|$)")
+# The digest line a check reads on stdin: a digest, a 64-hex literal or a
+# variable, then FILE (`echo "$PANDOC_SHA256  /tmp/pandoc.deb"`).
+DIGEST_LINE_RE = r"(?:(?<![\w$])[0-9a-fA-F]{64}|\$\w+|\$\{[^}\s]*\})[ \t]+\*?"
 # A download with no time limit hangs on a stalled CDN instead of failing into
 # the warn fallback. Every pattern of the tool must match; a limit of 0 means
 # none to curl, wget and timeout(1) alike. curl `--max-time`/`-m` (bundled
@@ -1211,6 +1219,35 @@ class Shell:
         return self.split(r"(?<!>)\|&?")[-1].text.strip()
 
 
+def within(at: int, frames: list[Frame]) -> bool:
+    """Whether a mask position falls inside any of these frames."""
+    return any(frame.start <= at < frame.end for frame in frames)
+
+
+def if_conditions(sh: Shell) -> list[Shell]:
+    """The condition of each `if … then … else … fi` in a script item, each
+    `if` paired with its own `fi` (shell_frames()), so an earlier `if … fi`
+    does not swallow a later block, and a block in a branch, a case arm or a
+    `{ }` group is found. Not one in a function's body, which runs only if
+    the function is called (SEOR-ltseyxpe)."""
+    mask = without_heredocs(sh)
+    frames = shell_frames(mask)
+    found = []
+    for frame in frames:
+        if frame.kind != "if" or mask[frame.end - 2:frame.end] != "fi":
+            continue
+        if any(other.function for other in frames if other.start <= frame.start and frame.end <= other.end):
+            continue
+        inner = [other for other in frames if other is not frame and frame.start < other.start < frame.end]
+        thens = [m for m in IF_THEN_RE.finditer(mask, frame.start, frame.end) if not within(m.start(), inner)]
+        if not thens or all(within(m.start(), inner) for m in IF_ELSE_RE.finditer(mask, thens[0].end(), frame.end)):
+            continue
+        then = thens[0]
+        start = frame.start + len("if")
+        found.append(Shell(sh.text[start:then.start()], sh.mask[start:then.start()]))
+    return found
+
+
 def install_steps(entries: list[str]) -> list[list[Shell]]:
     """The (download, check, install) candidates in a job's script items, in
     the standard's two shapes, each step one pipeline that runs only when the
@@ -1220,8 +1257,8 @@ def install_steps(entries: list[str]) -> list[list[Shell]]:
     shells = [Shell(entry) for entry in entries]
     found = []
     for sh in shells:
-        for m in IF_INSTALL_RE.finditer(sh.mask):
-            steps = Shell(sh.text[m.start(1):m.end(1)], sh.mask[m.start(1):m.end(1)]).split(r"&&")
+        for condition in if_conditions(sh):
+            steps = condition.split(r"&&")
             if len(steps) == 3 and all(step.simple() for step in steps):
                 found.append(steps)
     triples = zip(shells, shells[1:], shells[2:])
@@ -1291,6 +1328,19 @@ def download_target(command: str, url_vars: set[str]) -> tuple[str, str] | None:
     return (tool.group(1), shell_path(target)) if target else None
 
 
+def check_reads(step: Shell, path: str) -> bool:
+    """Whether a check step's `sha256sum -c` reads `path`'s digest: `path` is a
+    word of that last command, or the stage piped into it writes the digest
+    line `<digest>  path` (DIGEST_LINE_RE). A digest computed from the file in
+    the same pipeline, `sha256sum FILE | sha256sum -c -`, checks the file
+    against itself (SEOR-ltseyxpe)."""
+    stages = step.split(r"(?<!>)\|&?")
+    if path in path_tokens(stages[-1].text):
+        return True
+    return len(stages) > 1 and bool(re.search(rf"{DIGEST_LINE_RE}{re.escape(path)}(?![^\s;&|<>()])",
+                                              shell_path(stages[-2].text)))
+
+
 def download_bounded(tool: str, command: str) -> bool:
     return bool(TIMEOUT_WRAPPER_RE.search(command)) or all(p.search(command) for p in DOWNLOAD_BOUND_RE[tool])
 
@@ -1303,18 +1353,18 @@ def pandoc_install_state(entries: list[str]) -> str:
 
     `installed` needs one of install_steps()' shapes whose download saves the
     release to a file, whose `sha256sum -c` (or `shasum -a 256 -c`) names that
-    file or reads its digest from stdin beside it, and whose `dpkg -i`
-    installs it, and no other command installs that file. Paths compare as
-    whole words. That shape with a download that sets no time limit is
-    `unbounded`; anything else is `noncanonical` (SEOR-egfbijyi,
-    SEOR-xhyrogfm).
+    file or reads the digest line naming it from stdin (check_reads()), and
+    whose `dpkg -i` installs it, and no other command installs that file.
+    Paths compare as whole words. That shape with a download that sets no
+    time limit is `unbounded`; anything else is `noncanonical`
+    (SEOR-egfbijyi, SEOR-xhyrogfm, SEOR-ltseyxpe).
     """
     url_vars = set(re.findall(r"\b(\w+)=[\"']?https?://github\.com/jgm/pandoc/releases/download/", "\n".join(entries)))
     best = "noncanonical"
     for steps in install_steps(entries):
         download, check, install = (step.last_stage() for step in steps)
         saved = download_target(download, url_vars)
-        if (saved and SHA256_STAGE_RE.match(check) and saved[1] in path_tokens(steps[1].text)
+        if (saved and SHA256_STAGE_RE.match(check) and check_reads(steps[1], saved[1])
                 and DPKG_STAGE_RE.match(install) and saved[1] in path_tokens(install)
                 and dpkg_installs(entries, saved[1]) == 1):
             if download_bounded(saved[0], download):
@@ -1462,27 +1512,38 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
                         f"wget -q --timeout=60 -O /tmp/pandoc.deb {PANDOC_CASE_URL}",
                         f"wget -q --timeout=60 --tries=0 -O /tmp/pandoc.deb {PANDOC_CASE_URL}",
                         f"wget -q --timeout=60 --tries=20 -O /tmp/pandoc.deb {PANDOC_CASE_URL}")),
-    # SEOR-ltseyxpe, TODAY'S WRONG VERDICTS, pinned until the reader is fixed.
-    # A digest computed from the file itself checks nothing: the check must
-    # read FILE from the digest line fed to it, or name it.
-    ("WRONG TODAY: self-referential digest",
-     [PANDOC_CASE_DL, "sha256sum /tmp/pandoc.deb | sha256sum -c -", PANDOC_CASE_DPKG], "installed"),
-    ("WRONG TODAY: self-referential digest echoed through $(…)",
-     [PANDOC_CASE_DL, "echo \"$(sha256sum /tmp/pandoc.deb)\" | sha256sum -c -", PANDOC_CASE_DPKG], "installed"),
-    ("WRONG TODAY: self-referential digest inside the if",
+    # SEOR-ltseyxpe. A digest computed from the file itself checks nothing: the
+    # check names FILE, or reads it from the digest line fed to it.
+    ("self-referential digest",
+     [PANDOC_CASE_DL, "sha256sum /tmp/pandoc.deb | sha256sum -c -", PANDOC_CASE_DPKG], "noncanonical"),
+    ("self-referential digest echoed through $(…)",
+     [PANDOC_CASE_DL, "echo \"$(sha256sum /tmp/pandoc.deb)\" | sha256sum -c -", PANDOC_CASE_DPKG], "noncanonical"),
+    ("self-referential digest inside the if",
      [pandoc_case_if(f"{PANDOC_CASE_DL} && sha256sum /tmp/pandoc.deb | sha256sum -c - && {PANDOC_CASE_DPKG}")],
+     "noncanonical"),
+    ("digest line written by printf",
+     [PANDOC_CASE_DL, "printf '%s  %s\\n' \"$PANDOC_SHA256\" /tmp/pandoc.deb | sha256sum -c -", PANDOC_CASE_DPKG],
      "installed"),
-    # `if` pairs with its own `fi`: an earlier if…fi does not swallow the
-    # install block, and a block nested in a branch, a case arm or a group is found.
-    ("WRONG TODAY: an else-less if…fi before the block",
-     ["if [ -n \"$CI\" ]; then echo ci; fi\n" + PANDOC_CASE_ONE_LINE + "\n"], "noncanonical"),
-    ("WRONG TODAY: the block nested in another if",
-     [f"if true; then\n  {PANDOC_CASE_ONE_LINE}\nfi\n"], "noncanonical"),
-    ("WRONG TODAY: the block in a case arm",
-     [f"case \"$ARCH\" in\n  amd64) {PANDOC_CASE_ONE_LINE} ;;\nesac\n"], "noncanonical"),
-    ("WRONG TODAY: the block in a { } group", [f"{{ {PANDOC_CASE_ONE_LINE}; }}"], "noncanonical"),
-    # Right today, and staying so: a block in a function's body runs only if it is called.
+    ("digest line in a here-string",
+     [PANDOC_CASE_DL, "sha256sum -c <<< \"${PANDOC_SHA256}  /tmp/pandoc.deb\"", PANDOC_CASE_DPKG], "installed"),
+    # SEOR-ltseyxpe. `if` pairs with its own `fi`: an earlier if…fi does not
+    # swallow the install block, a block nested in a branch, a case arm or a
+    # group is found, and an `else` belongs to its own `if`.
+    ("an else-less if…fi before the block",
+     ["if [ -n \"$CI\" ]; then echo ci; fi\n" + PANDOC_CASE_ONE_LINE + "\n"], "installed"),
+    ("the block nested in another if", [f"if true; then\n  {PANDOC_CASE_ONE_LINE}\nfi\n"], "installed"),
+    ("the block in a case arm", [f"case \"$ARCH\" in\n  amd64) {PANDOC_CASE_ONE_LINE} ;;\nesac\n"], "installed"),
+    ("the block in a { } group", [f"{{ {PANDOC_CASE_ONE_LINE}; }}"], "installed"),
+    ("an else only in an if nested in the block's branch",
+     [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then\n"
+      "  if true; then echo ok; else echo no; fi\nfi\n"], "noncanonical"),
+    # A block in a function's body runs only if the function is called.
     ("the block in a function's body", [f"install_pandoc() {{ {PANDOC_CASE_ONE_LINE}; }}"], "noncanonical"),
+    # OPEN (SEOR-ltseyxpe item 3, flagged): today's verdict, which the standard
+    # does not settle. curl's --max-time bounds one attempt, and nothing caps
+    # --retry here.
+    ("curl with --max-time and an uncapped --retry",
+     [PANDOC_CASE_DL.replace("--retry 3", "--retry 100"), PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed"),
 )
 # --- end of the pandoc install reader ---------------------------------------------
 
