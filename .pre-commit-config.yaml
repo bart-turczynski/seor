@@ -90,6 +90,25 @@ repos:
         pass_filenames: false
         files: ^scripts/check-citation-nonr\.py$
         stages: [pre-push]
+      # logo-metadata.py writes the fleet's logo metadata, keywords copied from
+      # DESCRIPTION's X-schema.org-keywords (SEOR-qoqmestu). Its offline
+      # self-test runs when the script changes; --check fails when seor's own
+      # logo has drifted from DESCRIPTION, so an edit to the keywords without
+      # regenerating the logo does not pass (SEOR-zgsfwyjk).
+      - id: logo-metadata-self-test
+        name: logo-metadata self-test
+        entry: python3 scripts/logo-metadata.py --self-test
+        language: system
+        pass_filenames: false
+        files: ^scripts/logo-metadata\.py$
+        stages: [pre-push]
+      - id: logo-metadata-check
+        name: logo-metadata check (seor's logo matches DESCRIPTION)
+        entry: python3 scripts/logo-metadata.py --check seor man/figures
+        language: system
+        pass_filenames: false
+        files: ^(DESCRIPTION|man/figures/logo\.(svg|png)|scripts/logo-metadata\.py)$
+        stages: [pre-push]
       # check-fleet-standard.py tests a fleet package against
       # design/fleet-standard.md and reads GitLab and the web, so the hook runs
       # only its offline self-test (fixtures inline), and only when the script
