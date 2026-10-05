@@ -144,9 +144,10 @@ def parse_dcf(text: str, where: str) -> dict[str, str]:
 def check_seo(pkg: str, tags: list[str], where: str) -> None:
     """The tag "seo" marks seor and its members only (owner, 2026-10-05: ssrfr
     is not an SEO tool). One way only: a member need not carry it."""
-    if pkg != HUB and pkg not in MEMBERS and any(t.casefold() == "seo" for t in tags):
-        sys.exit(f"logo-metadata: {where} tags {pkg} 'seo', but {pkg} is neither {HUB} nor a {HUB} member; "
-                 f"remove 'seo' from its {KEYWORD_FIELD}")
+    found = [t for t in tags if t.casefold() == "seo"]
+    if pkg != HUB and pkg not in MEMBERS and found:
+        sys.exit(f"logo-metadata: {where} tags {pkg} {found[0]!r}, but {pkg} is neither {HUB} nor a {HUB} member; "
+                 f"remove it from {KEYWORD_FIELD}")
 
 
 def logo_keywords(pkg: str, text: str, where: str) -> list[str]:
@@ -661,7 +662,7 @@ def self_test() -> int:
     expect("member with seo", "seo" in kw("pagerankr", "pagerank, seo"))
     for tag in ("seo", "SEO", "Seo"):
         expect(f"{tag} on a non-member refused",
-               exits_with(lambda: kw("ssrfr", f"ssrf, {tag}"), "ssrfr is neither seor nor a seor member"))
+               exits_with(lambda: kw("ssrfr", f"ssrf, {tag}"), f"{tag!r}, but ssrfr is neither seor nor a seor member"))
     expect("a tag merely containing seo", "technical-seo" in kw("ssrfr", "ssrf, technical-seo"))
 
     # Keyword output, read back from rendered files.
