@@ -2687,6 +2687,12 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report, 
         report.gap("ci", "no fossa analyze job")
 
 
+@cache
+def seor_docs_drift() -> str:
+    """seor's scripts/check-docs-drift.R, the copy beside this script, read once."""
+    return Path(__file__).resolve().with_name("check-docs-drift.R").read_text(encoding="utf-8", errors="replace")
+
+
 def check_local_gate(source, report: Report) -> None:
     text = source.read(".pre-commit-config.yaml")
     if text is None:
@@ -3005,6 +3011,8 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
         "scripts/check-citation.py": "print('ok')\n",
         ".gitlab/issue_templates/Bug.md": "x\n",
         ".gitlab/merge_request_templates/Default.md": "x\n",
+        # The docs-drift check every member vendors: seor's, byte for byte.
+        "scripts/check-docs-drift.R": seor_docs_drift(),
     })
     # logo.svg and logo.png as logo-metadata.py writes them from the
     # DESCRIPTION above. A package it does not know gets placeholders.
@@ -4102,6 +4110,19 @@ def self_test() -> list[str]:
                          "scripts/docs-drift.sh": "git archive -o \"$d/e.tar\" \"$ref\"\nRscript scripts/check-docs-drift.R \"$d\"\n",
                          "scripts/check-docs-drift.R": "roxygen2::roxygenize(pkg)\n"}),
                  fixture_state())
+    # check-docs-drift.R is vendored (SEOR-lyciowif): every member carries
+    # seor's copy, byte for byte. The fixture carries it.
+    docs_drift = "scripts/check-docs-drift.R"
+    if cran[docs_drift] != seor_docs_drift():
+        failures.append("the fixture's check-docs-drift.R is not seor's copy")
+    expect_clean("a member's check-docs-drift.R identical to seor's", "punycoder", cran, fixture_state())
+    # PIN (today's verdict): a drifted copy and a missing one both pass.
+    expect_clean("a member's check-docs-drift.R drifted from seor's (today: no gap)", "punycoder",
+                 dict(cran, **{docs_drift: cran[docs_drift] + "# a local edit\n"}), fixture_state())
+    expect_clean("a member's check-docs-drift.R identical to seor's but for CRLF line endings", "punycoder",
+                 dict(cran, **{docs_drift: cran[docs_drift].replace("\n", "\r\n")}), fixture_state())
+    expect_clean("no scripts/check-docs-drift.R (today: no gap)", "punycoder",
+                 {k: v for k, v in cran.items() if k != docs_drift}, fixture_state())
     no_local_pandoc = "no check that compares the local rmarkdown::pandoc_version() with the CI pin (PANDOC_VERSION, 3.10)"
     expect_gap("local pandoc check missing", no_local_pandoc, "punycoder",
                dict(cran, **{"scripts/check-toolchain.R": "# pandoc_version() is only mentioned here\nx <- 1\n"}),

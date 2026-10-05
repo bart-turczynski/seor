@@ -40,8 +40,208 @@
 # applied and only needs committing. Run by scripts/docs-drift.sh, the
 # regenerated files are in a throwaway export, so the working tree is never
 # touched.
+#
+# Self-test: Rscript scripts/check-docs-drift.R --self-test
+
+# --- self-test ---------------------------------------------------------------
+#
+# Runs this script, as its own process, against a throwaway fixture package:
+# docs missing, in sync, changed and stale, with git on PATH and without it.
+# It needs roxygen2 (any version: the fixture pins the installed one) and
+# nothing else.
+
+# The path of this script, as Rscript was given it.
+self_test_script <- function() {
+  file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  normalizePath(sub("^--file=", "", file_arg[[1L]]))
+}
+
+# A directory of links to every program on PATH except git, so a run with it
+# as its whole PATH sees a machine with no git, as on a CI image that ships
+# none (rocker/r-ver).
+path_without_git <- function() {
+  bin <- tempfile("docs-drift-no-git-")
+  dir.create(bin)
+  dirs <- strsplit(Sys.getenv("PATH"), .Platform$path.sep, fixed = TRUE)[[1L]]
+  dirs <- unique(dirs[nzchar(dirs) & dir.exists(dirs)])
+  progs <- unlist(lapply(dirs, list.files, full.names = TRUE))
+  progs <- progs[!dir.exists(progs)]
+  progs <- progs[!duplicated(basename(progs)) & basename(progs) != "git"]
+  file.symlink(progs, file.path(bin, basename(progs)))
+  bin
+}
+
+fixture_package <- function(roxygen_version) {
+  pkg <- tempfile("docs-drift-fixture-")
+  dir.create(file.path(pkg, "R"), recursive = TRUE)
+  writeLines(
+    c(
+      "Package: docsdriftfixture",
+      "Title: Docs-Drift Self-Test Fixture",
+      "Version: 0.0.1",
+      "Description: A fixture.",
+      "License: MIT",
+      "Encoding: UTF-8",
+      paste0("Config/roxygen2/version: ", roxygen_version)
+    ),
+    file.path(pkg, "DESCRIPTION")
+  )
+  writeLines(
+    c(
+      "#' Add one",
+      "#'",
+      "#' @param x A number.",
+      "#' @return x plus one.",
+      "#' @export",
+      "f <- function(x) x + 1"
+    ),
+    file.path(pkg, "R", "f.R")
+  )
+  pkg
+}
+
+copy_package <- function(pkg) {
+  dest <- tempfile("docs-drift-case-")
+  dir.create(dest)
+  file.copy(list.files(pkg, full.names = TRUE), dest, recursive = TRUE)
+  dest
+}
+
+edit_lines <- function(path, from, to) {
+  writeLines(sub(from, to, readLines(path), fixed = TRUE), path)
+}
+
+# Run this script on `pkg` in its own process, with `path` as its PATH.
+run_check <- function(script, pkg, path = Sys.getenv("PATH")) {
+  out <- suppressWarnings(system2(
+    file.path(R.home("bin"), "Rscript"),
+    c(shQuote(script), shQuote(pkg)),
+    stdout = TRUE,
+    stderr = TRUE,
+    env = paste0("PATH=", shQuote(path))
+  ))
+  status <- attr(out, "status")
+  list(status = if (is.null(status)) 0L else status, out = out)
+}
+
+self_test <- function() {
+  if (!requireNamespace("roxygen2", quietly = TRUE)) {
+    stop("The self-test runs roxygen2, which is not installed.", call. = FALSE)
+  }
+  script <- self_test_script()
+  no_git <- path_without_git()
+  check <- function(tag, ok, res = NULL) {
+    message(if (ok) "ok    " else "FAIL  ", tag)
+    if (!ok && !is.null(res)) {
+      message(paste0("      | ", res$out, collapse = "\n"))
+    }
+    stats::setNames(ok, tag)
+  }
+  has <- function(res, lines) all(lines %in% res$out)
+  no_diff <- function(res) !any(startsWith(res$out, "diff --git "))
+
+  base <- fixture_package(as.character(utils::packageVersion("roxygen2")))
+
+  # Added: nothing roxygen generates is there yet. The run regenerates in
+  # place, which leaves `base` in sync for the cases below.
+  added <- run_check(script, base, no_git)
+  in_sync <- run_check(script, base)
+
+  changed_pkg <- copy_package(base)
+  edit_lines(file.path(changed_pkg, "R", "f.R"), "Add one", "Add two")
+  changed_git_pkg <- copy_package(changed_pkg)
+  changed <- run_check(script, changed_pkg, no_git)
+  changed_git <- run_check(script, changed_git_pkg)
+
+  # Deleted: an Rd roxygen generated once, for a topic R/ no longer has.
+  stale_pkg <- copy_package(base)
+  rd <- readLines(file.path(stale_pkg, "man", "f.Rd"))
+  writeLines(
+    sub("{f}", "{g}", rd, fixed = TRUE),
+    file.path(stale_pkg, "man", "g.Rd")
+  )
+  stale <- run_check(script, stale_pkg, no_git)
+
+  verdicts <- c(
+    check(
+      "the no-git PATH has no git",
+      !file.exists(file.path(no_git, "git"))
+    ),
+    check(
+      "added, no git: exits 1, NAMESPACE and man/f.Rd listed as missing",
+      added$status == 1L &&
+        has(
+          added,
+          c(
+            "  Missing (roxygen would create) (2):",
+            "    NAMESPACE",
+            "    man/f.Rd"
+          )
+        ) &&
+        no_diff(added),
+      added
+    ),
+    check(
+      "in sync: exits 0 and says so",
+      in_sync$status == 0L && any(startsWith(in_sync$out, "Docs in sync")),
+      in_sync
+    ),
+    check(
+      "changed, no git: exits 1, man/f.Rd listed as changed",
+      changed$status == 1L &&
+        has(changed, c("  Changed (1):", "    man/f.Rd")) &&
+        no_diff(changed),
+      changed
+    ),
+    check(
+      "deleted, no git: exits 1, man/g.Rd listed as stale",
+      stale$status == 1L &&
+        has(stale, c("  Stale (roxygen would delete) (1):", "    man/g.Rd")) &&
+        no_diff(stale),
+      stale
+    ),
+    check(
+      "changed, with git: exits 1 and prints the diff, paths package-relative",
+      nzchar(Sys.which("git")[[1L]]) &&
+        changed_git$status == 1L &&
+        has(
+          changed_git,
+          c(
+            "--- committed/man/f.Rd",
+            "+++ regenerated/man/f.Rd",
+            "-\\title{Add one}",
+            "+\\title{Add two}"
+          )
+        ),
+      changed_git
+    ),
+    # PIN (today's verdict): with no git the report does not say the diff
+    # was left out.
+    check(
+      "no git: the report does not say the diff was omitted (today)",
+      !any(grepl("diff is omitted", changed$out, fixed = TRUE)),
+      changed
+    )
+  )
+  if (all(verdicts)) {
+    message(sprintf(
+      "check-docs-drift self-test: %d checks ok",
+      length(verdicts)
+    ))
+    return(0L)
+  }
+  message(sprintf(
+    "check-docs-drift self-test: %d of %d checks FAILED",
+    sum(!verdicts),
+    length(verdicts)
+  ))
+  1L
+}
 
 args <- commandArgs(trailingOnly = TRUE)
+if (identical(args, "--self-test")) {
+  quit(status = self_test())
+}
 pkg <- if (length(args) > 0L) args[[1L]] else "."
 
 desc_path <- file.path(pkg, "DESCRIPTION")
