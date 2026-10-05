@@ -426,6 +426,10 @@ citation-version:
     # rides here rather than taking a runner slot of its own.
     - python3 scripts/check-bugreports.py --self-test
     - python3 scripts/check-bugreports.py
+    # The logo's metadata against DESCRIPTION (SEOR-zgsfwyjk): the same
+    # offline, stdlib-only shape, the pre-push hooks' twin.
+    - python3 scripts/logo-metadata.py --self-test
+    - python3 scripts/logo-metadata.py --check seor man/figures
 
 # The cheap gates in one job, per design/adr/0005: README drift, spelling and
 # news-version, run by scripts/gates.sh, which runs every gate and then names
