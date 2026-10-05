@@ -1948,11 +1948,63 @@ def tag_attrs(tag: str) -> dict[str, str | None]:
     return found
 
 
+_LOGO_METADATA: dict[str, object] = {}
+
+
+def logo_metadata():
+    """scripts/logo-metadata.py as a module (its name has a hyphen), loaded
+    once: its keyword rule and its dc:subject reader are the only copies."""
+    if "module" not in _LOGO_METADATA:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("logo_metadata", Path(__file__).with_name("logo-metadata.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _LOGO_METADATA["module"] = module
+    return _LOGO_METADATA["module"]
+
+
+def check_logo_keywords(pkg: str, source, report: Report) -> None:
+    """logo.svg's dc:subject bags hold exactly the keywords logo-metadata.py
+    would write from DESCRIPTION's X-schema.org-keywords (SEOR-uwpnkqnb). A
+    missing logo.svg or DESCRIPTION is reported elsewhere."""
+    svg_path = LOGO_FILES[0]
+    svg, description = source.read(svg_path), source.read("DESCRIPTION")
+    if svg is None or description is None:
+        return
+    lm = logo_metadata()
+    regenerate = f"regenerate: python3 scripts/logo-metadata.py {pkg} man/figures"
+    try:
+        want = lm.logo_keywords(pkg, description, "DESCRIPTION")
+    except SystemExit as refusal:  # logo-metadata.py refuses this DESCRIPTION
+        report.gap("logo", f"{svg_path}: keywords cannot be built from DESCRIPTION ({refusal.code})")
+        return
+    bags = lm.read_svg_subjects(svg)
+    if not bags:
+        report.gap("logo", f"{svg_path} has no keywords (no dc:subject bag as logo-metadata.py writes it); "
+                           + regenerate)
+        return
+    drift = []
+    for found in bags:
+        if found == want:
+            continue
+        missing = [k for k in want if k not in found]
+        extra = [k for k in found if k not in want]
+        parts = ([f"missing {', '.join(missing)}"] if missing else []) + ([f"extra {', '.join(extra)}"] if extra else [])
+        text = "; ".join(parts) or "the same tags in another order or repeated"
+        if text not in drift:
+            drift.append(text)
+    if drift:
+        report.gap("logo", f"{svg_path} keywords differ from DESCRIPTION's X-schema.org-keywords "
+                           f"({' | '.join(drift)}); {regenerate}")
+
+
 def check_logo(pkg: str, source, report: Report) -> None:
     tree = source.tree()
     for path in LOGO_FILES:
         if path not in tree:
             report.gap("logo", f"missing {path}")
+    check_logo_keywords(pkg, source, report)
     text = source.read("README.Rmd")
     if text is None:
         return
@@ -2755,6 +2807,23 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     expect_clean("logo keywords match DESCRIPTION", "punycoder", cran, fixture_state())
     expect_clean("a case-only duplicate tag in DESCRIPTION is not drift", "punycoder",
                  edit(cran, "DESCRIPTION", "domain-names\n", "domain-names, IDNA\n"), fixture_state())
+    svg = "man/figures/logo.svg"
+    expect_gap("a DESCRIPTION keyword edited without regenerating the logo",
+               "logo.svg keywords differ from DESCRIPTION's X-schema.org-keywords (missing domains; extra domain-names)",
+               "punycoder", edit(cran, "DESCRIPTION", "domain-names\n", "domains\n"), fixture_state())
+    expect_gap("a logo tag edited by hand", "(missing unicode; extra Unicode)", "punycoder",
+               edit(cran, svg, "<rdf:li>unicode</rdf:li>", "<rdf:li>Unicode</rdf:li>"), fixture_state())
+    expect_gap("logo tags reordered", "(the same tags in another order", "punycoder",
+               edit(cran, svg, "<rdf:li>idna</rdf:li><rdf:li>idn</rdf:li>", "<rdf:li>idn</rdf:li><rdf:li>idna</rdf:li>"),
+               fixture_state())
+    no_subject = dict(cran, **{svg: re.sub(r"<dc:subject>.*?</dc:subject>\n", "", cran[svg])})
+    expect_gap("a logo.svg without keywords", "logo.svg has no keywords", "punycoder", no_subject, fixture_state())
+    expect_gap("a DESCRIPTION logo-metadata.py refuses", "keywords cannot be built from DESCRIPTION (logo-metadata: "
+               "DESCRIPTION tags fixture 'SEO'", "fixture", edit(fixture_repo("fixture"), "DESCRIPTION", "idn,", "idn, SEO,"),
+               fixture_state())
+    report = run("punycoder", no_svg, fixture_state())
+    if collect is None and sum("logo.svg" in t for _, t in report.gaps) != 1:
+        failures.append(f"no logo.svg: expected the one missing-file gap, got {report.gaps}")
     expect_gap("no level-1 heading", "the first heading is not", "punycoder",
                edit(cran, "README.Rmd", fixture_h1("punycoder") + "\n", ""), fixture_state())
     expect_clean("single-quoted logo src", "punycoder",
