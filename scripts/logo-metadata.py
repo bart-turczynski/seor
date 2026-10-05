@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# logo-metadata v2 (SEOR-eyfiidrv)
+# logo-metadata v3 (SEOR-eyfiidrv; keywords from DESCRIPTION, SEOR-qoqmestu)
 """Write the fleet's logo metadata into man/figures/logo.svg and logo.png.
 
 WHY THIS EXISTS. The owner's artwork (SEOR-wxjuxbtu) came with a one-shot
@@ -7,7 +7,7 @@ finalize-logos.R that only restored a Dublin Core block. The owner then asked
 for every link (GitLab, the origin; GitHub, the mirror most users reach; CRAN,
 where every package will be), a screen-reader description, and every field
 the two formats can carry (2026-10-05). This script owns that metadata: it
-rebuilds it from the table below, in place, and leaves the artwork alone. The
+rebuilds it from the table below and the package's DESCRIPTION, in place, and leaves the artwork alone. The
 SVG drawing and the PNG pixel data (IDAT) come out byte-identical; rerunning it
 on its own output changes nothing.
 
@@ -22,9 +22,28 @@ Two limits found while checking the specs, which shape the output:
   a typeset name on a background, made in Claude Design for its metadata
   export, not media whose origin could mislead anyone.
 
+KEYWORDS come from the package's DESCRIPTION, never from this script
+(SEOR-qoqmestu): its X-schema.org-keywords field, the one r-universe indexes,
+is the single source. A second list here drifted from it, which is how "SEO"
+reached ssrfr's logo. The DESCRIPTION read is <figures>/../../DESCRIPTION,
+the repository root for man/figures, unless --description names another;
+there is no walking up, so a figures directory outside a repository (the
+owner's export) needs --description. Its Package: must match <pkg>.
+The tags are written verbatim, after the fixed prefix "R", "rstats",
+"R package": image keywords are not r-universe topics, so the prefix names
+the language. Verbatim means no hyphen-to-space rewrite, which would mangle
+tags such as UTS-46, inet-pton and eTLD+1; only a line break inside a tag
+(a DCF continuation) becomes one space. Duplicates are dropped
+case-insensitively, keeping the first occurrence and the order. The script
+exits, writing nothing, when the field is missing or empty, and when a
+package that is neither seor nor a seor member carries the tag "seo" (any
+case): SEO marks seor and its members only (owner, 2026-10-05). A member
+without it is fine.
+
 Usage:
   python3 scripts/logo-metadata.py <pkg> <man/figures dir>          # rewrite
   python3 scripts/logo-metadata.py --check <pkg> <man/figures dir>  # exit 1 on drift
+  python3 scripts/logo-metadata.py --description PATH <pkg> <dir>   # DESCRIPTION elsewhere
   python3 scripts/logo-metadata.py --self-test                      # offline, no files touched
 
 It handles logo.svg, logo.png and, when present, logo-print.svg and
@@ -69,61 +88,103 @@ MASTER = "logo.svg"  # the vector original; the other files are renditions of it
 FLEET_NS = uuid.uuid5(uuid.NAMESPACE_URL, "https://gitlab.com/bart-turczynski/seor#logo-ids")
 PLACEHOLDER = "uuid:00000000-0000-0000-0000-000000000000"
 
-# pkg: (what the library is, keywords, Zenodo concept DOI or None)
+# pkg: (what the library is, Zenodo concept DOI or None). Keywords come from
+# each package's DESCRIPTION (see the docstring).
 PACKAGES = {
-    "seor": ("SEO library for R",
-             ["R", "rstats", "R package", "SEO", "SEO toolkit", "metapackage"],
-             "10.5281/zenodo.23136687"),
-    "rurl": ("URL library for R",
-             ["R", "rstats", "R package", "SEO", "URL", "URL parsing", "URL normalization"],
-             "10.5281/zenodo.20972584"),
-    "punycoder": ("Punycode library for R",
-                  ["R", "rstats", "R package", "SEO", "Punycode", "IDNA",
-                   "internationalized domain names"],
-                  "10.5281/zenodo.20973629"),
-    "pslr": ("Public Suffix List library for R",
-             ["R", "rstats", "R package", "SEO", "Public Suffix List", "domains", "eTLD"],
-             "10.5281/zenodo.20973660"),
-    "raddr": ("IP address library for R",
-              ["R", "rstats", "R package", "SEO", "IP address", "IPv4", "IPv6"],
-              None),
-    "pagerankr": ("PageRank library for R",
-                  ["R", "rstats", "R package", "SEO", "PageRank", "link graph", "link analysis"],
-                  "10.5281/zenodo.23046334"),
-    "robotstxtr": ("robots.txt library for R",
-                   ["R", "rstats", "R package", "SEO", "robots.txt", "crawler",
-                    "Robots Exclusion Protocol"],
-                   "10.5281/zenodo.23018995"),
-    "sitemapr": ("XML sitemap library for R",
-                 ["R", "rstats", "R package", "SEO", "XML sitemap", "sitemaps", "crawling"],
-                 None),
-    "ssrfr": ("SSRF protection library for R",
-              ["R", "rstats", "R package", "SSRF", "server-side request forgery", "security"],
-              None),
+    "seor": ("SEO library for R", "10.5281/zenodo.23136687"),
+    "rurl": ("URL library for R", "10.5281/zenodo.20972584"),
+    "punycoder": ("Punycode library for R", "10.5281/zenodo.20973629"),
+    "pslr": ("Public Suffix List library for R", "10.5281/zenodo.20973660"),
+    "raddr": ("IP address library for R", None),
+    "pagerankr": ("PageRank library for R", "10.5281/zenodo.23046334"),
+    "robotstxtr": ("robots.txt library for R", "10.5281/zenodo.23018995"),
+    "sitemapr": ("XML sitemap library for R", None),
+    "ssrfr": ("SSRF protection library for R", None),
 }
 HUB = "seor"
 REPO_FILES = ("logo.svg", "logo.png")
 # seor's members: DESCRIPTION Imports plus robotstxtr in Suggests (ARCHITECTURE.md).
 # ssrfr is a fleet package but not a seor member.
 MEMBERS = ("rurl", "punycoder", "pslr", "raddr", "pagerankr", "sitemapr", "robotstxtr")
+KEYWORD_FIELD = "X-schema.org-keywords"
+KEYWORD_PREFIX = ("R", "rstats", "R package")  # names the language; see the docstring
 
 
-def check_seo(packages: dict) -> None:
-    """"SEO" marks seor and its members only (owner, 2026-10-05: ssrfr is not an SEO tool)."""
-    for pkg, (_what, keywords, _doi) in packages.items():
-        if ("SEO" in keywords) != (pkg == HUB or pkg in MEMBERS):
-            sys.exit(f"logo-metadata: 'SEO' belongs in the keywords of seor and its members only ({pkg})")
+# --- keywords from DESCRIPTION -------------------------------------------------
+
+def parse_dcf(text: str, where: str) -> dict[str, str]:
+    """One DCF record, as R's read.dcf() reads a DESCRIPTION: "Field: value",
+    continued on lines that start with whitespace. Continuation lines join with
+    a newline; comment lines (#) are skipped, as R 4.6 does."""
+    fields: dict[str, str] = {}
+    last = None
+    lines = text.splitlines()
+    for n, line in enumerate(lines, 1):
+        if line.startswith("#"):
+            continue
+        if not line.strip():
+            if any(rest.strip() for rest in lines[n:]):
+                sys.exit(f"logo-metadata: {where}:{n}: a blank line inside the record; expected one DCF record")
+            break
+        if line[0] in " \t":
+            if last is None:
+                sys.exit(f"logo-metadata: {where}:{n}: a continuation line before any field")
+            fields[last] += "\n" + line.strip()
+            continue
+        m = re.match(r"([^\s:]+):(.*)$", line)
+        if not m:
+            sys.exit(f"logo-metadata: {where}:{n}: not a DCF line: {line!r}")
+        last = m.group(1)
+        if last in fields:
+            sys.exit(f"logo-metadata: {where}:{n}: field {last} appears twice")
+        fields[last] = m.group(2).strip()
+    return fields
 
 
-check_seo(PACKAGES)
+def check_seo(pkg: str, tags: list[str], where: str) -> None:
+    """The tag "seo" marks seor and its members only (owner, 2026-10-05: ssrfr
+    is not an SEO tool). One way only: a member need not carry it."""
+    if pkg != HUB and pkg not in MEMBERS and any(t.casefold() == "seo" for t in tags):
+        sys.exit(f"logo-metadata: {where} tags {pkg} 'seo', but {pkg} is neither {HUB} nor a {HUB} member; "
+                 f"remove 'seo' from its {KEYWORD_FIELD}")
+
+
+def logo_keywords(pkg: str, text: str, where: str) -> list[str]:
+    """KEYWORD_PREFIX plus the DESCRIPTION's tags, verbatim, de-duplicated
+    case-insensitively (first occurrence kept, order kept)."""
+    fields = parse_dcf(text, where)
+    if fields.get("Package") != pkg:
+        sys.exit(f"logo-metadata: {where} is the DESCRIPTION of {fields.get('Package')!r}, not {pkg!r}")
+    # A line break inside a tag is layout, not content: it becomes one space.
+    tags = [" ".join(t.split()) for t in fields.get(KEYWORD_FIELD, "").split(",")]
+    tags = [t for t in tags if t]
+    if not tags:
+        sys.exit(f"logo-metadata: {where} has no {KEYWORD_FIELD} (or it is empty); "
+                 "the logo keywords come from it, so add the field first")
+    check_seo(pkg, tags, where)
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for k in (*KEYWORD_PREFIX, *tags):
+        if k.casefold() not in seen:
+            seen.add(k.casefold())
+            keywords.append(k)
+    for k in keywords:
+        try:
+            k.encode("latin-1")  # the PNG tEXt Keywords chunk is Latin-1
+        except UnicodeEncodeError:
+            sys.exit(f"logo-metadata: {where}: the tag {k!r} is not Latin-1, which PNG tEXt requires")
+    return keywords
 
 
 class Facts:
-    def __init__(self, pkg: str) -> None:
+    def __init__(self, pkg: str, description: Path) -> None:
         if pkg not in PACKAGES:
             sys.exit(f"logo-metadata: unknown package {pkg!r}; known: {', '.join(PACKAGES)}")
+        if not description.is_file():
+            sys.exit(f"logo-metadata: no DESCRIPTION at {description}; name one with --description")
         self.pkg = pkg
-        self.what, self.keywords, doi = PACKAGES[pkg]
+        self.what, doi = PACKAGES[pkg]
+        self.keywords = logo_keywords(pkg, description.read_text(encoding="utf-8"), str(description))
         self.a11y = f"Logo of the {pkg} library for R, white text on a black background"
         self.ext_descr = (
             f"A black hexagon with a thin white border. The package name, {pkg}, "
@@ -563,25 +624,59 @@ def exits_with(fn, needle: str) -> bool:
     return False
 
 
+SEOR_TAGS = ("seo, search-engine-optimization, metapackage,\n"
+             "    url-parsing, idna, public-suffix-list, ip-address, xml-sitemap, pagerank,\n"
+             "    robots-txt")
+
+
+def description(pkg: str, keywords: str | None) -> str:
+    field = "" if keywords is None else f"{KEYWORD_FIELD}: {keywords}\n"
+    return f"Package: {pkg}\nTitle: A test\n{field}License: MIT + file LICENSE\n"
+
+
 def self_test() -> int:
     def expect(tag: str, condition: bool) -> None:
         if not condition:
             raise SystemExit(f"self-test FAILED ({tag})")
 
-    # The SEO rule.
-    check_seo(PACKAGES)
-    bad = dict(PACKAGES, ssrfr=(PACKAGES["ssrfr"][0], [*PACKAGES["ssrfr"][1], "SEO"], None))
-    expect("SEO on a non-member refused", exits_with(lambda: check_seo(bad), "(ssrfr)"))
-    bare = dict(PACKAGES, rurl=(PACKAGES["rurl"][0], ["R", "URL"], None))
-    expect("member without SEO refused", exits_with(lambda: check_seo(bare), "(rurl)"))
+    def kw(pkg: str, keywords: str | None) -> list[str]:
+        return logo_keywords(pkg, description(pkg, keywords), "DESCRIPTION")
+
+    # DCF: continuation lines join, a broken tag becomes one space, others stay verbatim.
+    expect("continuation lines", kw("pslr", "eTLD+1, registrable\n    domain,\n\tUTS-46 ,inet-pton")
+           == [*KEYWORD_PREFIX, "eTLD+1", "registrable domain", "UTS-46", "inet-pton"])
+    expect("field after a continuation", parse_dcf("A: x,\n  y\nB: z\n", "t") == {"A": "x,\ny", "B": "z"})
+    expect("one record only", exits_with(lambda: parse_dcf("A: x\n\nB: y\n", "t"), "blank line"))
+    expect("prefix and case-insensitive de-duplication",
+           kw("rurl", "r, Rstats, url, URL, R PACKAGE, idna") == [*KEYWORD_PREFIX, "url", "idna"])
+    # Package: must match.
+    expect("Package mismatch refused", exits_with(lambda: logo_keywords("rurl", description("pslr", "url"), "D"),
+                                                  "DESCRIPTION of 'pslr', not 'rurl'"))
+    # A missing or empty field is refused.
+    expect("missing field refused", exits_with(lambda: kw("rurl", None), f"no {KEYWORD_FIELD}"))
+    expect("empty field refused", exits_with(lambda: kw("rurl", " , "), f"no {KEYWORD_FIELD}"))
+    # The SEO rule: one way, case-insensitive.
+    expect("seo on seor", "seo" in kw("seor", "seo, metapackage"))
+    expect("member without seo", kw("rurl", "url") == [*KEYWORD_PREFIX, "url"])
+    expect("member with seo", "seo" in kw("pagerankr", "pagerank, seo"))
+    for tag in ("seo", "SEO", "Seo"):
+        expect(f"{tag} on a non-member refused",
+               exits_with(lambda: kw("ssrfr", f"ssrf, {tag}"), "ssrfr is neither seor nor a seor member"))
+    expect("a tag merely containing seo", "technical-seo" in kw("ssrfr", "ssrf, technical-seo"))
 
     # Keyword output, read back from rendered files.
-    want = ["R", "rstats", "R package", "SEO", "SEO toolkit", "metapackage"]
+    want = [*KEYWORD_PREFIX, "seo", "search-engine-optimization", "metapackage", "url-parsing", "idna",
+            "public-suffix-list", "ip-address", "xml-sitemap", "pagerank", "robots-txt"]
     with tempfile.TemporaryDirectory() as tmp:
-        figures = Path(tmp)
+        root = Path(tmp)
+        figures = root / "man" / "figures"
+        figures.mkdir(parents=True)
+        (root / "DESCRIPTION").write_text(description("seor", SEOR_TAGS), encoding="utf-8")
         (figures / "logo.svg").write_text(TEST_SVG, encoding="utf-8")
         (figures / "logo.png").write_bytes(test_png())
-        f = Facts("seor")
+        expect("default DESCRIPTION", default_description(figures) == (root / "DESCRIPTION").resolve())
+        expect("no DESCRIPTION refused", exits_with(lambda: Facts("seor", root / "nowhere"), "no DESCRIPTION"))
+        f = Facts("seor", default_description(figures))
         svg = finalize(f, figures / "logo.svg")
         png = finalize(f, figures / "logo.png")
         expect("SVG dc:subject (RDF and XMP)", read_svg_subjects(svg.decode("utf-8")) == [want, want])
@@ -592,10 +687,17 @@ def self_test() -> int:
     return 0
 
 
+def default_description(figures: Path) -> Path:
+    """<figures>/../../DESCRIPTION: the repository root for man/figures."""
+    return figures.resolve().parent.parent / "DESCRIPTION"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--check", action="store_true", help="report drift; write nothing")
     ap.add_argument("--self-test", action="store_true", help="run the offline self-test and exit")
+    ap.add_argument("--description", type=Path,
+                    help="the package's DESCRIPTION (default: <figures>/../../DESCRIPTION)")
     ap.add_argument("pkg", nargs="?")
     ap.add_argument("figures", type=Path, nargs="?")
     args = ap.parse_args()
@@ -603,7 +705,7 @@ def main() -> int:
         return self_test()
     if args.pkg is None or args.figures is None:
         ap.error("pkg and figures are required")
-    f = Facts(args.pkg)
+    f = Facts(args.pkg, args.description or default_description(args.figures))
     names = ["logo.svg", "logo.png", "logo-print.svg", "logo-480.png"]
     targets = [args.figures / n for n in names if (args.figures / n).exists()]
     if not any(t.name in ("logo.svg", "logo.png") for t in targets):

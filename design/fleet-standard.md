@@ -419,6 +419,13 @@ under the owner `gitlab-bart-turczynski`. Researched 2026-10-04
   Dublin Core, XMP, IPTC, PLUS and EXIF fields) is written by seor's
   `scripts/logo-metadata.py` from one table, never by hand; `--check`
   reports drift (SEOR-eyfiidrv).
+  The keywords (XMP and RDF `dc:subject`, PNG Keywords, EXIF XPKeywords)
+  come from the package's `DESCRIPTION`, not from that table: the
+  `X-schema.org-keywords` tags r-universe indexes, written verbatim after
+  the fixed prefix "R", "rstats", "R package", with duplicates dropped
+  case-insensitively (SEOR-qoqmestu). A package without that field gets no
+  logo metadata until it has one. The tag `seo`, in any case, belongs to
+  seor and its members only; the script refuses it on any other package.
   The README heading's `<img>` carries `alt="hex logo, white on black"`,
   without the package name. The `<img>` sits inside the `# <pkg>` heading,
   so its alt joins the heading's accessible name, which reads "<pkg> hex

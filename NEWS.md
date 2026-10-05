@@ -3,7 +3,10 @@
 * The logo files carry full metadata: every link (GitLab, GitHub, CRAN,
   r-universe, the docs site, the DOI), a screen-reader description, and
   the Dublin Core, XMP, IPTC, PLUS and EXIF fields, written by the new
-  `scripts/logo-metadata.py` (SEOR-eyfiidrv).
+  `scripts/logo-metadata.py` (SEOR-eyfiidrv). Their keywords are the
+  `X-schema.org-keywords` tags of `DESCRIPTION`, after "R", "rstats" and
+  "R package", so the logo and r-universe list the same tags
+  (SEOR-qoqmestu).
 
 * CI pins pandoc 3.10 in every R job, not only the README gate: the
   download is checked against its published digest and bounded in time. The
