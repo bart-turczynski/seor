@@ -40,9 +40,8 @@
 <dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/pslr"/>
 <dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/raddr"/>
 <dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/pagerankr"/>
-<dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/robotstxtr"/>
 <dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/sitemapr"/>
-<dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/ssrfr"/>
+<dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/robotstxtr"/>
 <cc:license rdf:resource="https://opensource.org/license/mit"/>
 <cc:attributionName>Bart Turczynski</cc:attributionName>
 <cc:attributionURL rdf:resource="https://gitlab.com/bart-turczynski/seor"/>

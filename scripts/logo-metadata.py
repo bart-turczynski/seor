@@ -39,6 +39,8 @@ import struct
 import sys
 import uuid
 import zlib
+from datetime import datetime, timezone
+from email.utils import format_datetime
 from pathlib import Path
 
 OWNER = "Bart Turczynski"
@@ -92,6 +94,10 @@ PACKAGES = {
               None),
 }
 HUB = "seor"
+REPO_FILES = ("logo.svg", "logo.png")
+# seor's members: DESCRIPTION Imports plus robotstxtr in Suggests (ARCHITECTURE.md).
+# ssrfr is a fleet package but not a seor member.
+MEMBERS = ("rurl", "punycoder", "pslr", "raddr", "pagerankr", "sitemapr", "robotstxtr")
 
 
 class Facts:
@@ -117,11 +123,16 @@ class Facts:
         if self.doi:
             self.links.append(self.doi)
         self.hub = f"https://gitlab.com/{NAMESPACE}/{HUB}"
-        self.members = [f"https://gitlab.com/{NAMESPACE}/{p}" for p in PACKAGES if p != HUB]
+        self.members = [f"https://gitlab.com/{NAMESPACE}/{p}" for p in MEMBERS]
         self.document_id = "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, self.gitlab + "#logo"))
 
     def file_url(self, name: str) -> str:
         return f"{self.gitlab}/-/raw/main/man/figures/{name}"
+
+    def self_links(self, name: str) -> list[str]:
+        """The file's own URL, for the two files the repositories carry; the
+        print and 480 px artwork stay outside them, so they get none."""
+        return [self.file_url(name)] if name in REPO_FILES else []
 
     def instance_id(self, name: str) -> str:
         return "uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.file_url(name)}@{METADATA_DATE}"))
@@ -165,7 +176,7 @@ def xmp_packet(f: Facts, name: str, mime: str, wrapper: bool) -> str:
         f"<xmp:CreatorTool>{esc(TOOL)}</xmp:CreatorTool>",
         f"<xmp:Label>{esc(LABEL)}</xmp:Label>",
         f"<xmp:Nickname>{esc(f.pkg)} logo</xmp:Nickname>",
-        f"<xmp:Identifier>{bag([f.file_url(name)] + f.links)}</xmp:Identifier>",
+        f"<xmp:Identifier>{bag(f.self_links(name) + f.links)}</xmp:Identifier>",
         "<xmpRights:Marked>True</xmpRights:Marked>",
         f"<xmpRights:WebStatement>{LICENSE_URL}</xmpRights:WebStatement>",
         f"<xmpRights:UsageTerms>{alt(USAGE_TERMS)}</xmpRights:UsageTerms>",
@@ -241,7 +252,7 @@ def svg_rdf(f: Facts, name: str) -> str:
         "<dc:format>image/svg+xml</dc:format>",
         f"<dc:language>{LANG}</dc:language>",
         f"<dc:identifier>{esc(f.pkg)}</dc:identifier>",
-        f"<dc:identifier>{esc(f.file_url(name))}</dc:identifier>",
+        *[f"<dc:identifier>{esc(u)}</dc:identifier>" for u in f.self_links(name)],
         *[f"<dc:source>{esc(u)}</dc:source>" for u in f.sources],
         *[f"<dc:relation>{esc(u)}</dc:relation>" for u in f.links],
         f"<dc:subject>{bag(f.keywords)}</dc:subject>",
@@ -258,7 +269,7 @@ def svg_rdf(f: Facts, name: str) -> str:
     ]
     if f.pkg == HUB:
         lines += [f'<dcterms:hasPart rdf:resource="{esc(u)}"/>' for u in f.members]
-    else:
+    elif f.pkg in MEMBERS:
         lines.append(f'<dcterms:isPartOf rdf:resource="{esc(f.hub)}"/>')
     lines += [
         f'<cc:license rdf:resource="{LICENSE_URL}"/>',
@@ -275,7 +286,7 @@ def svg_rdf(f: Facts, name: str) -> str:
 
 
 ROOT = re.compile(r"<svg\b[^>]*>", re.S)
-ATTR = re.compile(r'([\w:.-]+)\s*=\s*"([^"]*)"')
+ATTR = re.compile(r"""([\w:.-]+)\s*=\s*("[^"]*"|'[^']*')""")
 
 
 def rewrite_svg(f: Facts, path: Path) -> str:
@@ -296,14 +307,15 @@ def rewrite_svg(f: Facts, path: Path) -> str:
     attrs = dict(ATTR.findall(m.group(0)))
     for key in ("role", "aria-labelledby", "aria-describedby", "xml:lang", "lang"):
         attrs.pop(key, None)
-    attrs.update({
+    ours = {
         "role": "img",
         "aria-labelledby": f"{f.pkg}-title",
         "aria-describedby": f"{f.pkg}-desc",
         "xml:lang": LANG,
         "lang": LANG,
-    })
-    root = "<svg " + " ".join(f'{k}="{v}"' for k, v in attrs.items()) + ">"
+    }
+    attrs.update({k: f'"{v}"' for k, v in ours.items()})
+    root = "<svg " + " ".join(f"{k}={v}" for k, v in attrs.items()) + ">"
     head = (
         f'\n<title id="{f.pkg}-title">{esc(f.pkg)}</title>'
         f'\n<desc id="{f.pkg}-desc">{esc(f.a11y)}</desc>'
@@ -320,8 +332,14 @@ def rewrite_svg(f: Facts, path: Path) -> str:
 
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
 # Chunks this script owns and rewrites. caBX is the C2PA manifest.
-OWNED = {b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"tIME", b"caBX", b"sRGB"}
-COLOR_CHUNKS = {b"iCCP", b"gAMA", b"cHRM"}
+OWNED = {b"tEXt", b"zTXt", b"iTXt", b"eXIf", b"tIME", b"caBX"}
+# Color information already in the file is kept; sRGB is added only when there is none.
+COLOR_CHUNKS = {b"sRGB", b"iCCP", b"gAMA", b"cHRM"}
+
+
+def rfc1123(day: str) -> str:
+    """The PNG spec's recommended Creation Time form (RFC 1123), at midnight UTC."""
+    return format_datetime(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc), usegmt=True)
 
 
 def chunk(kind: bytes, data: bytes) -> bytes:
@@ -338,7 +356,7 @@ def itxt_chunk(key: str, value: str, lang: str = "", translated: str = "") -> by
     return chunk(b"iTXt", data)
 
 
-def exif_block(f: Facts, width: int, height: int) -> bytes:
+def exif_block(f: Facts, name: str, width: int, height: int) -> bytes:
     """A little-endian TIFF structure: IFD0 (with the Windows XP fields that
     Explorer's Details tab shows) and an Exif sub-IFD."""
     def ascii_(s: str) -> tuple[int, bytes]:
@@ -368,7 +386,7 @@ def exif_block(f: Facts, width: int, height: int) -> bytes:
         0xA001: (3, struct.pack("<H", 1)),  # sRGB
         0xA002: (4, struct.pack("<I", width)),
         0xA003: (4, struct.pack("<I", height)),
-        0xA420: ascii_(uuid.uuid5(uuid.NAMESPACE_URL, f.document_id).hex),
+        0xA420: ascii_(f.instance_id(name).removeprefix("uuid:").replace("-", "")),
     }
     size = {1: 1, 2: 1, 3: 2, 4: 4, 7: 1}
 
@@ -417,9 +435,9 @@ def rewrite_png(f: Facts, path: Path) -> bytes:
     texts = [
         text_chunk("Title", f.pkg),
         text_chunk("Author", OWNER),
-        text_chunk("Description", f.what),
+        text_chunk("Description", f.a11y),
         text_chunk("Copyright", RIGHTS),
-        text_chunk("Creation Time", CREATED),
+        text_chunk("Creation Time", rfc1123(CREATED)),
         text_chunk("Software", SOFTWARE),
         text_chunk("Source", TOOL),
         text_chunk("Disclaimer", DISCLAIMER),
@@ -433,7 +451,7 @@ def rewrite_png(f: Facts, path: Path) -> bytes:
     if not any(k in COLOR_CHUNKS for k in kinds):
         out.append(chunk(b"sRGB", b"\0"))  # perceptual intent
     out += [chunk(k, d) for k, d in kept[1:first_idat]]
-    out.append(chunk(b"eXIf", exif_block(f, width, height)))
+    out.append(chunk(b"eXIf", exif_block(f, path.name, width, height)))
     out += texts
     out += [chunk(k, d) for k, d in kept[first_idat:-1]]
     y, mo, d = (int(x) for x in METADATA_DATE.split("-"))
