@@ -240,6 +240,16 @@ default:
     # --max-time (which the fleet checker requires) bounds each attempt and
     # --retry-max-time the retries, so a stalled CDN reaches that warning in
     # about seven minutes at most instead of hanging every R job.
+    #
+    # `apt-mark hold pandoc`, only after a successful `dpkg -i`, keeps the
+    # pin through any later apt step that reaches pandoc: where apt's
+    # candidate pandoc is newer than the pin, as Debian testing's is on
+    # r-base:latest, an upgrade would otherwise replace the .deb. On these
+    # rocker/r-ver images apt's pandoc is older than the pin and apt does not
+    # downgrade, so here the hold is defensive, but this block is the fleet's
+    # canonical shape (SEOR-vzupmeqj). A hold that fails only warns, like the
+    # rest of this block, so it never stops a gate. The warn path holds
+    # nothing, so apt's pandoc there stays upgradable.
     - |
       ARCH=$(dpkg --print-architecture)
       case "$ARCH" in
@@ -251,6 +261,7 @@ default:
         -o /tmp/pandoc.deb "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-${ARCH}.deb" \
         && echo "${PANDOC_SHA256}  /tmp/pandoc.deb" | sha256sum -c - \
         && dpkg -i /tmp/pandoc.deb; then
+        apt-mark hold pandoc || echo "WARNING: pandoc ${PANDOC_VERSION} installed but not held; a later apt step may replace it"
         echo "pandoc ${PANDOC_VERSION} installed"
       else
         echo "WARNING: pandoc ${PANDOC_VERSION} not installed; this job runs on the apt pandoc"
