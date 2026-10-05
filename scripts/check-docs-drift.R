@@ -24,11 +24,13 @@
 # uses, so what this gate demands is exactly what the documented fix produces.
 # seor has no src/, so that load compiles nothing.
 #
-# The gate never runs this in place: roxygenise() writes into the directory
-# it is given, so on drift it rewrites man/, NAMESPACE and DESCRIPTION there.
-# The pre-push hook (scripts/docs-drift.sh) therefore runs it against its own
-# `git archive` export of the commit being pushed (PRE_COMMIT_TO_REF, else
-# HEAD), never the working tree.
+# The pre-push gate never runs this in place: roxygenise() writes into the
+# directory it is given, so on drift it rewrites man/, NAMESPACE and
+# DESCRIPTION there. The pre-push hook (scripts/docs-drift.sh) therefore runs
+# it against its own `git archive` export of the commit being pushed
+# (PRE_COMMIT_TO_REF, else HEAD), never the working tree. CI's `docs-drift`
+# job runs it in place, in a checkout of the pushed commit that nothing else
+# uses (SEOR-fhrisfpt).
 #
 # Usage (from the package root):
 #   Rscript scripts/check-docs-drift.R [package-dir]

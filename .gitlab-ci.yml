@@ -515,16 +515,20 @@ coverage:
 # version from the CRAN archive into this job's own cached library (`.r` keys
 # the cache per job). The hook runs the check on a `git archive` export of the
 # pushed commit because roxygenise() rewrites the tree it is given; here the
-# clone IS the pushed commit and is thrown away, so it runs in place. git, for
-# the diff it prints on drift, and the pinned pandoc both come from `.r`.
+# checkout IS the pushed commit, and the runner resets it before its next job,
+# so it runs in place. git, for the diff it prints on drift, and the pinned
+# pandoc both come from `.r`. No `needs:`, so it queues behind the verify stage
+# like `coverage` instead of taking another runner slot at the push.
 docs-drift:
   extends:
     - .r
     - .on-main
   stage: check
-  needs: []
   script:
-    - Rscript -e 'pak::pkg_install(c("deps::.", paste0("roxygen2@", read.dcf("DESCRIPTION", "Config/roxygen2/version")[[1]])))'
+    - >
+      Rscript -e 'v <- read.dcf("DESCRIPTION", "Config/roxygen2/version")[[1]];
+      if (is.na(v)) stop("DESCRIPTION has no Config/roxygen2/version, the roxygen2 pin this job installs", call. = FALSE);
+      pak::pkg_install(c("deps::.", paste0("roxygen2@", v)))'
     - Rscript scripts/check-docs-drift.R
 
 # The cross-platform matrix, reduced to what this fleet's runners can run.
