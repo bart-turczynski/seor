@@ -25,6 +25,7 @@ Two limits found while checking the specs, which shape the output:
 Usage:
   python3 scripts/logo-metadata.py <pkg> <man/figures dir>          # rewrite
   python3 scripts/logo-metadata.py --check <pkg> <man/figures dir>  # exit 1 on drift
+  python3 scripts/logo-metadata.py --self-test                      # offline, no files touched
 
 It handles logo.svg, logo.png and, when present, logo-print.svg and
 logo-480.png (the rest of the owner's export, kept outside the repositories).
@@ -36,9 +37,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import re
 import struct
 import sys
+import tempfile
 import uuid
 import zlib
 from datetime import datetime, timezone
@@ -103,10 +106,16 @@ REPO_FILES = ("logo.svg", "logo.png")
 # seor's members: DESCRIPTION Imports plus robotstxtr in Suggests (ARCHITECTURE.md).
 # ssrfr is a fleet package but not a seor member.
 MEMBERS = ("rurl", "punycoder", "pslr", "raddr", "pagerankr", "sitemapr", "robotstxtr")
-# "SEO" marks seor and its members only (owner, 2026-10-05: ssrfr is not an SEO tool).
-for _pkg, (_what, _keywords, _doi) in PACKAGES.items():
-    if ("SEO" in _keywords) != (_pkg == HUB or _pkg in MEMBERS):
-        sys.exit(f"logo-metadata: 'SEO' belongs in the keywords of seor and its members only ({_pkg})")
+
+
+def check_seo(packages: dict) -> None:
+    """"SEO" marks seor and its members only (owner, 2026-10-05: ssrfr is not an SEO tool)."""
+    for pkg, (_what, keywords, _doi) in packages.items():
+        if ("SEO" in keywords) != (pkg == HUB or pkg in MEMBERS):
+            sys.exit(f"logo-metadata: 'SEO' belongs in the keywords of seor and its members only ({pkg})")
+
+
+check_seo(PACKAGES)
 
 
 class Facts:
@@ -504,12 +513,96 @@ def finalize(f: Facts, path: Path) -> bytes:
     return render(f, path)
 
 
+# --- self-test ---------------------------------------------------------------
+
+def read_svg_subjects(svg: str) -> list[list[str]]:
+    """Every dc:subject bag in an SVG (the RDF block's and the XMP packet's)."""
+    bags = re.findall(r"<dc:subject><rdf:Bag>(.*?)</rdf:Bag></dc:subject>", svg, re.S)
+    return [[html.unescape(li) for li in re.findall(r"<rdf:li>(.*?)</rdf:li>", b, re.S)] for b in bags]
+
+
+def png_chunks(raw: bytes) -> list[tuple[bytes, bytes]]:
+    out, p = [], len(PNG_SIG)
+    while p < len(raw):
+        (n,) = struct.unpack(">I", raw[p:p + 4])
+        out.append((raw[p + 4:p + 8], raw[p + 8:p + 8 + n]))
+        p += 12 + n
+    return out
+
+
+def read_png_keywords(raw: bytes) -> tuple[str, str]:
+    """The PNG's tEXt Keywords and its EXIF IFD0 XPKeywords."""
+    chunks = png_chunks(raw)
+    text = next(d.split(b"\0", 1)[1].decode("latin-1") for k, d in chunks
+                if k == b"tEXt" and d.startswith(b"Keywords\0"))
+    tiff = next(d for k, d in chunks if k == b"eXIf")
+    (ifd0,) = struct.unpack("<I", tiff[4:8])
+    (count,) = struct.unpack("<H", tiff[ifd0:ifd0 + 2])
+    for i in range(count):
+        tag, _kind, n, field = struct.unpack("<HHII", tiff[ifd0 + 2 + 12 * i:ifd0 + 14 + 12 * i])
+        if tag == 0x9C9E:
+            return text, tiff[field:field + n].decode("utf-16-le").rstrip("\0")
+    raise SystemExit("self-test: no XPKeywords in the eXIf chunk")
+
+
+TEST_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>\n'
+
+
+def test_png() -> bytes:
+    """A 1x1 grayscale PNG: IHDR, one IDAT, IEND."""
+    return (PNG_SIG + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 0, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"\0\0")) + chunk(b"IEND", b""))
+
+
+def exits_with(fn, needle: str) -> bool:
+    """True when fn() calls sys.exit with a message containing needle."""
+    try:
+        fn()
+    except SystemExit as e:
+        return needle in str(e.code)
+    return False
+
+
+def self_test() -> int:
+    def expect(tag: str, condition: bool) -> None:
+        if not condition:
+            raise SystemExit(f"self-test FAILED ({tag})")
+
+    # The SEO rule.
+    check_seo(PACKAGES)
+    bad = dict(PACKAGES, ssrfr=(PACKAGES["ssrfr"][0], [*PACKAGES["ssrfr"][1], "SEO"], None))
+    expect("SEO on a non-member refused", exits_with(lambda: check_seo(bad), "(ssrfr)"))
+    bare = dict(PACKAGES, rurl=(PACKAGES["rurl"][0], ["R", "URL"], None))
+    expect("member without SEO refused", exits_with(lambda: check_seo(bare), "(rurl)"))
+
+    # Keyword output, read back from rendered files.
+    want = ["R", "rstats", "R package", "SEO", "SEO toolkit", "metapackage"]
+    with tempfile.TemporaryDirectory() as tmp:
+        figures = Path(tmp)
+        (figures / "logo.svg").write_text(TEST_SVG, encoding="utf-8")
+        (figures / "logo.png").write_bytes(test_png())
+        f = Facts("seor")
+        svg = finalize(f, figures / "logo.svg")
+        png = finalize(f, figures / "logo.png")
+        expect("SVG dc:subject (RDF and XMP)", read_svg_subjects(svg.decode("utf-8")) == [want, want])
+        text, xp = read_png_keywords(png)
+        expect("PNG Keywords", text == ", ".join(want))
+        expect("EXIF XPKeywords", xp == "; ".join(want))
+    print("logo-metadata self-test: OK")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--check", action="store_true", help="report drift; write nothing")
-    ap.add_argument("pkg")
-    ap.add_argument("figures", type=Path)
+    ap.add_argument("--self-test", action="store_true", help="run the offline self-test and exit")
+    ap.add_argument("pkg", nargs="?")
+    ap.add_argument("figures", type=Path, nargs="?")
     args = ap.parse_args()
+    if args.self_test:
+        return self_test()
+    if args.pkg is None or args.figures is None:
+        ap.error("pkg and figures are required")
     f = Facts(args.pkg)
     names = ["logo.svg", "logo.png", "logo-print.svg", "logo-480.png"]
     targets = [args.figures / n for n in names if (args.figures / n).exists()]
