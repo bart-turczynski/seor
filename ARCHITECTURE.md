@@ -65,6 +65,10 @@ dependencies and (2) attach them all on `library(seor)`.
   for why it is not part of `check-citation.py`.
   `check-fleet-standard.py` is not stdlib-only: it reads CI with PyYAML
   ([ADR 0008](design/adr/0008-fleet-checker-reads-ci-with-pyyaml.md)).
+  `logo-metadata.py` writes every member's logo metadata, keywords copied
+  from `DESCRIPTION`. Its `--self-test` and `--check seor man/figures`, which
+  fails when seor's own logo has drifted from `DESCRIPTION`, run from the
+  hook and in CI's `citation-version` job.
 - `CITATION.cff`, `.zenodo.json` — publication metadata, kept out of the CRAN
   tarball via `.Rbuildignore`. The version they carry is governed by
   [ADR 0002](design/adr/0002-citation-urls-are-the-ones-about-this-package.md),

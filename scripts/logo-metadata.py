@@ -731,6 +731,8 @@ def main() -> int:
         else:
             t.write_bytes(new)
             print(f"written  {t}")
+    if args.check and drift:
+        print(f"regenerate: python3 scripts/logo-metadata.py {args.pkg} {args.figures}, then commit the logos")
     return 1 if args.check and drift else 0
 
 
