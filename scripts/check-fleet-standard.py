@@ -88,7 +88,13 @@ WHAT IT CHECKS, by section of the standard.
   variables, the global ones or its setup) and never in `parallel: matrix`.
   The pin is read by running check-toolchain.R's own reader
   (`--pandoc-assignments`, SEOR-xhyrogfm), so the two never disagree on it;
-  this needs Rscript, and without it the pin is not judged. The install has
+  this needs Rscript, and without it the pin is not judged. It reads a plain
+  scalar (`PANDOC_VERSION: "3.10"`) or a shell assignment, so GitLab's
+  expanded form (`PANDOC_VERSION: {value: "3.10"}`, block or flow) is a gap
+  of its own, found in the parsed YAML, and the pin's value is then not
+  judged. The reader is the copy beside this script, which every package
+  vendors byte for byte: a scripts/check-toolchain.R that differs from it is
+  a local-gate gap (check_toolchain_copy()). The install has
   the standard's shape (pandoc_install_state): `if <download> && <sha256sum
   -c> && dpkg -i FILE; then ...; else ...; fi` in one script item, or the three
   steps as three script items in that order, each one command or pipeline
@@ -1775,14 +1781,30 @@ def pin_assignment(item: str) -> str | None:
     frames = shell_frames(mask)
     opaque = False
     for m in PIN_ASSIGN_RE.finditer(mask):
-        around = [frame for frame in frames if frame.start <= m.end() - 1 < frame.end]
-        if any(frame.function for frame in around):
+        if within(m.end() - 1, [frame for frame in frames if frame.function]):
             opaque = True
-        elif not any(frame.kind == "(" or frame.piped for frame in around):
+        elif not within(m.end() - 1, [frame for frame in frames if frame.kind == "(" or frame.piped]):
             return "assigns"
     if opaque or PIN_LOCAL_RE.search(mask) or ("PANDOC_VERSION=" in shell.text and OPAQUE_SHELL_RE.search(shell.text)):
         return "opaque"
     return None
+
+
+def expanded_pin_scopes(ci: CI) -> list[str]:
+    """Where .gitlab-ci.yml writes PANDOC_VERSION in GitLab's expanded form, a
+    mapping (`value:`, `description:`), block or flow: "the global
+    `variables:`", or the block (a job or a template) whose own `variables:`
+    hold it. Read from the parsed YAML: check-toolchain.R reads a plain
+    scalar only, and sees no pin in the block form and the pin
+    `{value: "3.10"}` in the flow form."""
+    scopes = []
+    blocks = [("the global `variables:`", ci.data)] + [
+        (str(name), block) for name, block in ci.data.items() if name not in RESERVED and isinstance(block, dict)]
+    for scope, block in blocks:
+        variables = block.get("variables")
+        if isinstance(variables, dict) and isinstance(variables.get("PANDOC_VERSION"), dict):
+            scopes.append(scope)
+    return scopes
 
 
 def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads | None = None) -> None:
@@ -1795,11 +1817,17 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
     python:3.13-alpine).
 
     The pin is what check-toolchain.R reads (read_pandoc_assignments()): one
-    value in all of .gitlab-ci.yml. `pins` holds that read when the caller
-    made it already, for many texts in one Rscript run (the self-test);
-    None reads this text now, and only when a job installs pandoc. A shell assignment overrides `variables:` at run
-    time, so with two values the one a job installs depends on where each
-    sits; two are a gap, as they are an error to check-toolchain.R. A job
+    value in all of .gitlab-ci.yml, written as a plain scalar or a shell
+    assignment. `pins` holds that read when the caller made it already, for
+    many texts in one Rscript run (the self-test); None reads this text now,
+    and only when a job installs pandoc. A shell assignment overrides
+    `variables:` at run time, so with two values the one a job installs
+    depends on where each sits; two are a gap, as they are an error to
+    check-toolchain.R. GitLab's expanded form (`PANDOC_VERSION: {value:
+    ...}`, expanded_pin_scopes()) is a gap of its own, the one the misread
+    file gets: check-toolchain.R cannot read it, so the pin's value is not
+    judged until it is rewritten, but whether each job sees the pin and how
+    it installs pandoc still are. A job
     must also see the pin: a variable it gets (its own or a global one), or an
     assignment in an item of its setup that the commands after it see
     (pin_assignment()): not the name in a comment, an echoed string or a
@@ -1813,6 +1841,11 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
     if matrix:
         report.gap("ci", f"{', '.join(matrix)}: sets PANDOC_VERSION in `parallel: matrix`; record the pin once, in "
                          "`variables:` or the shared setup, so every leg installs the same pandoc")
+    expanded = expanded_pin_scopes(ci)
+    if expanded:
+        report.gap("ci", f"{', '.join(expanded)}: sets PANDOC_VERSION in GitLab's expanded form (`value:`), which "
+                         "check-toolchain.R does not read; write the pin as a plain scalar, "
+                         f"`PANDOC_VERSION: \"{PANDOC_PIN}\"` (until then its value is not judged)")
     unpinned, in_default, unrecorded, candidates = [], [], {}, []
     for job in on_push:
         if not R_JOB_RE.search(job.full_text):
@@ -1833,7 +1866,7 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
             continue
         candidates.append((job, setup, bodies))
     values: list[str] | None = None
-    if candidates:
+    if candidates and not expanded:
         try:
             found = (pins if pins is not None else read_pandoc_assignments([ci.text]))[ci.text]
             values = list(dict.fromkeys(value for _, value in found))
@@ -1844,9 +1877,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
                          f"({', '.join(values)}); keep one pin, as check-toolchain.R requires")
     never, unseen, opaque, other, unverified = [], [], [], [], {}
     for job, setup, bodies in candidates:
-        if values is not None:
+        if values is not None or expanded:
             visible = setup + (ci.default_before() if job.inherits_default_before else [])
-            if not values:
+            if values == []:
                 never.append(job.name)
                 continue
             supplied = {pin_assignment(item) for item in visible}
@@ -1855,9 +1888,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
                     unseen.append(job.name)
                     continue
                 opaque.append(job.name)
-            if len(values) > 1:
+            if values is not None and len(values) > 1:
                 continue
-            if values[0] != PANDOC_PIN:
+            if values is not None and values[0] != PANDOC_PIN:
                 other.append(job.name)
                 continue
         state = max([pandoc_install_state(setup)] + [pandoc_install_state([body]) for body in bodies],
@@ -2578,6 +2611,30 @@ def check_local_gate(source, report: Report) -> None:
                                  f"(PANDOC_VERSION, {PANDOC_PIN})")
 
 
+def check_toolchain_copy(source, report: Report) -> None:
+    """A package's scripts/check-toolchain.R is seor's, the copy beside this
+    script (TOOLCHAIN_R): it is vendored byte for byte, and this script runs
+    seor's copy to read the pin the package's own copy reads before a push.
+    Compared as the source reads text. A missing copy is not reported here:
+    the local gate's pandoc check (check_local_gate()) then finds no
+    comparison with the CI pin."""
+    try:
+        member = source.read("scripts/check-toolchain.R")
+    except ProbeError as error:
+        report.skip("local gate", f"could not read scripts/check-toolchain.R ({error})", incomplete=True)
+        return
+    if member is None:
+        return
+    try:
+        seor = TOOLCHAIN_R.read_text(encoding="utf-8", errors="replace")
+    except OSError as error:
+        report.skip("local gate", f"scripts/check-toolchain.R not compared with seor's copy ({error})", incomplete=True)
+        return
+    if member != seor:
+        report.gap("local gate", "scripts/check-toolchain.R differs from seor's, the copy this checker runs (it is "
+                                 "vendored byte for byte); copy seor's scripts/check-toolchain.R over it")
+
+
 def check_schedules(state: State, report: Report) -> None:
     if state.schedules is None:
         report.skip("schedules", "pipeline schedules not read", incomplete=False)
@@ -2619,6 +2676,7 @@ def check_repo(pkg: str, source, state: State,
     floor = check_description(pkg, source, state, report)
     check_ci(pkg, source, state, floor, report, pins)
     check_local_gate(source, report)
+    check_toolchain_copy(source, report)
     check_schedules(state, report)
     return report
 
@@ -3380,23 +3438,43 @@ def self_test() -> list[str]:
     # GitLab's expanded form, `PANDOC_VERSION: {value: …, description: …}`,
     # block or flow, global or a job's: check-toolchain.R reads a plain
     # scalar only, so it sees no pin in the block form and the pin
-    # `{value: "3.10"}` in the flow form.
-    # WRONG TODAY (SEOR-eodwtiqv): each reports a symptom of the misreading,
-    # not the cause.
+    # `{value: "3.10"}` in the flow form. One gap names the cause and where it
+    # sits, and the misreading adds none (SEOR-eodwtiqv).
+    expanded = "sets PANDOC_VERSION in GitLab's expanded form (`value:`), which check-toolchain.R does not read"
+
+    def expanded_alone(scope: str) -> Judge:
+        def judge(report: Report) -> None:
+            pandoc = [t for _, t in report.gaps if "pandoc" in t.lower()]
+            if pandoc != [f"{scope}: {expanded}; write the pin as a plain scalar, `PANDOC_VERSION: \"3.10\"` "
+                          "(until then its value is not judged)"]:
+                failures.append(f"expanded pin in {scope}: expected its one gap alone, got {report.gaps}")
+        return judge
+
     no_shell_pin = edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "")
-    expect_gap("pin in the expanded form, block, global", "which .gitlab-ci.yml never assigns", "punycoder",
+    global_scope = "the global `variables:`"
+    expect_gap("pin in the expanded form, block, global", expanded, "punycoder",
                edit(no_shell_pin, ci, "variables:\n",
                     "variables:\n  PANDOC_VERSION:\n    value: \"3.10\"\n    description: the fleet's pandoc\n"),
-               fixture_state())
-    expect_gap("pin in the expanded form, flow, global", "pins pandoc {value: \"3.10\"}, not the fleet's 3.10",
-               "punycoder", edit(no_shell_pin, ci, "variables:\n", "variables:\n  PANDOC_VERSION: {value: \"3.10\"}\n"),
-               fixture_state())
-    expect_gap("pin in the expanded form, block, in the R template", "which .gitlab-ci.yml never assigns", "punycoder",
+               fixture_state(), then=expanded_alone(global_scope))
+    expect_gap("pin in the expanded form, flow, global", expanded, "punycoder",
+               edit(no_shell_pin, ci, "variables:\n", "variables:\n  PANDOC_VERSION: {value: \"3.10\"}\n"),
+               fixture_state(), then=expanded_alone(global_scope))
+    expect_gap("pin in the expanded form, block, in the R template", expanded, "punycoder",
                edit(no_shell_pin, ci, ".r:\n", ".r:\n  variables:\n    PANDOC_VERSION:\n      value: \"3.10\"\n"),
-               fixture_state())
-    expect_gap("pin in the expanded form, flow, beside a shell pin", two_pins, "punycoder",
+               fixture_state(), then=expanded_alone(".r"))
+    expect_gap("pin in the expanded form, flow, beside a shell pin", expanded, "punycoder",
                edit(cran, ci, ".r:\n", ".r:\n  variables:\n    PANDOC_VERSION: {value: \"3.10\", description: pin}\n"),
-               fixture_state())
+               fixture_state(), then=expanded_alone(".r"))
+
+    # Whether each job sees the pin is still judged: here none of the R jobs does.
+    def fossa_named(report: Report) -> None:
+        if not any(t.startswith(f"fossa: {expanded}") for _, t in report.gaps):
+            failures.append(f"expanded pin in fossa: expected its gap too, got {report.gaps}")
+
+    expect_gap("pin in the expanded form, in a job without pandoc", "gates, check, coverage, pages: downloads pandoc "
+               "at $PANDOC_VERSION, which neither its variables nor its setup assign", "punycoder",
+               edit(no_shell_pin, ci, "fossa:\n", "fossa:\n  variables:\n    PANDOC_VERSION: {value: \"3.10\"}\n"),
+               fixture_state(), then=fossa_named)
 
     # The install reader through its interface: shell items in, state out.
     for name, entries, want in PANDOC_INSTALL_CASES:
@@ -3820,9 +3898,15 @@ def self_test() -> list[str]:
     if cran[toolchain] != TOOLCHAIN_R.read_text(encoding="utf-8", errors="replace"):
         failures.append("the fixture's check-toolchain.R is not seor's copy")
     expect_clean("a member's check-toolchain.R identical to seor's", "punycoder", cran, fixture_state())
-    # WRONG TODAY (SEOR-eodwtiqv): a copy that drifted from seor's passes.
-    expect_clean("a member's check-toolchain.R drifted from seor's", "punycoder",
-                 dict(cran, **{toolchain: cran[toolchain] + "# a local edit\n"}), fixture_state())
+    drifted = "scripts/check-toolchain.R differs from seor's, the copy this checker runs"
+
+    def drift_alone(report: Report) -> None:
+        if len(report.gaps) != 1:
+            failures.append(f"a drifted check-toolchain.R: expected its one gap, got {report.gaps}")
+
+    expect_gap("a member's check-toolchain.R drifted from seor's", drifted, "punycoder",
+               dict(cran, **{toolchain: cran[toolchain] + "# a local edit\n"}), fixture_state(), then=drift_alone)
+
     # A missing copy is the local gate's pandoc gap, and only that.
     def local_pandoc_alone(report: Report) -> None:
         if [t for _, t in report.gaps] != [no_local_pandoc]:
