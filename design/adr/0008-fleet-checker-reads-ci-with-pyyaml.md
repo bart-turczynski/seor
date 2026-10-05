@@ -43,23 +43,30 @@ back with the next construct nobody had rebuilt.
 
 ## Decision
 
-1. **The parser is `yaml.safe_load` (PyYAML).** YAML 1.1, as GitLab's Psych
-   reads it: an unquoted `3.10` is 3.1 and `yes` is true. Quoting, comments,
-   block and flow lists, anchors, aliases and `<<` merge keys come from YAML
-   itself. Hand-written code remains only for GitLab's semantics on top of it:
+1. **The parser is `yaml.safe_load_all` (PyYAML).** YAML 1.1, as GitLab's
+   Psych reads it: an unquoted `3.10` is 3.1 and `yes` is true. Quoting,
+   comments, block and flow lists, anchors, aliases and `<<` merge keys come
+   from YAML itself. The file is one config document, or a header document
+   holding only `spec:` and then the config. Hand-written code remains only
+   for GitLab's semantics on top of it:
    - `extends` deep-merges mappings and replaces arrays, later parents over
      earlier ones and the job over all;
    - `default:` fills only the keys a job leaves unset. It does not merge into
      a key the job sets;
    - `inherit:`;
-   - `rules:if` and `workflow:rules`;
+   - `rules:if` and `workflow:rules`, a job's rules seeing its own variables
+     over the global ones it inherits;
    - `parallel: matrix` image expansion.
 2. **The checker fails closed.** A load error marks every CI rule for that
-   package as not judged, through `report.skip`, and the run is incomplete:
-   exit 2 when the run has no gap, under the script's existing exit contract.
-   Load errors include an unknown tag such as `!reference`, a top level that
-   is not a mapping, and an `extends` that names no block, loops or nests too
-   deep. The other areas are still judged. `!reference` gets no resolver, and
+   package as not judged, through `report.skip` with its `incomplete` flag
+   set, and the run is incomplete: exit 2 when the run has no gap, under the
+   script's existing exit contract. Every failure to load is a load error:
+   a YAML error, an unknown tag such as `!reference`, a scalar its tag cannot
+   hold (`2026-02-30`, `!!int 'abc'`), a recursive alias, a document shape
+   other than the two above, and a top level that is not a mapping. So is an
+   `extends` that names no block, loops or nests too deep, and a `rules:if`
+   that does not read, an empty one included, since what GitLab makes of an
+   empty one is not settled here. The other areas are still judged. `!reference` gets no resolver, and
    `include:` is not followed.
 3. **A resolved job is the only input to the CI rules.** It exposes:
    - `Job.config`, the merged mapping;
@@ -67,11 +74,14 @@ back with the next construct nobody had rebuilt.
      decoded, with nested lists flattened as GitLab flattens them;
    - its variables as typed values, so settings such as
      `_R_CHECK_CRAN_INCOMING_` are checked directly;
-   - `job.chunks()`, a searchable view for the text rules (`--as-cran`,
-     `error_on`, `rcmdcheck`, sanitizer flags, `fossa analyze`, the gates).
-     It holds the job's effective script items and the repository scripts
-     those items run, each a separate text, so a parent's script the job
-     replaces and an anchor it never uses are not in it.
+   - `job.chunks()`, the one searchable view every text rule reads
+     (`--as-cran`, `error_on`, `rcmdcheck`, CRAN incoming, coverage
+     thresholds, sanitizer flags, `fossa analyze`, the gates), built once
+     per job. It holds the job's effective script items with a `NAME=value`
+     line for each variable the job sees, then the repository scripts that
+     text names, each a separate text. So a flag or a script path passed
+     through a variable counts, and a parent's script the job replaces and
+     an anchor it never uses are not in it.
 
    Raw YAML text is no longer an input to any rule. The one exception is the
    pandoc pin, which `check-toolchain.R --pandoc-assignments` reads from the
@@ -80,9 +90,13 @@ back with the next construct nobody had rebuilt.
    `script_entries()` as the input to the pandoc install check. The shell
    analysis in `pandoc_install_state` does not change, and neither does the R
    pin reader. The pin-visibility check gets only what it needs to keep its
-   meaning: a variable, or an assignment sh runs in a setup item, must supply
-   the pin. The name in a comment or an echoed string does not count. An
-   assignment under `eval`, `sh -c`, `$(...)` or backticks is not judged.
+   meaning: a variable, or an assignment in a setup item that the commands
+   after it see (plain, or through `export`, `readonly`, `declare` or
+   `typeset`), must supply the pin. The name in a comment, an echoed string
+   or a here-document does not count, nor an assignment in a subshell, a
+   pipeline stage or a command's prefix. An assignment under `eval`, `sh -c`,
+   `$(...)`, backticks or a function's `local` is not judged, and leaves the
+   run incomplete.
 5. **The dependency is pinned and lives in the hook.** The
    `check-fleet-standard-self-test` pre-commit hook is `language: python` with
    `additional_dependencies: [pyyaml==6.0.3]`, and its entry runs that

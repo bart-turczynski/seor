@@ -457,7 +457,9 @@ The owner decided these on 2026-10-03 (SEOR-tahlljtx):
 ## Checking conformance
 
 `scripts/check-fleet-standard.py` (SEOR-myokihrl) tests packages against this
-file and prints a gap table per package. Run it from seor:
+file and prints a gap table per package. Run it from seor, with a Python that
+has PyYAML (`python3 -m pip install pyyaml==6.0.3`, the version the pre-push
+hook pins; ADR 0008). Without PyYAML it exits 2 with that hint:
 
 ```sh
 python3 scripts/check-fleet-standard.py                  # all nine
@@ -471,8 +473,20 @@ By default it reads each package's `main` on GitLab through `glab api`, since
 a local checkout may be stale. `--local` reads a checkout's files instead and
 still asks GitLab and the web for live state. `--offline` touches no network:
 the badge images, the conditional slots and the schedules are then listed as
-not judged. It exits 1 on any gap, and 2 when there is no gap but a probe
-failed, so the run is incomplete. A network failure is never a gap.
+not judged. It exits 1 on any gap, and 2 when there is no gap but the run is
+incomplete: a probe failed, a file could not be read, `.gitlab-ci.yml` did not
+load, or a pandoc pin assignment sits where the script cannot see. Each of
+those is listed as not judged, never as a gap. What `--offline` leaves out is
+listed too, but leaves the run complete.
+
+It reads `.gitlab-ci.yml` with PyYAML, as YAML 1.1 (an unquoted `3.10` is
+3.1), and resolves `extends:`, `default:`, `inherit:` and the rules as GitLab
+does. The file is one config document, or a `spec:` header document and then
+the config. A file that does not load, an unknown tag such as `!reference`, a
+value its tag cannot hold, a recursive alias, an `extends:` that names no
+block, or a `rules:if` that does not read (an empty one included) leaves every
+CI rule of that package not judged; the other areas are still judged.
+`include:` is not followed.
 
 What it checks, section by section:
 
@@ -518,8 +532,11 @@ What it checks, section by section:
   `variables:` entry or a shell assignment, quoted or not, with or without a
   trailing comment, one value wherever it is assigned, in a line the job
   sees, and never in a `parallel: matrix` entry, which pins per leg. An
-  assignment is one sh would run, not the same text in a comment or an
-  `echo`. The pin is read by running `check-toolchain.R`'s own reader
+  assignment is one sh would run and keep for the commands after it, plain
+  or through `export`, `readonly`, `declare` or `typeset`: not the same text
+  in a comment, an `echo` or a here-document, and not one in a subshell, a
+  pipeline stage or a command's prefix (`PANDOC_VERSION=3.10 curl …`). One
+  under `eval`, `sh -c`, `$(...)` or a function's `local` is not judged. The pin is read by running `check-toolchain.R`'s own reader
   (`--pandoc-assignments`), so the two scripts cannot disagree on it; that
   needs `Rscript`. The install has one of the two shapes above, read from the
   job's script items (a `- |` block, a folded or plain item, or a flow
@@ -531,8 +548,11 @@ What it checks, section by section:
   limit do not count. The install counts only in the `before_script` or
   `script` the job ends up with, its own or its template's; one only in
   `default: before_script` is reported, to move into the template. A job's
-  commands are read as text, along with the R, shell and YAML scripts it
-  names, so a script that skips a gate it contains reads as running it.
+  commands are read as text, together with the variables it sees and the R,
+  shell and YAML scripts that text names, so `--as-cran` passed in `$ARGS`
+  counts, and a script that skips a gate it contains reads as running it. A
+  setting such as `_R_CHECK_CRAN_INCOMING_` is off as R reads it: `false`,
+  `no` or `0`, in any case.
 - **Local gate.** The pre-commit config, or an R or shell script its hooks
   call, runs a URL check, and one such script both calls
   `rmarkdown::pandoc_version()` and reads `PANDOC_VERSION` from
@@ -545,5 +565,6 @@ What it checks, section by section:
 It does not check whether a tag pipeline fails on "already on CRAN", how the
 URL check treats zero URLs or the `BugReports:` 404, how `security-audit`
 treats missing OSS Index credentials, the GitLab project badges, or employer
-names. Review those by hand. The pre-push hook runs `--self-test` whenever the
-script changes.
+names. Review those by hand. The pre-push hook runs `--self-test`, in an
+environment with the pinned PyYAML, whenever the script or `check-toolchain.R`
+changes.
