@@ -808,38 +808,15 @@ self_test <- function() {
   )
   expect("stale-none", !length(check_stale(character(), installed, cran)))
 
-  ci <- c(
-    "  variables:",
-    "    PANDOC_VERSION: \"3.10\"",
-    "    - curl \"https://example.org/${PANDOC_VERSION}/pandoc.deb\"",
-    "    # PANDOC_VERSION: \"9.9\" in a comment is not a pin",
-    "    #   - PANDOC_VERSION=9.9 neither"
-  )
-  expect("pandoc-pin-yaml", identical(pinned_pandoc(ci), "3.10"))
-  expect("pandoc-pin-none", !length(pinned_pandoc(ci[4:5])))
-  # The spellings check-fleet-standard.py's self-test passes, one by one.
-  spellings <- c(
-    "    - PANDOC_VERSION=3.10",
-    "    - PANDOC_VERSION=\"3.10\"",
-    "    - export PANDOC_VERSION=3.10",
-    "    - PANDOC_VERSION=3.10  # the fleet pin",
-    "    - export PANDOC_VERSION='3.10' # pinned",
-    "  PANDOC_VERSION: \"3.10\"",
-    "  PANDOC_VERSION: '3.10'",
-    "  PANDOC_VERSION: \"3.10\"  # the fleet pin",
-    "  PANDOC_VERSION: '3.10' # pinned"
-  )
-  for (line in spellings) {
-    expect(paste("pandoc-pin:", line), identical(pinned_pandoc(line), "3.10"))
+  # The pandoc reader's cases. Every fixture is a .gitlab-ci.yml GitLab
+  # would load; each case asserts one outcome: the pins read, a pass with no
+  # pin, or a refusal naming its line. `cases` counts them.
+  cases <- new.env()
+  cases$n <- 0L
+  case <- function(tag, condition) {
+    cases$n <- cases$n + 1L
+    expect(tag, condition)
   }
-  # Unquoted, YAML reads 3.10 as the float 3.1, and so does this check.
-  for (line in c("  PANDOC_VERSION: 3.10", "  PANDOC_VERSION: 3.10 # pinned")) {
-    expect(paste("pandoc-pin:", line), identical(pinned_pandoc(line), "3.1"))
-  }
-  # GitLab's expanded form, a `value:` mapping, block or flow, keys in any
-  # order: no pin is read from it, which would be none (block) or the version
-  # `{value: "3.10"}` (flow); it stops, naming the line and the plain scalar
-  # (SEOR-zvnrwaku).
   refusal <- function(lines) {
     tryCatch(
       {
@@ -849,136 +826,399 @@ self_test <- function() {
       error = conditionMessage
     )
   }
-  block <- c("  PANDOC_VERSION:", "    value: \"3.10\"")
-  flow <- "  PANDOC_VERSION: {value: \"3.10\"}"
-  expanded <- list(
-    block = c("variables:", block),
-    flow = c("variables:", flow),
-    `block, description first` = c(
-      "variables:",
-      "  PANDOC_VERSION:  # the fleet pin",
-      "    # pinned",
-      "    description: the fleet's pandoc",
-      "    expand: false",
-      "    value: \"3.10\""
+  # A job whose script items are `...`, YAML text.
+  job <- function(..., name = "job") {
+    c(paste0(name, ":"), "  script:", paste0("    - ", c(...)))
+  }
+  global <- c("variables:", "  PANDOC_VERSION: \"3.10\"")
+  use <- "curl -o p.deb \"https://example.org/${PANDOC_VERSION}/p.deb\""
+  comments <- c(
+    "# PANDOC_VERSION: \"9.9\" in a comment is not a pin",
+    "#   - PANDOC_VERSION=9.9 neither"
+  )
+
+  # Read: the pins each fixture assigns, in file order.
+  read <- list(
+    `variables` = list(c(global, comments, job(use)), "3.10"),
+    `comments only` = list(comments, character()),
+    `shell` = list(job("PANDOC_VERSION=3.10"), "3.10"),
+    `shell, double-quoted` = list(job("PANDOC_VERSION=\"3.10\""), "3.10"),
+    `export` = list(job("export PANDOC_VERSION=3.10"), "3.10"),
+    `shell, trailing comment` = list(
+      job("PANDOC_VERSION=3.10  # the fleet pin"),
+      "3.10"
     ),
-    `flow, description first` = c(
-      "variables:",
-      "  PANDOC_VERSION: {description: pin, value: \"3.10\"}"
+    `export, single-quoted, comment` = list(
+      job("export PANDOC_VERSION='3.10' # pinned"),
+      "3.10"
     ),
-    `flow, anchored` = c("variables:", "  PANDOC_VERSION: &pv {value: 3.10}"),
-    `block, anchored and tagged` = c(
-      "variables:",
-      "  PANDOC_VERSION: &pv !!map",
-      "    value: \"3.10\""
+    `double-quoted` = list("  PANDOC_VERSION: \"3.10\"", "3.10"),
+    `single-quoted` = list("  PANDOC_VERSION: '3.10'", "3.10"),
+    `double-quoted, comment` = list(
+      "  PANDOC_VERSION: \"3.10\"  # the fleet pin",
+      "3.10"
+    ),
+    `single-quoted, comment` = list(
+      "  PANDOC_VERSION: '3.10' # pinned",
+      "3.10"
+    ),
+    # Unquoted, YAML reads 3.10 as the float 3.1, and so does this check.
+    `unquoted` = list(c("variables:", "  PANDOC_VERSION: 3.10"), "3.1"),
+    `unquoted, comment` = list(
+      c("variables:", "  PANDOC_VERSION: 3.10 # pinned"),
+      "3.1"
+    ),
+    # An anchored or tagged scalar is a pin: the property is not its text.
+    `anchored and tagged` = list(
+      c("variables:", "  PANDOC_VERSION: &pv !!str \"3.10\""),
+      "3.10"
+    ),
+    # A shell assignment overrides `variables:` at run time, so a second
+    # value is a second pin whichever one CI would install (SEOR-xhyrogfm).
+    `variables and shell` = list(
+      c(global, job("PANDOC_VERSION=3.9")),
+      c("3.10", "3.9")
+    ),
+    `the same pin twice` = list(
+      c(global, job("PANDOC_VERSION=3.10")),
+      "3.10"
+    ),
+    # Only an assignment sh would run counts: not one in a trailing comment
+    # or in echo and printf text (SEOR-xhyrogfm).
+    `after a comment` = list(
+      job("PANDOC_VERSION=3.10  # was PANDOC_VERSION=3.9"),
+      "3.10"
+    ),
+    `after echo text` = list(
+      job("echo \"PANDOC_VERSION=3.9 is gone\"; PANDOC_VERSION=3.10"),
+      "3.10"
+    ),
+    `after printf text` = list(
+      job(paste(
+        "printf 'PANDOC_VERSION=%s\\n' 3.9 &&",
+        "export PANDOC_VERSION=3.10"
+      )),
+      "3.10"
+    ),
+    `in a flow sequence` = list(
+      c(
+        "job:",
+        "  before_script: [PANDOC_VERSION=3.10, echo PANDOC_VERSION=3.9]"
+      ),
+      "3.10"
+    ),
+    `after quoted text with a ;` = list(
+      job("echo \"pinned; PANDOC_VERSION=3.9 was old\" && PANDOC_VERSION=3.10"),
+      "3.10"
+    ),
+    `after quoted text with export` = list(
+      job("echo \"use export PANDOC_VERSION=3.9\"; PANDOC_VERSION=3.10"),
+      "3.10"
+    ),
+    `export after another` = list(
+      job("export R_X=1 PANDOC_VERSION=3.10"),
+      "3.10"
+    ),
+    `a quoted flow item` = list(
+      c("job:", "  before_script: ['PANDOC_VERSION=3.10', 'echo hi']"),
+      "3.10"
+    ),
+    # Beside a readable pin, lines that set no second value pass with that
+    # pin alone: a bare key with nothing below it (YAML null), a use, a
+    # defaulted use, an export with no value, and the name in echoed text
+    # or in a comment.
+    `beside: a bare key` = list(
+      c(global, "job:", "  variables:", "    PANDOC_VERSION:"),
+      "3.10"
+    ),
+    `beside: a bare key, a sibling below` = list(
+      c(
+        global,
+        "job:",
+        "  variables:",
+        "    PANDOC_VERSION:",
+        "    R_VERSION: \"4.6.1\""
+      ),
+      "3.10"
+    ),
+    `beside: a defaulted use` = list(
+      c(global, job("echo \"pandoc ${PANDOC_VERSION:-3.9}\"")),
+      "3.10"
+    ),
+    `beside: export with no value` = list(
+      c(global, job("export PANDOC_VERSION")),
+      "3.10"
+    ),
+    `beside: echoed` = list(
+      c(global, job("echo PANDOC_VERSION=3.9")),
+      "3.10"
+    ),
+    `beside: echoed YAML` = list(
+      c(global, job("'echo \"PANDOC_VERSION: 3.9\"'")),
+      "3.10"
+    ),
+    `beside: Sys.getenv` = list(
+      c(global, job("Rscript -e 'Sys.getenv(\"PANDOC_VERSION\")'")),
+      "3.10"
+    ),
+    `beside: in a comment` = list(
+      c(
+        global,
+        "job:",
+        "  variables:",
+        "    # PANDOC_VERSION: {value: \"3.9\"}"
+      ),
+      "3.10"
+    ),
+    # A bare key whose next line is no mapping of its own is not the
+    # expanded form: a sibling key, even one named `value`, or nothing.
+    # With nothing deeper below it, its value is null and it passes.
+    `bare key, a sibling value:` = list(
+      c("variables:", "  PANDOC_VERSION:", "  value: \"3.10\""),
+      character()
+    ),
+    `bare key, a sibling's expanded form` = list(
+      c(
+        "variables:",
+        "  PANDOC_VERSION:",
+        "  R_VERSION:",
+        "    value: \"4.6.1\""
+      ),
+      character()
+    ),
+    `bare key alone` = list(c("variables:", "  PANDOC_VERSION:"), character())
+  )
+  for (name in names(read)) {
+    lines <- read[[name]][[1L]]
+    tag <- paste("pandoc-read:", name)
+    case(tag, !nzchar(refusal(lines)))
+    case(tag, identical(pinned_pandoc(lines), read[[name]][[2L]]))
+  }
+
+  # Refused: each fixture stops, naming the line and the plain scalar.
+  # GitLab's expanded form, a `value:` mapping, block or flow, keys in any
+  # order: read as a pin it would be none (block) or the version
+  # `{value: "3.10"}` (flow) (SEOR-zvnrwaku).
+  expanded <- "GitLab's expanded form"
+  # `$PANDOC_VERSION` with no pin read: CI would install a pin this cannot
+  # see (SEOR-mbiwrxql).
+  no_pin <- "reads no pin"
+  # A value set in a spelling this does not read, whatever pin it reads
+  # beside it: read as 3.10, the job would install 3.9 (SEOR-usrdxvbj).
+  unread <- "in a spelling check-toolchain.R"
+  block <- c("variables:", "  PANDOC_VERSION:", "    value: \"3.10\"")
+  flow <- c("variables:", "  PANDOC_VERSION: {value: \"3.10\"}")
+  refused <- list(
+    `expanded, block` = list(block, expanded, 2L),
+    `expanded, flow` = list(flow, expanded, 2L),
+    `expanded, block, description first` = list(
+      c(
+        "variables:",
+        "  PANDOC_VERSION:  # the fleet pin",
+        "    # pinned",
+        "    description: the fleet's pandoc",
+        "    expand: false",
+        "    value: \"3.10\""
+      ),
+      expanded,
+      2L
+    ),
+    `expanded, flow, description first` = list(
+      c("variables:", "  PANDOC_VERSION: {description: pin, value: \"3.10\"}"),
+      expanded,
+      2L
+    ),
+    `expanded, flow, anchored` = list(
+      c("variables:", "  PANDOC_VERSION: &pv {value: 3.10}"),
+      expanded,
+      2L
+    ),
+    `expanded, block, anchored and tagged` = list(
+      c("variables:", "  PANDOC_VERSION: &pv !!map", "    value: \"3.10\""),
+      expanded,
+      2L
+    ),
+    `use, no pin` = list(job(use), no_pin, 3L),
+    `use, a bare $PANDOC_VERSION` = list(
+      job("echo $PANDOC_VERSION"),
+      no_pin,
+      3L
+    ),
+    `use, an included file` = list(
+      c("include:", "  - local: ci/pandoc.yml", job(use)),
+      no_pin,
+      5L
+    ),
+    `use, Sys.getenv` = list(
+      c(
+        "include:",
+        "  - local: ci/pandoc.yml",
+        job("Rscript -e 'Sys.getenv(\"PANDOC_VERSION\")'")
+      ),
+      no_pin,
+      5L
+    ),
+    `use, computed` = list(
+      job("PANDOC_VERSION=$(cat .pandoc-version)", use),
+      no_pin,
+      4L
+    ),
+    `use, empty` = list(
+      c("variables:", "  PANDOC_VERSION: \"\"", job(use)),
+      no_pin,
+      5L
+    ),
+    `use, a mapping below the key` = list(
+      c("variables:", "  PANDOC_VERSION:", "    default: \"3.10\"", job(use)),
+      no_pin,
+      6L
+    ),
+    `computed` = list(
+      job("PANDOC_VERSION=$(cat .pandoc-version)"),
+      unread,
+      3L
+    ),
+    `empty` = list(c("variables:", "  PANDOC_VERSION: \"\""), unread, 2L),
+    `a mapping below the key` = list(
+      c("variables:", "  PANDOC_VERSION:", "    default: \"3.10\""),
+      unread,
+      2L
+    ),
+    `beside: empty` = list(
+      c(global, "job:", "  variables:", "    PANDOC_VERSION: \"\""),
+      unread,
+      5L
+    ),
+    `beside: computed` = list(
+      c(global, job("PANDOC_VERSION=$(cat .pandoc-version)")),
+      unread,
+      5L
+    ),
+    `beside: computed beside a read one` = list(
+      c(global, job("PANDOC_VERSION=3.10; PANDOC_VERSION=${OLD}")),
+      unread,
+      5L
+    ),
+    `beside: env prefix` = list(
+      c(global, job("env PANDOC_VERSION=3.9 sh install.sh")),
+      unread,
+      5L
+    ),
+    `beside: local` = list(
+      c(global, job("f() { local PANDOC_VERSION=3.9; }")),
+      unread,
+      5L
+    ),
+    `beside: assign default` = list(
+      c(global, job("': \"${PANDOC_VERSION:=3.9}\"'")),
+      unread,
+      5L
+    ),
+    `beside: a mapping below the key` = list(
+      c(
+        global,
+        "job:",
+        "  variables:",
+        "    PANDOC_VERSION:",
+        "      default: \"3.9\""
+      ),
+      unread,
+      5L
     )
   )
-  for (case in names(expanded)) {
-    why <- refusal(expanded[[case]])
-    tag <- paste("pandoc-expanded:", case)
-    expect(tag, grepl("GitLab's expanded form", why, fixed = TRUE))
-    expect(tag, grepl("on line 2,", why, fixed = TRUE))
-    expect(tag, grepl("PANDOC_VERSION: \"<version>\"", why, fixed = TRUE))
+  for (name in names(refused)) {
+    why <- refusal(refused[[name]][[1L]])
+    tag <- paste("pandoc-refused:", name)
+    case(tag, grepl(refused[[name]][[2L]], why, fixed = TRUE))
+    at <- refused[[name]][[3L]]
+    case(tag, grepl(sprintf("on line %d[, ]", at), why, perl = TRUE))
+    case(tag, grepl("PANDOC_VERSION: \"<version>\"", why, fixed = TRUE))
   }
-  # `$PANDOC_VERSION` with no pin read stops, naming the line and the plain
-  # scalar: CI would install a pin this cannot see (SEOR-mbiwrxql).
-  use <- "    - curl \"https://example.org/${PANDOC_VERSION}/pandoc.deb\""
-  unread <- list(
-    `no pin` = c("variables:", use),
-    `merge key` = c("variables:", "  PANDOC_VERSION:", "    <<: *pv", use),
-    `flow variables` = c("variables: {PANDOC_VERSION: \"3.10\"}", use),
-    `quoted key` = c("variables:", "  \"PANDOC_VERSION\": \"3.10\"", use),
-    `included file` = c("include:", "  - local: ci/pandoc.yml", use),
-    alias = c("variables:", "  PANDOC_VERSION: *pv", use),
-    computed = c("    - PANDOC_VERSION=$(cat .pandoc-version)", use),
-    empty = c("variables:", "  PANDOC_VERSION: \"\"", use),
-    `Sys.getenv` = c(
-      "include:",
-      "  - local: ci/pandoc.yml",
-      "    - Rscript -e 'Sys.getenv(\"PANDOC_VERSION\")'"
-    )
-  )
-  # Without the use, a case that sets a value this does not read still stops,
-  # naming the line that sets it (SEOR-usrdxvbj); one that sets none passes.
-  sets_on <- c(
-    `merge key` = 2L,
-    `flow variables` = 1L,
-    `quoted key` = 2L,
-    alias = 2L,
-    computed = 1L,
-    empty = 2L
-  )
-  for (case in names(unread)) {
-    lines <- unread[[case]]
-    why <- refusal(lines)
-    tag <- paste("pandoc-unread:", case)
-    expect(tag, grepl("reads no pin", why, fixed = TRUE))
-    expect(tag, grepl(sprintf("on line %d,", length(lines)), why, fixed = TRUE))
-    expect(tag, grepl("PANDOC_VERSION: \"<version>\"", why, fixed = TRUE))
-    unused <- refusal(lines[-length(lines)])
-    if (case %in% names(sets_on)) {
-      expect(
-        tag,
-        grepl("in a spelling check-toolchain.R", unused, fixed = TRUE)
-      )
-      expect(
-        tag,
-        grepl(sprintf("on line %d in", sets_on[[case]]), unused, fixed = TRUE)
-      )
-    } else {
-      expect(tag, !nzchar(unused))
-    }
-  }
-  expect(
-    "pandoc-expanded-report: alias",
-    !length(pandoc_assignment_report("  PANDOC_VERSION: *pin"))
-  )
-  expect(
-    "pandoc-unread: bare $PANDOC_VERSION",
-    grepl("reads no pin", refusal("    - echo $PANDOC_VERSION"), fixed = TRUE)
-  )
-  # A bare key whose next line is no mapping of its own is not the expanded
-  # form: a sibling key, even one named `value`, a scalar, or nothing. With
-  # nothing deeper below it, its value is null and it passes.
-  for (lines in list(
-    c("  PANDOC_VERSION:", "  value: \"3.10\""),
-    c("  PANDOC_VERSION:", "  R_VERSION: \"4.6.1\"", "    value: \"3.10\""),
-    "  PANDOC_VERSION:"
-  )) {
-    tag <- paste("pandoc-not-expanded:", paste(lines, collapse = " / "))
-    expect(tag, !nzchar(refusal(lines)))
-    expect(tag, !length(pinned_pandoc(lines)))
-  }
-  # A deeper line below it is its value, a scalar or a mapping without
-  # `value:`, which this does not read: it stops as an unread setting, not
-  # as the expanded form (SEOR-usrdxvbj).
-  for (lines in list(
-    c("  PANDOC_VERSION:", "    \"3.10\""),
-    c("  PANDOC_VERSION:", "    default: \"3.10\"")
-  )) {
-    tag <- paste("pandoc-not-expanded:", paste(lines, collapse = " / "))
-    why <- refusal(lines)
-    expect(tag, !grepl("expanded form", why, fixed = TRUE))
-    expect(tag, grepl("on line 1 in a spelling", why, fixed = TRUE))
-  }
-  # --pandoc-assignments prints no pin for it; a plain pin beside it is
-  # still printed.
-  expect(
-    "pandoc-expanded-report",
+
+  # check-fleet-standard.py reads the pin through --pandoc-assignments and
+  # --pandoc-unread: these texts, separated by a form feed and numbered as
+  # in their files, are what it judges.
+  case(
+    "pandoc-report: assignments",
     identical(
-      pandoc_assignment_report(c(block, "\f", flow, "  - PANDOC_VERSION=3.9")),
-      "2\t2\t3.9"
+      pandoc_assignment_report(c(
+        global,
+        "  # PANDOC_VERSION=9.9",
+        job("export PANDOC_VERSION=3.9"),
+        "\f",
+        "x: 1",
+        "\f",
+        "  - PANDOC_VERSION=3.8"
+      )),
+      c("1\t2\t3.10", "1\t6\t3.9", "3\t1\t3.8")
     )
   )
-  expect(
-    "pandoc-expanded-report: anchored",
-    !length(pandoc_assignment_report("  PANDOC_VERSION: &pv {value: 3.10}"))
+  case("pandoc-report: none", !length(pandoc_assignment_report(comments)))
+  # No pin is printed for the expanded form, nor for an alias to it; a
+  # plain pin beside it still is.
+  case(
+    "pandoc-report: expanded",
+    identical(
+      pandoc_assignment_report(c(
+        block,
+        "\f",
+        flow,
+        job("PANDOC_VERSION=3.9")
+      )),
+      "2\t5\t3.9"
+    )
   )
-  # An anchored or tagged plain scalar is a pin: the property is not its text.
-  expect(
-    "pandoc-pin: anchored",
-    identical(pinned_pandoc("  PANDOC_VERSION: &pv !!str \"3.10\""), "3.10")
+  case(
+    "pandoc-report: expanded, anchored",
+    !length(pandoc_assignment_report(c(
+      "variables:",
+      "  PANDOC_VERSION: &pv {value: 3.10}"
+    )))
   )
+  # It prints only what it reads, and never stops: a value set in a
+  # spelling it does not read, which pinned_pandoc() refuses, prints no
+  # line.
+  case(
+    "pandoc-report: unread key",
+    identical(
+      pandoc_assignment_report(c(
+        global,
+        "job:",
+        "  variables:",
+        "    PANDOC_VERSION: \"\""
+      )),
+      "1\t2\t3.10"
+    )
+  )
+  # --pandoc-unread prints that refusal's lines, numbered as above, so the
+  # fleet checker reports what this check stops on (SEOR-mcstkogt).
+  case(
+    "pandoc-report: unread",
+    identical(
+      pandoc_unread_report(c(
+        global,
+        "job:",
+        "  variables:",
+        "    PANDOC_VERSION: \"\"",
+        "\f",
+        "x: 1",
+        "\f",
+        job("PANDOC_VERSION=$(cat v)", "env PANDOC_VERSION=3.8 sh i.sh")
+      )),
+      c("unread\t1\t5", "unread\t3\t3", "unread\t3\t4")
+    )
+  )
+  case(
+    "pandoc-report: unread, none",
+    !length(pandoc_unread_report(c(
+      global,
+      "\f",
+      read$variables[[1L]],
+      "\f",
+      block
+    )))
+  )
+
   expect("pandoc-match", !length(check_pandoc("3.10", "3.10")))
   expect("pandoc-unpinned", !length(check_pandoc(character(), "3.11")))
   flagged("pandoc-skew", check_pandoc("3.10", "3.11"), "rmarkdown uses 3.11")
@@ -990,162 +1230,12 @@ self_test <- function() {
     check_pandoc(c("3.10", "3.9"), "3.10"),
     "more than once"
   )
-  # A shell assignment overrides `variables:` at run time, so a second value is
-  # a second pin whichever one CI would install (SEOR-xhyrogfm).
-  both <- c("  PANDOC_VERSION: \"3.10\"", "    - PANDOC_VERSION=3.9")
-  flagged(
-    "pandoc-variables-and-shell",
-    check_pandoc(pinned_pandoc(both), "3.10"),
-    "more than once"
-  )
-  expect(
-    "pandoc-same-pin-twice",
-    identical(pinned_pandoc(c(both[[1L]], "    - PANDOC_VERSION=3.10")), "3.10")
-  )
-  # Only an assignment sh would run counts: not one in a trailing comment or
-  # in echo and printf text, which would read as a second pin (SEOR-xhyrogfm).
-  for (line in c(
-    "    - PANDOC_VERSION=3.10  # was PANDOC_VERSION=3.9",
-    "    - echo \"PANDOC_VERSION=3.9 is gone\"; PANDOC_VERSION=3.10",
-    "    - printf 'PANDOC_VERSION=%s\\n' 3.9 && export PANDOC_VERSION=3.10",
-    "  before_script: [PANDOC_VERSION=3.10, echo PANDOC_VERSION=3.9]",
-    "    - echo \"pinned; PANDOC_VERSION=3.9 was old\" && PANDOC_VERSION=3.10",
-    "    - echo \"use export PANDOC_VERSION=3.9\"; PANDOC_VERSION=3.10",
-    "    - export R_X=1 PANDOC_VERSION=3.10",
-    "  before_script: ['PANDOC_VERSION=3.10', 'echo hi']"
-  )) {
-    expect(paste("pandoc-pin:", line), identical(pinned_pandoc(line), "3.10"))
-  }
-  # Beside a readable pin, a job's lines that set no second value pass with
-  # that pin alone: a bare key with nothing below it (YAML null), a use, a
-  # defaulted use, an export with no value, and the name in echoed text or
-  # in a comment.
-  global <- c("variables:", "  PANDOC_VERSION: \"3.10\"", "job:")
-  for (extra in list(
-    c("  variables:", "    PANDOC_VERSION:"),
-    c("  variables:", "    PANDOC_VERSION:", "    R_VERSION: \"4.6.1\""),
-    c("  script:", "    - echo \"pandoc ${PANDOC_VERSION:-3.9}\""),
-    c("  script:", "    - export PANDOC_VERSION"),
-    c("  script:", "    - echo PANDOC_VERSION=3.9"),
-    c("  script:", "    - echo \"PANDOC_VERSION: 3.9\""),
-    c("  script:", "    - Rscript -e 'Sys.getenv(\"PANDOC_VERSION\")'"),
-    c("  variables:", "    # PANDOC_VERSION: {value: \"3.9\"}")
-  )) {
-    tag <- paste("pandoc-beside-pin:", paste(extra, collapse = " / "))
-    expect(tag, identical(pinned_pandoc(c(global, extra)), "3.10"))
-  }
-  # A job's value set in a spelling this does not read stops, whatever pin it
-  # reads beside it: read as 3.10, the job would install 3.9 (SEOR-usrdxvbj).
-  # Each case's last line sets it.
-  hidden <- list(
-    `flow variables` = "  variables: {PANDOC_VERSION: \"3.9\"}",
-    `quoted key` = c("  variables:", "    \"PANDOC_VERSION\": \"3.9\""),
-    `single-quoted key` = c("  variables:", "    'PANDOC_VERSION': '3.9'"),
-    `space before the colon` = c(
-      "  variables:",
-      "    PANDOC_VERSION : \"3.9\""
-    ),
-    alias = c("  variables:", "    PANDOC_VERSION: *old"),
-    empty = c("  variables:", "    PANDOC_VERSION: \"\""),
-    `explicit key` = c("  variables:", "    ? PANDOC_VERSION"),
-    computed = c("  script:", "    - PANDOC_VERSION=$(cat .pandoc-version)"),
-    `computed beside a read one` = c(
-      "  script:",
-      "    - PANDOC_VERSION=3.10; PANDOC_VERSION=${OLD}"
-    ),
-    `env prefix` = c("  script:", "    - env PANDOC_VERSION=3.9 sh install.sh"),
-    `after a quoted value with a space` = c(
-      "  script:",
-      "    - export X=\"a b\" PANDOC_VERSION=3.9"
-    ),
-    `prefix after a quoted value` = c(
-      "  script:",
-      "    - X='a b' PANDOC_VERSION=3.9 sh install.sh"
-    ),
-    `local` = c("  script:", "    - f() { local PANDOC_VERSION=3.9; }"),
-    `assign default` = c("  script:", "    - : \"${PANDOC_VERSION:=3.9}\"")
-  )
-  for (case in names(hidden)) {
-    lines <- c(global, hidden[[case]])
-    why <- refusal(lines)
-    tag <- paste("pandoc-hidden-pin:", case)
-    expect(
-      tag,
-      grepl(
-        sprintf("on line %d in a spelling", length(lines)),
-        why,
-        fixed = TRUE
-      )
-    )
-    expect(tag, grepl("PANDOC_VERSION: \"<version>\"", why, fixed = TRUE))
-  }
-  # A value below a bare key is its value: here a merge, then a scalar.
-  for (below in c("      <<: *old", "      \"3.9\"")) {
-    why <- refusal(c(global, "  variables:", "    PANDOC_VERSION:", below))
-    expect(
-      paste("pandoc-hidden-pin: below the key,", below),
-      grepl("on line 5 in a spelling", why, fixed = TRUE)
-    )
-  }
-  # check-fleet-standard.py reads the pin through --pandoc-assignments: these
-  # texts, separated by a form feed and numbered as in their files, are what
-  # it judges.
-  report <- pandoc_assignment_report(c(
-    "variables:",
-    "  PANDOC_VERSION: \"3.10\"",
-    "  # PANDOC_VERSION=9.9",
-    "    - export PANDOC_VERSION=3.9",
-    "\f",
-    "x: 1",
-    "\f",
-    "  - PANDOC_VERSION=3.8"
-  ))
-  expect(
-    "pandoc-assignment-report",
-    identical(report, c("1\t2\t3.10", "1\t4\t3.9", "3\t1\t3.8"))
-  )
-  expect(
-    "pandoc-assignment-none",
-    !length(pandoc_assignment_report(ci[3:5]))
-  )
-  # It prints only what it reads, and never stops: a value set in a spelling
-  # it does not read, which pinned_pandoc() refuses, prints no line.
-  expect(
-    "pandoc-assignment-report: unread key",
-    identical(
-      pandoc_assignment_report(c(
-        global,
-        "  variables: {PANDOC_VERSION: \"3.9\"}"
-      )),
-      "1\t2\t3.10"
-    )
-  )
-  # --pandoc-unread prints that refusal's lines, numbered as above, so the
-  # fleet checker reports what this check stops on (SEOR-mcstkogt).
-  expect(
-    "pandoc-unread-report",
-    identical(
-      pandoc_unread_report(c(
-        global,
-        "  variables: {PANDOC_VERSION: \"3.9\"}",
-        "\f",
-        "x: 1",
-        "\f",
-        "  variables:",
-        "    \"PANDOC_VERSION\": \"3.9\"",
-        "    'PANDOC_VERSION': '3.8'"
-      )),
-      c("unread\t1\t4", "unread\t3\t2", "unread\t3\t3")
-    )
-  )
-  expect(
-    "pandoc-unread-report: none",
-    !length(pandoc_unread_report(c(global, "\f", ci, "\f", block)))
-  )
 
   paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 79 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, ",
+    cases$n + 7L,
+    " pandoc cases)\n"
   )
 }
 
