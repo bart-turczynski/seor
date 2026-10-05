@@ -788,6 +788,12 @@ def self_test() -> int:
            judge({"logo.svg": svg, "logo.png": png}) == ({"logo.svg": None, "logo.png": None}, {}))
     expect("check_logos: DESCRIPTION as bytes", judge(stale, desc.encode("utf-8")) == judge(stale))
     expect("check_logos: DESCRIPTION with a byte-order mark", judge(stale, "\ufeff" + desc) == judge(stale))
+    for eol in ("\r\n", "\r"):
+        expect(f"check_logos: DESCRIPTION lines ending {eol!r}",
+               judge(stale, desc.replace("\n", eol)) == judge(stale))
+    # An unknown package is named before the DESCRIPTION is decoded, as main() names it.
+    expect("check_logos: unknown package before a DESCRIPTION it refuses",
+           exits_with(lambda: judge(stale, b"\xff", "nopkg"), "unknown package 'nopkg'"))
     # An SVG is read as text, so its line breaks are translated as read_text() does.
     for eol in ("\r\n", "\r"):
         expect(f"check_logos: SVG lines ending {eol!r}",
@@ -822,7 +828,9 @@ def self_test() -> int:
     writing = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
 
     def audit(event: str, args: tuple) -> None:
-        if not watching[0]:
+        # Python caching the bytecode of a module first imported in the
+        # window (mkdir, open and rename under __pycache__) is not check_logos.
+        if not watching[0] or (args and "__pycache__" in str(args[0])):
             return
         if event == "open" and isinstance(args[2], int) and args[2] & writing:
             touched.append(f"open {args[0]}")
