@@ -158,8 +158,8 @@ repos:
       # (PRE_COMMIT_TO_REF, else HEAD) and fails on any difference
       # (SEOR-nwfmerhu). The hooks around it read the working tree and this one
       # the pushed commit, so on a push of another branch their verdicts can
-      # differ. Local only: CI's `gates` job installs roxygen2 unpinned (8.1.0),
-      # not the 8.0.0 pin (SEOR-fhrisfpt).
+      # differ. CI's `docs-drift` job runs the same check with the pinned
+      # roxygen2, for changes that reach main without this hook (SEOR-fhrisfpt).
       - id: docs-drift
         name: generated docs match roxygen (man/, NAMESPACE, DESCRIPTION)
         entry: sh scripts/docs-drift.sh
