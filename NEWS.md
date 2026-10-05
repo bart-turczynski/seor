@@ -1,39 +1,7 @@
 # seor (development version)
 
-* The logo files carry full metadata: every link (GitLab, GitHub, CRAN,
-  r-universe, the docs site, the DOI), a screen-reader description, and
-  the Dublin Core, XMP, IPTC, PLUS and EXIF fields, written by the new
-  `scripts/logo-metadata.py` (SEOR-eyfiidrv). Their keywords are the
-  `X-schema.org-keywords` tags of `DESCRIPTION`, after `R`, `rstats` and
-  `R package`, so the logo and r-universe list the same tags
-  (SEOR-qoqmestu).
+* `citation("seor")` carries the Zenodo concept DOI, `10.5281/zenodo.23136687` (SEOR-dvbdsvuq).
 
-* CI pins pandoc 3.10 in every R job, not only the README gate: the
-  download is checked against its published digest and bounded in time. The
-  pre-push gate (`scripts/check-toolchain.R`) fails when the local pandoc
-  differs from the pin, and the fleet standard and
-  `scripts/check-fleet-standard.py` require both (SEOR-egfbijyi). The
-  checker accepts one install shape, the download, the digest check and
-  `dpkg -i` chained in one `if` with a warning branch, or as three
-  consecutive script items. Both checkers read the pin through
-  `scripts/check-toolchain.R`, so they cannot disagree on it
-  (SEOR-xhyrogfm).
-* seor has a logo, the fleet's black hex, in `man/figures/logo.svg` and
-  `logo.png`. r-universe shows it on the package card and pkgdown in the site
-  header, and the README heading carries it (SEOR-wxjuxbtu).
-* The README logo has alt text, "hex logo, white on black". It sits inside
-  the heading, so a screen reader reads "seor hex logo, white on black",
-  with the name once. The fleet standard asks the same of every package, and
-  `scripts/check-fleet-standard.py` flags a logo without it (SEOR-wfleahtg).
-* The README is for users now: an Installation section with the r-universe
-  command, and each member's site and `llms.txt` link. The development setup
-  and verify command live in `CONTRIBUTING.md`, the layout in
-  `ARCHITECTURE.md`. `DESCRIPTION` declares `X-schema.org-keywords` for
-  r-universe (SEOR-kqmqosji, SEOR-nplcfbib).
-* seor 0.1.0 is archived on Zenodo. `citation("seor")`, `CITATION.cff` and
-  `codemeta.json` carry the concept DOI (`10.5281/zenodo.23136687`), `CITATION.cff` also
-  carries the 0.1.0 version DOI, and the README shows the DOI and
-  latest-release badges (SEOR-dvbdsvuq).
 # seor 0.1.0
 
 * First release. It is not on CRAN: `robotstxtr` and `sitemapr` still
