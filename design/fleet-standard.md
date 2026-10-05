@@ -414,6 +414,11 @@ under the owner `gitlab-bart-turczynski`. Researched 2026-10-04
   r-universe shows the logo on the package card and in search, and pkgdown
   puts it in the site header; both find it there. The source artwork, with
   `logo-480.png` and `logo-print.svg`, stays outside the repositories.
+  The files' metadata (every link, the screen-reader description "Logo of
+  the <pkg> library for R, white text on a black background", and the
+  Dublin Core, XMP, IPTC, PLUS and EXIF fields) is written by seor's
+  `scripts/logo-metadata.py` from one table, never by hand; `--check`
+  reports drift (SEOR-eyfiidrv).
   The README heading's `<img>` carries `alt="hex logo, white on black"`,
   without the package name. The `<img>` sits inside the `# <pkg>` heading,
   so its alt joins the heading's accessible name, which reads "<pkg> hex
