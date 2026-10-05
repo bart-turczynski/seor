@@ -276,9 +276,15 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   pandoc replaces the `.deb` (SEOR-vzupmeqj). Only the success path holds:
   a hold before the install, after `fi`, in the else branch or in an item
   after the `if` also runs on the warn path and holds apt's pandoc, and none
-  of them counts. The hold is `apt-mark hold` with `pandoc` among its
-  packages (options and other packages allowed), a command of its own in
-  that branch or item, not one inside a nested `if`, group or function.
+  of them counts, and neither does one after an apt install or upgrade in
+  that path, which may already have replaced the `.deb`. The hold is
+  `apt-mark hold` with `pandoc` among its packages (options such as `-qq`
+  or `-o Key=Value`, other packages, and a `sudo`, `env` or variable
+  prefix allowed), a command of its own in that branch or item, or the
+  first of an `&&`/`||` list, not one inside a nested `if`, group or
+  function. seor's writes `apt-mark hold pandoc || echo "WARNING: …"`: a
+  hold that fails only warns, as the rest of the block does, so it never
+  stops a gate.
   `echo pandoc hold | dpkg --set-selections` sets the same selection but is
   not read: write `apt-mark`. A bump needs nothing for the hold: an
   explicit `dpkg -i` ignores it (dpkg(1), "hold": "When these actions are
