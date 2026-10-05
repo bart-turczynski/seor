@@ -95,8 +95,7 @@ PACKAGES = {
                  ["R", "rstats", "R package", "SEO", "XML sitemap", "sitemaps", "crawling"],
                  None),
     "ssrfr": ("SSRF protection library for R",
-              ["R", "rstats", "R package", "SEO", "SSRF", "server-side request forgery",
-               "security"],
+              ["R", "rstats", "R package", "SSRF", "server-side request forgery", "security"],
               None),
 }
 HUB = "seor"
