@@ -116,7 +116,8 @@ repos:
       # design/fleet-standard.md and reads GitLab and the web, so the hook runs
       # only its offline self-test (fixtures inline), and only when the script
       # changes (SEOR-myokihrl), or check-toolchain.R, whose reader of the
-      # pandoc pin it runs (SEOR-xhyrogfm). It reads .gitlab-ci.yml with
+      # pandoc pin it runs (SEOR-xhyrogfm), or logo-metadata.py, whose keyword
+      # rule and SVG reader it imports (SEOR-uwpnkqnb). It reads .gitlab-ci.yml with
       # PyYAML (ADR 0008), so the hook runs in its own environment with the
       # pinned PyYAML, and `python` is that environment's interpreter.
       - id: check-fleet-standard-self-test
@@ -125,7 +126,7 @@ repos:
         language: python
         additional_dependencies: [pyyaml==6.0.3]
         pass_filenames: false
-        files: ^scripts/check-(fleet-standard\.py|toolchain\.R)$
+        files: ^scripts/(check-fleet-standard\.py|check-toolchain\.R|logo-metadata\.py)$
         stages: [pre-push]
       # seor is a metapackage whose members `sitemapr` and `robotstxtr`
       # are not yet on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always
