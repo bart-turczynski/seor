@@ -767,6 +767,45 @@ def self_test() -> int:
         text, xp = read_png_keywords(png)
         expect("PNG Keywords", text == ", ".join(want))
         expect("EXIF XPKeywords", xp == "; ".join(want))
+
+    # check_logos(), the fleet checker's --check on files in memory: its
+    # verdict is finalize()'s, and its messages name files from the root.
+    desc = description("seor", SEOR_TAGS)
+    stale = {"logo.svg": TEST_SVG.encode("utf-8"), "logo.png": test_png()}
+
+    def judge(files: dict[str, bytes], text: bytes | str = desc, pkg: str = "seor"):
+        return check_logos(pkg, text, files)
+
+    expect("check_logos: drift is what finalize writes", judge(stale) == ({"logo.svg": svg, "logo.png": png}, {}))
+    expect("check_logos: current files",
+           judge({"logo.svg": svg, "logo.png": png}) == ({"logo.svg": None, "logo.png": None}, {}))
+    expect("check_logos: DESCRIPTION as bytes", judge(stale, desc.encode("utf-8")) == judge(stale))
+    expect("check_logos: DESCRIPTION with a byte-order mark", judge(stale, "\ufeff" + desc) == judge(stale))
+    # An SVG is read as text, so its line breaks are translated as read_text() does.
+    for eol in ("\r\n", "\r"):
+        expect(f"check_logos: SVG lines ending {eol!r}",
+               judge({"logo.svg": TEST_SVG.replace("\n", eol).encode("utf-8")}) == ({"logo.svg": svg}, {}))
+    try:
+        judge({"logo.jpg": b""})
+        expect("check_logos: a file name it does not handle", False)
+    except ValueError as e:
+        expect("check_logos: a file name it does not handle", str(e) == "not a logo file name: logo.jpg")
+    expect("check_logos: a logo.png that is no PNG", judge(dict(stale, **{"logo.png": b"x\n"}))
+           == ({"logo.svg": svg}, {"logo.png": "logo-metadata: man/figures/logo.png is not a PNG"}))
+    two = b'<svg xmlns="http://www.w3.org/2000/svg"><title>a</title><title>b</title></svg>'
+    expect("check_logos: an SVG it refuses", judge({"logo.svg": two})
+           == ({}, {"logo.svg": "logo-metadata: man/figures/logo.svg has 2 <title> elements; expected at most one"}))
+    verdicts, broken = judge(dict(stale, **{"logo.svg": stale["logo.svg"] + b"\xff"}))
+    expect("check_logos: an SVG that is not UTF-8", verdicts == {} and broken["logo.svg"].startswith(
+        "logo-metadata: man/figures/logo.svg cannot be parsed (UnicodeDecodeError: 'utf-8' codec can't decode"))
+    expect("check_logos: no rendition judged without logo.svg",
+           broken["logo.png"] == "not judged without logo.svg's verdict")
+    expect("check_logos: a DESCRIPTION that is not UTF-8",
+           exits_with(lambda: judge(stale, desc.encode("utf-8") + b"Note: caf\xe9\n"),
+                      "logo-metadata: DESCRIPTION is not UTF-8;"))
+    expect("check_logos: a DESCRIPTION it refuses",
+           exits_with(lambda: judge(stale, description("ssrfr", "ssrf, SEO"), "ssrfr"),
+                      "logo-metadata: DESCRIPTION tags ssrfr 'SEO'"))
     print("logo-metadata self-test: OK")
     return 0
 
