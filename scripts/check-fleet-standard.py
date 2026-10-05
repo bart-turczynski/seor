@@ -1292,17 +1292,17 @@ def pandoc_install_state(entries: list[str]) -> str:
     return best
 
 
-# A PANDOC_VERSION assignment that persists for the commands after it, read on
-# the Shell mask. It starts a command in the current shell: a line's start, or
-# after `;`, `&&`, `||`, a lone `&` (the command before it is backgrounded,
-# not this one), a `{` group, `then`, `do` or `else`. Not after `(` (a
-# subshell) or `|` (a pipeline stage): an assignment there ends with it. The
-# command is assignments only (`A=1 PANDOC_VERSION=3.10`) or the `export`,
-# `readonly`, `declare` or `typeset` builtin, and it ends there: with a
-# command word after it (`PANDOC_VERSION=3.10 curl …/$PANDOC_VERSION/…`), the
-# assignment reaches that one command's environment, after its words are
-# expanded, and with `|` or `&` after it, a subshell.
-PIN_HEAD = r"(?:^|;|&&|\|\||(?<![&|>])&(?![&>])|(?<!\$)\{)[ \t]*(?:(?:then|do|else)[ \t]+)?"
+# A PANDOC_VERSION assignment command, read on the Shell mask. It starts a
+# command: a line's start, or after `;`, `&&`, `||`, a lone `&` (the command
+# before it is backgrounded, not this one), a `{` group, a case pattern's `)`,
+# `then`, `do` or `else`. Not after `(` or `|`: a subshell or a pipeline stage. The command is
+# assignments only (`A=1 PANDOC_VERSION=3.10`) or the `export`, `readonly`,
+# `declare` or `typeset` builtin, and it ends there: with a command word after
+# it (`PANDOC_VERSION=3.10 curl …/$PANDOC_VERSION/…`), the assignment reaches
+# that one command's environment, after its words are expanded, and with `|`
+# or `&` after it, a subshell. Whether the compound command around it runs in
+# the current shell is shell_frames()' to say.
+PIN_HEAD = r"(?:^|;|&&|\|\||(?<![&|>])&(?![&>])|(?<!\$)\{|\))[ \t]*(?:(?:then|do|else)[ \t]+)?"
 PIN_WORD = r"[^\s;&|<>()]*"
 PIN_TAIL = r"(?=[ \t]*(?:$|;|&&|\|\|))"
 PIN_ASSIGN_RE = re.compile(
@@ -1317,12 +1317,134 @@ PIN_LOCAL_RE = re.compile(rf"{PIN_HEAD}local(?:[ \t]+[-+]\w+)*(?:[ \t]+\w+(?:={P
 OPAQUE_SHELL_RE = re.compile(r"\$\(|`|\beval\b|\b(?:ba|da|k|z)?sh\s+(?:-\w+\s+)*-\w*c\b")
 # A here-document's operator; `<<<` is a here-string, one word.
 HEREDOC_RE = re.compile(r"(?<!<)<<(-?)(?!<)[ \t]*")
+# Its delimiter: one shell word, quoted in part or whole (`'END-PIN'`, `EOF.x`, `\\EOF`).
+HEREDOC_WORD_RE = re.compile(r"(?:'[^']*'|\"(?:[^\"\\]|\\.)*\"|\\.|[^\s;&|<>()'\"\\])+")
+# `(( … ))` arithmetic, where `<<` is a shift (the mask already blanks `$(( … ))`).
+ARITHMETIC_RE = re.compile(r"\(\((?:[^()]|\([^()]*\))*\)\)")
+# The mask's tokens: operators, parentheses, redirections and words.
+SHELL_TOKEN_RE = re.compile(r"\n|;;&|;;|;&|;|&&|\|\||\|&|\||&|\(|\)|[<>]+&?|[^\s;&|()<>]+")
+SHELL_SEPARATORS = {"\n", ";", "&&", "||", "|", "|&", "&", ";;", ";&", ";;&"}
+# Reserved words that open a compound command, and the word that closes it.
+SHELL_CLOSERS = {"if": "fi", "while": "done", "until": "done", "for": "done", "select": "done",
+                 "case": "esac", "{": "}"}
+# Words after which the next word still starts a command.
+SHELL_PREFIXES = {"then", "do", "else", "elif", "!", "time"}
+
+
+@dataclass(eq=False)
+class Frame:
+    """A compound command in a Shell mask: `(…)`, `{…}`, `if…fi`, a loop or
+    `case…esac`, spanning [start, end). `piped` when it is a pipeline stage
+    or backgrounded, so a subshell; `function` when it is a function's body."""
+
+    kind: str
+    start: int
+    end: int = -1
+    piped: bool = False
+    function: bool = False
+    case_state: str = ""
+
+
+def shell_frames(mask: str) -> list[Frame]:
+    """Each compound command in a Shell mask (here-documents blanked), read
+    as sh reads it: reserved words count only at a command's start, a case
+    pattern's `)` closes nothing, `(( … ))` and `[[ … ]]` open nothing, and
+    `name ()` or `function name` makes the next compound command a function
+    body. A frame left open runs to the end."""
+    frames: list[Frame] = []
+    stack: list[Frame] = []
+    ended: list[Frame] = []
+    tokens = list(SHELL_TOKEN_RE.finditer(mask))
+    start, function_next, last = True, False, "\n"
+    k = 0
+
+    def open_frame(kind: str, at: int) -> None:
+        nonlocal function_next
+        frame = Frame(kind, at, piped=last in ("|", "|&"), function=function_next,
+                      case_state="subject" if kind == "case" else "")
+        function_next = False
+        frames.append(frame)
+        stack.append(frame)
+
+    def close_frame(at: int) -> None:
+        nonlocal ended
+        frame = stack.pop()
+        frame.end = at
+        ended = [frame]
+
+    while k < len(tokens):
+        m = tokens[k]
+        tok = m.group(0)
+        k += 1
+        top = stack[-1] if stack else None
+        if top is not None and top.case_state in ("subject", "pattern"):
+            if top.case_state == "subject" and tok == "in":
+                top.case_state = "pattern"
+            elif top.case_state == "pattern" and tok == ")":
+                top.case_state, start = "body", True
+            elif top.case_state == "pattern" and tok == "esac":
+                close_frame(m.end())
+                start = False
+            last = tok
+            continue
+        if tok in SHELL_SEPARATORS:
+            if tok in ("|", "|&", "&"):
+                for frame in ended:
+                    frame.piped = True
+            ended = []
+            if top is not None and top.kind == "case" and tok in (";;", ";&", ";;&"):
+                top.case_state = "pattern"
+            start, last = True, tok
+            continue
+        if tok == "(":
+            nxt = tokens[k] if k < len(tokens) else None
+            if mask.startswith("((", m.start()) and (start or last == "for"):
+                arithmetic = ARITHMETIC_RE.match(mask, m.start())
+                stop = arithmetic.end() if arithmetic else len(mask)
+                while k < len(tokens) and tokens[k].start() < stop:
+                    k += 1
+                start, last = False, "))"
+                continue
+            if not start and nxt is not None and nxt.group(0) == ")":
+                k += 1
+                function_next, start, last = True, True, ")"
+                continue
+            open_frame("(", m.start())
+            start, last = True, tok
+            continue
+        if tok == ")":
+            if top is not None and top.kind == "(":
+                close_frame(m.end())
+            start, last = False, tok
+            continue
+        if start and tok in SHELL_CLOSERS:
+            open_frame(tok, m.start())
+            start = tok == "{"
+        elif start and top is not None and tok == SHELL_CLOSERS.get(top.kind):
+            close_frame(m.end())
+            start = False
+        elif start and tok == "function":
+            k += 1
+            function_next, start = True, True
+        elif start and tok == "[[":
+            while k < len(tokens) and tokens[k].group(0) != "]]":
+                k += 1
+            k += 1
+            start = False
+        else:
+            start = start and (tok in SHELL_PREFIXES or tok in ("if", "while", "until"))
+        last = tok
+    for frame in stack:
+        frame.end = len(mask)
+    return frames
 
 
 def without_heredocs(shell: Shell) -> str:
     """The mask with each here-document's body blanked, its delimiter line
     included: its lines are data. The bodies follow the line that opens
-    them, in order; `<<-` lets the delimiter line lead with tabs."""
+    them, in order; `<<-` lets the delimiter line lead with tabs. The
+    delimiter is a shell word with its quotes removed; a `<<` inside
+    `(( … ))` is a shift, no here-document."""
     mask, pending, pos = list(shell.mask), [], 0
     for line in shell.text.split("\n"):
         end = pos + len(line)
@@ -1333,26 +1455,36 @@ def without_heredocs(shell: Shell) -> str:
                 pending.pop(0)
         else:
             for m in HEREDOC_RE.finditer(shell.mask, pos, end):
-                word = re.match(r"[\"']?\\?(\w+)[\"']?", shell.text[m.end():end])
+                if any(a.start() <= m.start() < a.end() for a in ARITHMETIC_RE.finditer(shell.mask, pos, end)):
+                    continue
+                word = HEREDOC_WORD_RE.match(shell.text, m.end(), end)
                 if word:
-                    pending.append((word.group(1), bool(m.group(1))))
+                    pending.append((re.sub(r"\\(.)|['\"]", r"\1", word.group(0)), bool(m.group(1))))
         pos = end + 1
     return "".join(mask)
 
 
 def pin_assignment(item: str) -> str | None:
     """How a script item supplies PANDOC_VERSION: "assigns" when sh runs an
-    assignment of it that the commands after it see (PIN_ASSIGN_RE),
-    "opaque" when one may run where this reader cannot see (under eval,
-    sh -c, `$(...)` or backticks, or a function's `local`), else None: the
-    name in a comment, an echoed string, a word or a here-document assigns
-    nothing, and neither does an assignment in a subshell, a pipeline stage
-    or a command's prefix."""
+    assignment of it that the commands after it see (PIN_ASSIGN_RE, outside
+    any subshell, pipeline stage or function), "opaque" when one may run
+    where this reader cannot see (in a function's body, which runs only if
+    called, under `local`, eval, sh -c, `$(...)` or backticks), else None:
+    the name in a comment, an echoed string, a word or a here-document
+    assigns nothing, and neither does an assignment in a subshell, in a
+    compound command that is a pipeline stage or backgrounded, or in a
+    command's prefix."""
     shell = Shell(item)
     mask = without_heredocs(shell)
-    if PIN_ASSIGN_RE.search(mask):
-        return "assigns"
-    if PIN_LOCAL_RE.search(mask) or ("PANDOC_VERSION=" in shell.text and OPAQUE_SHELL_RE.search(shell.text)):
+    frames = shell_frames(mask)
+    opaque = False
+    for m in PIN_ASSIGN_RE.finditer(mask):
+        around = [frame for frame in frames if frame.start <= m.end() - 1 < frame.end]
+        if any(frame.function for frame in around):
+            opaque = True
+        elif not any(frame.kind == "(" or frame.piped for frame in around):
+            return "assigns"
+    if opaque or PIN_LOCAL_RE.search(mask) or ("PANDOC_VERSION=" in shell.text and OPAQUE_SHELL_RE.search(shell.text)):
         return "opaque"
     return None
 
@@ -3168,17 +3300,42 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     for form, item in (("a subshell", "    - (PANDOC_VERSION=3.10)\n"),
                        ("a pipeline stage", "    - echo a | PANDOC_VERSION=3.10 true\n"),
                        ("a here-document", "    - |\n      cat <<EOF > /tmp/pin.env\n      PANDOC_VERSION=3.10\n      EOF\n"),
-                       ("a command's prefix", "    - PANDOC_VERSION=3.10 curl -fsSL -o /tmp/v https://example.org/$PANDOC_VERSION/v\n")):
+                       ("a command's prefix", "    - PANDOC_VERSION=3.10 curl -fsSL -o /tmp/v https://example.org/$PANDOC_VERSION/v\n"),
+                       ("a subshell, after a command", "    - (cd /tmp; PANDOC_VERSION=3.10; true)\n"),
+                       ("a subshell's && chain", "    - ( true && PANDOC_VERSION=3.10 && true )\n"),
+                       ("a subshell over lines", "    - |\n      (\n      PANDOC_VERSION=3.10\n      )\n"),
+                       ("a group that is a pipeline stage", "    - echo a | { PANDOC_VERSION=3.10; }\n"),
+                       ("a group piped on", "    - '{ PANDOC_VERSION=3.10; } | cat'\n"),
+                       ("a loop that is a pipeline stage", "    - echo a | while read -r x; do PANDOC_VERSION=3.10; done\n"),
+                       ("a backgrounded loop", "    - while true; do PANDOC_VERSION=3.10; break; done &\n")):
         expect_gap(f"reader e2e: the pin only in {form}", "which neither its variables nor its setup assign",
                    "punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"{item}    - curl"),
                    fixture_state())
+    # A compound command in the current shell keeps the assignment: a group,
+    # a branch, a case clause. A finished subshell, `(( … ))` and a closed
+    # here-document leave the commands after them to be read.
+    for form, item in (("a group", "    - '{ PANDOC_VERSION=3.10; }'\n"),
+                       ("an if branch", "    - if true; then PANDOC_VERSION=3.10; fi\n"),
+                       ("a case clause", "    - case x in a|b) PANDOC_VERSION=3.10;; esac\n"),
+                       ("a line after a subshell", "    - (cd /tmp; true); PANDOC_VERSION=3.10\n"),
+                       ("a line after a shift", "    - |\n      (( n = 1 << 2 ))\n      PANDOC_VERSION=3.10\n"),
+                       ("a line after a here-document ended by END-PIN",
+                        "    - |\n      cat <<END-PIN > /tmp/x\n      hi\n      END-PIN\n      PANDOC_VERSION=3.10\n"),
+                       ("a line after a here-document ended by 'EOF.x'",
+                        "    - |\n      cat <<'EOF.x' > /tmp/x\n      hi\n      EOF.x\n      PANDOC_VERSION=3.10\n")):
+        expect_clean(f"reader e2e: the pin assigned in {form}", "punycoder",
+                     edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"{item}    - curl"),
+                     fixture_state())
     # The builtins that assign in the current shell count as assignments.
     for spelling in ("readonly PANDOC_VERSION=3.10", "declare -x PANDOC_VERSION=3.10", "typeset -x PANDOC_VERSION=3.10"):
         expect_clean(f"reader e2e: the pin assigned with {spelling.split()[0]}", "punycoder",
                      edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"    - {spelling}\n    - curl"),
                      fixture_state())
     # An assignment this reader cannot see into is not judged, and the run is incomplete.
-    for form, item in (("eval", "eval \"PANDOC_VERSION=3.10\""), ("local", "local PANDOC_VERSION=3.10")):
+    # A function's body runs only if the function is called: not judged, `local` or not.
+    for form, item in (("eval", "eval \"PANDOC_VERSION=3.10\""), ("local", "local PANDOC_VERSION=3.10"),
+                       ("a function's body", "f() { PANDOC_VERSION=3.10; }"),
+                       ("a `function` body", "function f { PANDOC_VERSION=3.10; }")):
         report = run("punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"    - {item}\n    - curl"),
                      fixture_state())
         if collect is None and (report.gaps
