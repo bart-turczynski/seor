@@ -581,6 +581,43 @@ def finalize(f: Facts, path: Path) -> bytes:
     return render(f, path)
 
 
+# The files this script handles, in the order it finalizes them: logo.svg
+# first, so the renditions can name it.
+LOGO_NAMES = ("logo.svg", "logo.png", "logo-print.svg", "logo-480.png")
+
+
+def finalized(f: Facts, targets: list[Path]):
+    """Each target (in LOGO_NAMES order) with what this script writes for it
+    and whether that differs from the file: the --check verdict."""
+    for t in targets:
+        new = finalize(f, t)
+        yield t, new, new != t.read_bytes()
+
+
+def check_logos(pkg: str, description: str, logos: dict[str, bytes]) -> dict[str, bytes | None]:
+    """--check on files held in memory (the fleet checker reads them from
+    GitLab or a checkout): for each name in `logos`, what this script would
+    write, or None when the file is current. They are written to a temporary
+    man/figures under a DESCRIPTION holding `description`, and judged by the
+    same loop as --check, so the verdict is its verdict. Exits as --check
+    does on a DESCRIPTION or a file it refuses."""
+    unknown = sorted(set(logos) - set(LOGO_NAMES))
+    if unknown:
+        raise ValueError(f"not a logo file name: {', '.join(unknown)}")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        figures = root / "man" / "figures"
+        figures.mkdir(parents=True)
+        (root / "DESCRIPTION").write_bytes(description.encode("utf-8"))
+        targets = []
+        for name in LOGO_NAMES:
+            if name in logos:
+                (figures / name).write_bytes(logos[name])
+                targets.append(figures / name)
+        f = Facts(pkg, default_description(figures))
+        return {t.name: new if drift else None for t, new, drift in finalized(f, targets)}
+
+
 # --- self-test ---------------------------------------------------------------
 
 def read_svg_subjects(svg: str) -> list[list[str]]:
@@ -714,15 +751,13 @@ def main() -> int:
         return self_test()
     if args.pkg is None or args.figures is None:
         ap.error("pkg and figures are required")
-    names = ["logo.svg", "logo.png", "logo-print.svg", "logo-480.png"]
-    targets = [args.figures / n for n in names if (args.figures / n).exists()]
+    targets = [args.figures / n for n in LOGO_NAMES if (args.figures / n).exists()]
     if not any(t.name in ("logo.svg", "logo.png") for t in targets):
         sys.exit(f"logo-metadata: no logo.svg or logo.png in {args.figures}")
     f = Facts(args.pkg, args.description or default_description(args.figures))
     drift = 0
-    for t in targets:
-        new = finalize(f, t)  # logo.svg comes first, so the renditions can name it
-        if new == t.read_bytes():
+    for t, new, drifted in finalized(f, targets):
+        if not drifted:
             print(f"current  {t}")
             continue
         drift += 1

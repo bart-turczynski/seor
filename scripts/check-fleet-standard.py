@@ -300,16 +300,22 @@ class ProbeError(Exception):
 
 
 class DictSource:
-    """Files held in memory: the self-test's fixtures."""
+    """Files held in memory: the self-test's fixtures, text as str and
+    binary files (logo.png) as bytes."""
 
-    def __init__(self, files: dict[str, str]):
+    def __init__(self, files: dict[str, str | bytes]):
         self.files = dict(files)
 
     def tree(self) -> set[str]:
         return set(self.files)
 
     def read(self, path: str) -> str | None:
-        return self.files.get(path)
+        found = self.files.get(path)
+        return found.decode("utf-8", errors="replace") if isinstance(found, bytes) else found
+
+    def read_bytes(self, path: str) -> bytes | None:
+        found = self.files.get(path)
+        return found.encode("utf-8") if isinstance(found, str) else found
 
 
 class LocalSource:
@@ -336,6 +342,11 @@ class LocalSource:
         if not target.is_file():
             return None
         return target.read_text(encoding="utf-8", errors="replace")
+
+    def read_bytes(self, path: str) -> bytes | None:
+        """The file's exact bytes: no decoding, no newline translation."""
+        target = self.root / path
+        return target.read_bytes() if target.is_file() else None
 
 
 def glab_api(path: str, paginate: bool = False) -> object:
@@ -368,7 +379,7 @@ class GitLabSource:
         self.project = project_ref(pkg)
         self.ref = ref
         self._tree: set[str] | None = None
-        self._cache: dict[str, str | None] = {}
+        self._cache: dict[str, bytes] = {}
 
     def tree(self) -> set[str]:
         if self._tree is None:
@@ -380,6 +391,12 @@ class GitLabSource:
         return self._tree
 
     def read(self, path: str) -> str | None:
+        raw = self.read_bytes(path)
+        return None if raw is None else raw.decode("utf-8", errors="replace")
+
+    def read_bytes(self, path: str) -> bytes | None:
+        """The blob's exact bytes, as the raw endpoint serves them (glab api
+        copies a non-JSON body through unchanged); read() decodes them."""
         if path not in self.tree():
             return None
         if path not in self._cache:
@@ -391,7 +408,7 @@ class GitLabSource:
                     break
             if result.returncode:
                 raise ProbeError(f"reading {path}: {result.stderr.decode(errors='replace').strip()[:200]}")
-            self._cache[path] = result.stdout.decode("utf-8", errors="replace")
+            self._cache[path] = result.stdout
         return self._cache[path]
 
 
@@ -2948,21 +2965,29 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
         ".gitlab/issue_templates/Bug.md": "x\n",
         ".gitlab/merge_request_templates/Default.md": "x\n",
     })
-    files.update({path: "x\n" for path in LOGO_FILES})
-    # The keywords logo-metadata.py writes from the DESCRIPTION above, spelled
-    # out rather than built here, in its two bags (the RDF block's and the XMP
-    # packet's).
-    subject = ("<dc:subject><rdf:Bag><rdf:li>R</rdf:li><rdf:li>rstats</rdf:li><rdf:li>R package</rdf:li>"
-               "<rdf:li>punycode</rdf:li><rdf:li>idna</rdf:li><rdf:li>idn</rdf:li><rdf:li>unicode</rdf:li>"
-               "<rdf:li>domain-names</rdf:li></rdf:Bag></dc:subject>")
-    files["man/figures/logo.svg"] = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">\n<metadata>\n'
-        f"<rdf:RDF><cc:Work>\n{subject}\n</cc:Work></rdf:RDF>\n"
-        f'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description>\n{subject}\n'
-        "</rdf:Description></rdf:RDF></x:xmpmeta>\n</metadata>\n<rect width=\"10\" height=\"10\"/>\n</svg>\n"
-    )
+    # logo.svg and logo.png as logo-metadata.py writes them from the
+    # DESCRIPTION above. A package it does not know gets placeholders.
+    if pkg in logo_metadata().PACKAGES:
+        files["man/figures/logo.svg"], files["man/figures/logo.png"] = fixture_logos(pkg, files["DESCRIPTION"])
+    else:
+        files.update({path: "x\n" for path in LOGO_FILES})
     files.update({path: "x\n" for path in AUDIT_TEST_FILES})
     return files
+
+
+@cache
+def fixture_logos(pkg: str, description: str) -> tuple[str, bytes]:
+    """logo.svg (as text) and logo.png as logo-metadata.py writes them from
+    `description`, on its own self-test artwork (TEST_SVG and test_png())."""
+    lm = logo_metadata()
+    new = lm.check_logos(pkg, description, {"logo.svg": lm.TEST_SVG.encode("utf-8"), "logo.png": lm.test_png()})
+    return new["logo.svg"].decode("utf-8"), new["logo.png"]
+
+
+# The keywords logo-metadata.py writes for fixture_repo("punycoder"), spelled
+# out rather than built, so the generated fixture is checked against an
+# independent list.
+FIXTURE_LOGO_KEYWORDS = ["R", "rstats", "R package", "punycode", "idna", "idn", "unicode", "domain-names"]
 
 
 def fixture_state(on_cran: bool = True, release: bool = True, doi: bool = True, fossa: bool = True) -> State:
@@ -3228,6 +3253,45 @@ def self_test() -> list[str]:
     # Logo keywords (SEOR-uwpnkqnb): logo.svg's dc:subject bags against the
     # list logo-metadata.py builds from DESCRIPTION's X-schema.org-keywords.
     expect_clean("logo keywords match DESCRIPTION", "punycoder", cran, fixture_state())
+    # The generated fixture against an independent list: both bags in logo.svg,
+    # and logo.png's Keywords and XPKeywords.
+    lm = logo_metadata()
+    if lm.read_svg_subjects(cran["man/figures/logo.svg"]) != [FIXTURE_LOGO_KEYWORDS] * 2:
+        failures.append(f"fixture logo.svg: keywords are not {FIXTURE_LOGO_KEYWORDS}")
+    if lm.read_png_keywords(cran["man/figures/logo.png"]) != (", ".join(FIXTURE_LOGO_KEYWORDS),
+                                                              "; ".join(FIXTURE_LOGO_KEYWORDS)):
+        failures.append(f"fixture logo.png: keywords are not {FIXTURE_LOGO_KEYWORDS}")
+    # The full logo-metadata.py --check (SEOR-seobtecv), on logo.svg and logo.png.
+    png = "man/figures/logo.png"
+    drifted_description = edit(cran, "DESCRIPTION", "domain-names\n", "domains\n")["DESCRIPTION"]
+    old_svg, old_png = fixture_logos("punycoder", drifted_description)
+    expect_clean("logo.svg and logo.png as logo-metadata.py writes them", "punycoder", cran, fixture_state())
+    # TODAY (pinned before SEOR-seobtecv): logo.png is not read, so this passes.
+    expect_clean("a logo.png whose Keywords drifted from DESCRIPTION", "punycoder",
+                 dict(cran, **{png: old_png}), fixture_state())
+    expect_gap("a logo.png that matches, beside a logo.svg whose keywords drifted",
+               "logo.svg keywords differ from DESCRIPTION's X-schema.org-keywords (missing domain-names; extra domains)",
+               "punycoder", dict(cran, **{"man/figures/logo.svg": old_svg}), fixture_state())
+    # TODAY (pinned before SEOR-seobtecv): only the keywords are read, so these pass.
+    expect_clean("a logo.svg whose dc:title drifted", "punycoder",
+                 edit(cran, "man/figures/logo.svg", "<dc:title>punycoder</dc:title>", "<dc:title>punycode</dc:title>"),
+                 fixture_state())
+    expect_clean("a logo.png whose tEXt Author was edited", "punycoder",
+                 edit(cran, png, b"Author\0Bart Turczynski", b"Author\0B. Turczynski"), fixture_state())
+    expect_clean("a logo.png that is not a PNG", "punycoder", dict(cran, **{png: "x\n"}), fixture_state())
+
+    class UnreadablePng(DictSource):
+        def read_bytes(self, path: str) -> bytes | None:
+            if path == png:
+                raise ProbeError(f"reading {png}: 503")
+            return super().read_bytes(path)
+
+    def png_today(report: Report) -> None:
+        # TODAY (pinned before SEOR-seobtecv): logo.png is never read.
+        if report.gaps or any(area == "logo" for area, _ in report.unjudged):
+            failures.append(f"an unreadable logo.png: expected no logo verdict today, got {report.gaps} / {report.unjudged}")
+
+    run("punycoder", UnreadablePng(cran), fixture_state(), judge=png_today)
     expect_clean("a case-only duplicate tag in DESCRIPTION is not drift", "punycoder",
                  edit(cran, "DESCRIPTION", "domain-names\n", "domain-names, IDNA\n"), fixture_state())
     svg = "man/figures/logo.svg"
