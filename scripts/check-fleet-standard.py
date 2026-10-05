@@ -1,4 +1,4 @@
-# check-fleet-standard v4
+# check-fleet-standard v5
 """Test fleet packages against design/fleet-standard.md and list each gap.
 
 WHY THIS EXISTS. The nine per-package "meets the fleet standard" issues run
@@ -14,8 +14,12 @@ package against the standard (SEOR-myokihrl).
     python3 scripts/check-fleet-standard.py --self-test       # offline fixtures
 
 Exit status: 0 when nothing is missing, 1 on any gap, 2 when there is no gap
-but a probe failed (a network error, glab refusing), so the run is incomplete.
-A probe that fails is reported under "not judged", never as a gap.
+but the run is incomplete: a probe failed (a network error, glab refusing),
+a file could not be read, .gitlab-ci.yml did not load, or a pandoc pin
+assignment sits where this cannot see. Each is reported under "not judged",
+never as a gap. A judgment `--offline` leaves out, or one that hangs on a
+state the run does not know, is listed there too but leaves the run complete
+(Report.skip's `incomplete` flag).
 
 WHERE IT READS. By default each package's `main` on GitLab, through `glab api`
 (the repository tree, raw files, releases and pipeline schedules), because a
@@ -104,17 +108,26 @@ WHAT IT CHECKS, by section of the standard.
   on `main`, with `SCHEDULE_KIND` set on the schedule itself; no schedule
   without a `SCHEDULE_KIND` or off `main`.
 
-HOW IT READS CI, AND WHERE THAT STOPS. seor's scripts are stdlib-only and read
-YAML with small fixed-shape readers rather than a YAML library (check-citation,
-bestpractices-url), so this does too. `.gitlab-ci.yml` is split into its
-top-level blocks; `extends:` is followed, a job's own `rules:` replace the
-template's, `variables:` merge, and YAML anchors (`*name`) pull in the block
-that defines them. `default: before_script` (or the top-level one) joins every
-job that sets no `before_script` of its own and does not turn it off with
-`inherit: default:`. A job's text joins every block it extends; the pandoc
-rule alone reads the one `before_script` and `script` a job ends up with,
-since GitLab replaces arrays along `extends`. `rules:if` and `workflow:rules`
-are evaluated for real (a
+HOW IT READS CI, AND WHERE THAT STOPS. `.gitlab-ci.yml` is read with PyYAML
+(`yaml.safe_load_all`, YAML 1.1 as GitLab reads it: an unquoted `3.10` is
+3.1, `yes` is true), so quoting, trailing comments, flow and block lists,
+anchors, aliases and `<<` merge keys come from YAML itself (ADR 0008,
+SEOR-oznwzhem). The file is one config document, or a `spec:` header document
+and then the config. A file that does not load (a YAML error, an unknown tag
+such as `!reference`, a scalar its tag cannot hold such as `2026-02-30`, a
+recursive alias, another document shape), whose `extends:` names a block it
+does not define, or whose `rules:if` does not read (an empty one included),
+leaves every CI rule of that package not judged and the run incomplete; the
+other areas are still judged. `include:` is not followed. On top of the YAML sits only GitLab's own
+semantics: `extends:` deep-merges mappings and replaces arrays, later parents
+over earlier ones and the job over all; `default:` (or a deprecated top-level
+`image:`, `before_script:`, ...) fills each key a job leaves unset, never
+merging into one it sets, unless `inherit: default:` turns it off; global
+`variables:` reach a job unless `inherit: variables:` turns them off, and a
+job's own variables override them, in its commands and in its `rules:if`.
+`before_script` and `script` are the items GitLab runs: a string is one item,
+nested lists (an alias to a list of commands) flatten. `rules:if` and
+`workflow:rules` are evaluated for real (a
 small evaluator for `==`, `!=`, `=~`, `!~`, `&&`, `||`, presence and
 parentheses) in four pipelines: a push to main, a `deep-check` schedule, a
 `dependency-audit` schedule and a tag. A job "runs" in a pipeline when the
@@ -124,11 +137,19 @@ in neither a push to main nor the dependency-audit schedule (design/fleet.md:
 every scheduled job requires its kind). Its R version comes from its image tag,
 expanded through `parallel:matrix` and variables, and is compared by minor
 version with the current release and oldrel (api.r-hub.io) and the DESCRIPTION
-floor. What a job does is read textually, from the job and from every
-repository R, shell or YAML script it names (two levels deep, comment lines
-dropped, and R stage tables' `default = FALSE` entries dropped, since those
-stages are opt-in). Python scripts are not followed: the citation scripts a job
-names quote `R CMD check --as-cran` in their prose.
+floor. Settings GitLab holds as keys are read as keys: `allow_failure`,
+`coverage`, the cobertura report, `pages`, and variables such as
+`_R_CHECK_CRAN_INCOMING_` as typed values. What a job's commands do is read
+textually, from the `before_script` and `script` items it ends up with (a
+parent's script it replaces does not count, nor an anchor it never uses),
+with a `NAME=value` line for each variable those items or the scripts read
+(so `--as-cran` in `$ARGS` counts, and a variable nothing reads does not),
+and from every repository R, shell or YAML script that text
+names, each a
+separate text (two levels deep, comment lines dropped, and R stage tables'
+`default = FALSE` entries dropped, since those stages are opt-in). Python
+scripts are not followed: the citation scripts a job names quote
+`R CMD check --as-cran` in their prose.
 So a gate is "present" when its call appears in that text; a script that takes
 the call but skips it at run time reads as present. Not checked: whether a tag
 pipeline fails on "already on CRAN", whether the URL check fails on zero URLs
@@ -136,8 +157,10 @@ and exempts only the BugReports 404, how security-audit treats missing OSS
 Index credentials, the GitLab project badges, and that no employer is named as
 copyright holder or funder. Those stay review items.
 
-Stdlib only. `glab` must be on PATH and authenticated unless `--offline`, and
-`Rscript` for the pandoc pin (the self-test included).
+Needs PyYAML (pinned at 6.0.3 in the pre-commit hook, which installs it); a run
+without it exits 2 with an install hint. `glab` must be on PATH and
+authenticated unless `--offline`, and `Rscript` for the pandoc pin (the
+self-test included).
 """
 
 from __future__ import annotations
@@ -153,9 +176,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from functools import cached_property
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable
+
+try:
+    import yaml
+except ImportError:  # main() says how to install it
+    yaml = None
 
 OWNER = "bart-turczynski"
 FLEET = ("rurl", "pslr", "punycoder", "raddr", "ssrfr", "pagerankr", "sitemapr", "seor", "robotstxtr")
@@ -221,12 +250,20 @@ class Report:
     pkg: str
     gaps: list[tuple[str, str]] = field(default_factory=list)
     unjudged: list[tuple[str, str]] = field(default_factory=list)
+    incomplete: bool = False
 
     def gap(self, area: str, text: str) -> None:
         self.gaps.append((area, text))
 
-    def skip(self, area: str, text: str) -> None:
+    def skip(self, area: str, text: str, *, incomplete: bool) -> None:
+        """A judgment not made. Each caller says whether it leaves the run
+        `incomplete` (exit_status): true when the run could not make it, a
+        probe that failed, a file that did not load, a construct this script
+        cannot see into. False when it is left out by choice (`--offline`),
+        or hangs on a state that is unknown because the run was offline or
+        because a probe failed, which that probe's own skip already marks."""
         self.unjudged.append((area, text))
+        self.incomplete = self.incomplete or incomplete
 
     def render(self) -> str:
         lines = [f"## {self.pkg}: {len(self.gaps)} gap(s)", ""]
@@ -531,7 +568,11 @@ SCRIPT_SUFFIXES = {"", ".R", ".r", ".sh", ".yml", ".yaml"}
 
 
 def inline_scripts(text: str, source, depth: int = 2, seen: set[str] | None = None) -> list[tuple[str, str]]:
-    """(path, text) for each repository script `text` names, followed `depth` levels."""
+    """(path, text) for each repository script `text` names, followed `depth` levels.
+
+    ProbeError when a named script cannot be read: a view without it would
+    judge the rules it holds as missing.
+    """
     seen = set() if seen is None else seen
     out = []
     tree = source.tree()
@@ -541,10 +582,7 @@ def inline_scripts(text: str, source, depth: int = 2, seen: set[str] | None = No
         if token == ".gitlab-ci.yml":
             continue
         seen.add(token)
-        try:
-            body = source.read(token) or ""
-        except ProbeError:
-            continue
+        body = source.read(token) or ""
         if len(body) > 400_000:
             continue
         body = strip_comment_lines(body)
@@ -556,91 +594,129 @@ def inline_scripts(text: str, source, depth: int = 2, seen: set[str] | None = No
     return out
 
 
-# --- CI: blocks, extends, rules ---------------------------------------------------
+# --- CI: the YAML, extends, default, rules -----------------------------------------
 
-TOP_KEY = re.compile(r"^([^\s#-][^\n]*?):(?=\s|$)")
+# Top-level keys that are not jobs.
 RESERVED = {"stages", "default", "variables", "workflow", "include", "image", "services",
             "cache", "before_script", "after_script"}
+# The deprecated top-level spellings of `default:` keys.
+LEGACY_DEFAULTS = ("image", "services", "cache", "before_script", "after_script")
+# GitLab refuses `extends` nested deeper than this.
+EXTENDS_DEPTH = 11
 
 
-def split_blocks(text: str) -> dict[str, list[str]]:
-    """Top-level key -> its lines (key line first), comment lines dropped."""
-    blocks: dict[str, list[str]] = {}
-    current = None
-    for line in text.splitlines():
-        if line.lstrip().startswith("#"):
-            continue
-        m = TOP_KEY.match(line)
-        if m:
-            current = m.group(1).strip().strip("\"'")
-            blocks[current] = [line]
-        elif current is not None:
-            blocks[current].append(line)
-    return blocks
+class CIError(Exception):
+    """A .gitlab-ci.yml GitLab itself would refuse: its CI rules are not judged."""
 
 
-def children(lines: list[str]) -> dict[str, tuple[str, list[str]]]:
-    """Immediate child keys of a block: key -> (inline value, deeper lines)."""
-    out: dict[str, tuple[str, list[str]]] = {}
-    body = [line for line in lines[1:] if line.strip()]
-    if not body:
-        return out
-    indent = len(body[0]) - len(body[0].lstrip())
-    key = None
-    for line in body:
-        level = len(line) - len(line.lstrip())
-        if level == indent and not line.lstrip().startswith("- "):
-            m = re.match(r"\s*([\w.-]+):\s*(.*)$", line)
-            if m:
-                key = m.group(1)
-                out[key] = (m.group(2).strip(), [])
-                continue
-        if key is not None and level >= indent:
-            out[key][1].append(line)
-    return out
+def load_ci(text: str) -> dict:
+    """The config mapping of a .gitlab-ci.yml, or CIError when GitLab would refuse it.
+
+    Every failure to load is a CIError: a YAML error, an unknown tag, and also
+    a scalar its tag cannot hold (`2026-02-30`, `!!int 'abc'`), which PyYAML
+    raises as a plain ValueError. The file is one document, or a header
+    document holding only `spec:` (an include's inputs), `---`, then the
+    config; an empty document (a trailing `---`) is no document. A node that contains itself (`a: &a [*a]`) is refused here, so
+    nothing downstream recurses into it.
+    """
+    try:
+        documents = [document for document in yaml.safe_load_all(text) if document is not None]
+    except Exception as error:  # noqa: BLE001 - any failure to load is a load error
+        detail = str(error) if isinstance(error, yaml.YAMLError) else f"{type(error).__name__}: {error}"
+        raise CIError(" ".join(detail.split())[:300]) from error
+    if len(documents) == 2 and isinstance(documents[0], dict) and set(documents[0]) == {"spec"}:
+        documents = documents[1:]
+    if len(documents) != 1:
+        raise CIError(f"it holds {len(documents)} YAML documents, not one config after at most a `spec:` header")
+    if not isinstance(documents[0], dict):
+        raise CIError("its top level is not a mapping")
+    acyclic(documents[0])
+    return documents[0]
 
 
-def unquote(value: str) -> str:
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        inner = value[1:-1]
-        return inner.replace("''", "'") if value[0] == "'" else inner
-    return value
+def acyclic(node: object, open_ids: set[int] | None = None, done: set[int] | None = None) -> None:
+    """CIError when a mapping or list contains itself, through a recursive alias."""
+    if not isinstance(node, (dict, list)):
+        return
+    open_ids = set() if open_ids is None else open_ids
+    done = set() if done is None else done
+    if id(node) in done:
+        return
+    if id(node) in open_ids:
+        raise CIError("a recursive alias: a node contains itself")
+    open_ids.add(id(node))
+    for child in node.values() if isinstance(node, dict) else node:
+        acyclic(child, open_ids, done)
+    open_ids.discard(id(node))
+    done.add(id(node))
 
 
-def list_values(inline: str, lines: list[str]) -> list[str]:
-    if inline.startswith("["):
-        return [unquote(v) for v in inline.strip("[]").split(",") if v.strip()]
-    if inline:
-        return [unquote(inline)]
-    return [unquote(line.strip()[2:]) for line in lines if line.strip().startswith("- ")]
+def gitlab_str(value: object) -> str:
+    """A YAML scalar as GitLab hands it to a job or a rule: `true`/`false`, 3.1 for an unquoted 3.10."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "" if value is None else str(value)
 
 
-def parse_rules(lines: list[str]) -> list[dict[str, str]]:
-    rules: list[dict[str, str]] = []
-    body = [line for line in lines if line.strip()]
-    if not body:
-        return rules
-    item_indent = min(len(line) - len(line.lstrip()) for line in body if line.lstrip().startswith("- "))
-    for line in body:
-        level = len(line) - len(line.lstrip())
-        stripped = line.strip()
-        if level == item_indent and stripped.startswith("- "):
-            rules.append({})
-            stripped = stripped[2:]
-        if not rules:
-            continue
-        m = re.match(r"([\w-]+):\s*(.*)$", stripped)
-        if m and level <= item_indent + 2:
-            rules[-1][m.group(1)] = unquote(m.group(2))
-    return rules
+def as_strings(variables: dict[str, object]) -> dict[str, str]:
+    """Typed variables as the strings a job and its rules see."""
+    return {name: gitlab_str(value) for name, value in variables.items()}
 
 
+def variables_of(block: object) -> dict[str, object]:
+    """A `variables:` mapping as typed values; the `{value: ..., description: ...}` form gives its value."""
+    if not isinstance(block, dict):
+        return {}
+    return {str(name): value.get("value") if isinstance(value, dict) else value for name, value in block.items()}
+
+
+def script_items(value: object) -> list[str]:
+    """A `before_script`/`script` value as the items GitLab runs, in order.
+
+    A string is one item. Nested lists flatten, as GitLab flattens them: an
+    alias to an anchored list of commands is its commands. A mapping is no
+    command (GitLab refuses it) and gives none.
+    """
+    if value is None or isinstance(value, dict):
+        return []
+    if isinstance(value, list):
+        return [item for entry in value for item in script_items(entry)]
+    return [gitlab_str(value)]
+
+
+def deep_merge(base: object, over: object) -> object:
+    """GitLab's `extends` merge: mappings merge key by key, anything else (arrays included) is replaced."""
+    if not (isinstance(base, dict) and isinstance(over, dict)):
+        return over
+    merged = dict(base)
+    for key, value in over.items():
+        merged[key] = deep_merge(base[key], value) if key in base else value
+    return merged
+
+
+def inherited(setting: object, key: str) -> bool:
+    """Whether an `inherit:` setting (true, false or a list of keys) lets `key` through."""
+    if setting is False:
+        return False
+    if isinstance(setting, list):
+        return key in setting
+    return True
+
+
+# A variable a command or script reads: `$NAME`, `${NAME…}`, or R's `Sys.getenv("NAME")`.
+VAR_READ_RE = re.compile(r"\$\{?(\w+)|Sys\.getenv\(\s*[\"'](\w+)[\"']")
+REGEX_LITERAL = re.compile(r"/((?:\\.|[^/])*)/([a-z]*)")
 EXPR_TOKEN = re.compile(r"\s*(?:(\$\{?\w+\}?)|(\"[^\"]*\"|'[^']*')|(==|!=|=~|!~|&&|\|\||\(|\))|(null)\b)")
 
 
 def evaluate(expr: str, env: dict[str, str]) -> bool:
-    """Evaluate a GitLab `rules:if` expression against variables in `env`."""
+    """Evaluate a GitLab `rules:if` expression against variables in `env`.
+
+    The right of `=~`/`!~` is a `/regex/`, or a variable holding one.
+    ValueError (or re.error, for a bad regex) when the expression does not
+    read whole: empty, cut short, unbalanced, with words left over, or a
+    pattern variable that is unset or holds no `/regex/`.
+    """
     tokens: list[tuple[str, str]] = []
     i = 0
     while i < len(expr):
@@ -648,11 +724,17 @@ def evaluate(expr: str, env: dict[str, str]) -> bool:
             i += 1
             continue
         if tokens and tokens[-1] == ("op", "=~") or tokens and tokens[-1] == ("op", "!~"):
-            m = re.compile(r"/((?:\\.|[^/])*)/([a-z]*)").match(expr, i)
-            if not m:
+            m = REGEX_LITERAL.match(expr, i)
+            held = None if m else re.compile(r"\$\{?(\w+)\}?").match(expr, i)
+            if held:
+                # A variable on the right holds the pattern, slashes included.
+                m = REGEX_LITERAL.fullmatch(env.get(held.group(1)) or "")
+                if not m:
+                    raise ValueError(f"${held.group(1)} holds no /regex/ for {expr!r}")
+            elif not m:
                 raise ValueError(f"bad regex in {expr!r}")
             tokens.append(("re", m.group(1) + ("\x00i" if "i" in m.group(2) else "")))
-            i = m.end()
+            i = (held or m).end()
             continue
         m = EXPR_TOKEN.match(expr, i)
         if not m or m.end() == i:
@@ -678,21 +760,29 @@ def evaluate(expr: str, env: dict[str, str]) -> bool:
             return text
         return None
 
-    def atom() -> bool:
+    def take() -> tuple[str, str]:
         nonlocal pos
-        token = tokens[pos]
-        if token == ("op", "("):
-            pos += 1
-            result = disjunction()
-            pos += 1
-            return result
+        if pos == len(tokens):
+            raise ValueError(f"rule {expr!r} ends early")
         pos += 1
+        return tokens[pos - 1]
+
+    def atom() -> bool:
+        token = take()
+        if token == ("op", "("):
+            result = disjunction()
+            if take() != ("op", ")"):
+                raise ValueError(f"unbalanced parentheses in {expr!r}")
+            return result
+        if token[0] not in ("var", "str", "null"):
+            raise ValueError(f"cannot read rule {expr!r}")
         if pos < len(tokens) and tokens[pos][0] == "op" and tokens[pos][1] in ("==", "!=", "=~", "!~"):
-            op = tokens[pos][1]
-            right = tokens[pos + 1]
-            pos += 2
+            op = take()[1]
+            right = take()
             left = value(token)
             if op in ("==", "!="):
+                if right[0] not in ("var", "str", "null"):
+                    raise ValueError(f"cannot read rule {expr!r}")
                 equal = left == value(right)
                 return equal if op == "==" else not equal
             pattern, _, flag = right[1].partition("\x00")
@@ -718,14 +808,33 @@ def evaluate(expr: str, env: dict[str, str]) -> bool:
             result = result or right
         return result
 
-    return disjunction()
+    result = disjunction()
+    if pos != len(tokens):
+        raise ValueError(f"cannot read rule {expr!r}")
+    return result
 
 
-def first_match(rules: list[dict[str, str]], env: dict[str, str]) -> str | None:
-    """The `when` of the first rule that matches, or None when none matches."""
+def first_match(rules: list, env: dict[str, str]) -> str | None:
+    """The `when` of the first rule that matches, or None when none matches.
+
+    CIError for an `if:` this cannot evaluate, an empty one included
+    (`- if:` with no expression): what GitLab makes of that is not settled
+    here, so the file's CI is not judged rather than guessed.
+    """
     for rule in rules:
-        if "if" not in rule or evaluate(rule["if"], env):
-            return rule.get("when", "on_success")
+        if not isinstance(rule, dict):
+            continue
+        if "if" in rule:
+            expr = rule["if"]
+            if not isinstance(expr, str) or not expr.strip():
+                raise CIError(f"a rule's `if:` is {expr!r}, not an expression")
+            try:
+                matched = evaluate(expr, env)
+            except (ValueError, re.error) as error:
+                raise CIError(f"cannot evaluate `if: {expr}`: {error}") from error
+            if not matched:
+                continue
+        return gitlab_str(rule.get("when", "on_success"))
     return None
 
 
@@ -739,188 +848,192 @@ PIPELINES = {
 }
 
 
-@dataclass
+@dataclass(eq=False)
 class Job:
-    name: str
-    attrs: dict[str, tuple[str, list[str]]]
-    text: str
-    variables: dict[str, str]
-    runs: dict[str, bool] = field(default_factory=dict)
-    scripts: list[tuple[str, str]] = field(default_factory=list)
-    inherits_default_before: bool = False
+    """A job as GitLab runs it.
 
-    def full_text(self) -> str:
-        return "\n".join([self.text] + [body for _, body in self.scripts])
-
-    def chunks(self) -> list[str]:
-        return [self.text] + [body for _, body in self.scripts]
-
-
-def yaml_scalar(raw: str) -> str:
-    """A one-line YAML scalar's value: quotes removed, a trailing `# comment` dropped.
-
-    An unquoted decimal is read as YAML reads it, a float: `3.10` is 3.1 to
-    GitLab's parser as to PyYAML (SEOR-egfbijyi). PANDOC_VERSION is not read
-    here but by check-toolchain.R, whose `yaml_scalar()` does the same
-    (pandoc_assignments(); SEOR-xhyrogfm).
+    `config` is its mapping with `extends` merged and `default:` filled in;
+    `defaulted` names the keys `default:` supplied; `global_variables` are the
+    global ones `inherit: variables:` lets through. `source` is the
+    repository its scripts are read from.
     """
-    raw = raw.strip()
-    quoted = re.match(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'", raw)
-    if quoted:
-        return unquote(quoted.group(0))
-    value = re.sub(r"\s+#.*$", "", raw)
-    if re.fullmatch(r"[-+]?\d+\.\d+", value):
-        return str(float(value))
-    return value
 
+    name: str
+    config: dict
+    defaulted: frozenset[str]
+    global_variables: dict[str, object]
+    source: object = None
+    runs: dict[str, bool] = field(default_factory=dict)
 
-def scalar_map(lines: list[str]) -> dict[str, str]:
-    out = {}
-    for line in lines:
-        m = re.match(r"\s*([\w.-]+):\s*(\S.*)$", line)
-        if m:
-            out[m.group(1)] = yaml_scalar(m.group(2))
-    return out
+    @property
+    def variables(self) -> dict[str, object]:
+        """The job's own variables, typed, merged along `extends`."""
+        return variables_of(self.config.get("variables"))
+
+    def all_variables(self) -> dict[str, object]:
+        """What the job sees: the global variables it inherits, then its own over them."""
+        return {**self.global_variables, **self.variables}
+
+    @cached_property
+    def strings(self) -> dict[str, str]:
+        """all_variables() as the strings the job, its rules and its image see."""
+        return as_strings(self.all_variables())
+
+    @property
+    def inherits_default_before(self) -> bool:
+        return "before_script" in self.defaulted
+
+    def script(self, with_default: bool = True) -> list[str]:
+        """The `before_script` then `script` items the job runs, decoded and flattened.
+
+        `with_default=False` leaves out a `before_script` that `default:` supplied.
+        """
+        before = [] if self.inherits_default_before and not with_default else script_items(self.config.get("before_script"))
+        return before + script_items(self.config.get("script"))
+
+    def matrix(self) -> list[dict]:
+        """The `parallel: matrix` entries."""
+        parallel = self.config.get("parallel")
+        entries = parallel.get("matrix") if isinstance(parallel, dict) else None
+        return [entry for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
+
+    def command_text(self) -> str:
+        """The job's own script items as one text, comment lines dropped."""
+        return "\n".join(strip_comment_lines(item) for item in self.script())
+
+    @cached_property
+    def view(self) -> tuple[str, ...]:
+        """The one view every text rule searches, as separate texts: the
+        job's script items with a `NAME=value` line for each variable they
+        read, then each repository script that text names, followed two
+        levels. A variable counts when the items, a script or another
+        counted variable's value reads it (VAR_READ_RE): `R CMD check $ARGS`
+        holds ARGS's flags and `Rscript $GATES` runs GATES's script, while a
+        variable nothing reads is no command. ProbeError when a named script
+        cannot be read."""
+        commands, strings, used = self.command_text(), self.strings, set()
+        while True:
+            own = "\n".join([commands] + [f"{name}={value}" for name, value in strings.items() if name in used])
+            scripts = [body for _, body in inline_scripts(own, self.source)] if self.source is not None else []
+            reads = {a or b for text in [own] + scripts for a, b in VAR_READ_RE.findall(text)}
+            if not (reads & set(strings)) - used:
+                return (own, *scripts)
+            used |= reads & set(strings)
+
+    @cached_property
+    def full_text(self) -> str:
+        """view as one text."""
+        return "\n".join(self.view)
 
 
 class CI:
+    """A .gitlab-ci.yml, loaded with yaml.safe_load_all and resolved as GitLab resolves it.
+
+    `error` is set, and `jobs` left empty, when GitLab would refuse the file
+    or this reader cannot follow it: it does not load (load_ci()), an
+    `extends` names no block, loops or nests too deep, or a `rules:if` does
+    not read.
+    """
+
     def __init__(self, text: str, source):
         self.text = text
-        self.blocks = split_blocks(text)
         self.source = source
-        self.global_vars = scalar_map(self.blocks.get("variables", [])[1:])
-        default = children(self.blocks.get("default", ["default:"]))
-        self.default_image = default.get("image", ("", []))[0]
-        # `default: before_script` runs in every job that sets none of its own.
-        # The top-level `before_script:` is the deprecated spelling of the same.
-        self.default_before = default.get("before_script")
-        if self.default_before is None and "before_script" in self.blocks:
-            self.default_before = ("", self.blocks["before_script"][1:])
-        if "image" in self.blocks:
-            self.default_image = self.blocks["image"][0].partition(":")[2].strip()
-        workflow = children(self.blocks.get("workflow", ["workflow:"]))
-        self.workflow_rules = parse_rules(workflow["rules"][1]) if "rules" in workflow else None
-        self.anchors = {}
-        for name, lines in self.blocks.items():
-            for line in lines:
-                for anchor in re.findall(r"&([\w-]+)", line.split("#")[0]):
-                    self.anchors.setdefault(anchor, name)
-        self.jobs = {name: self.job(name) for name in self.blocks
-                     if name not in RESERVED and not name.startswith(".")}
+        self.error: str | None = None
+        self.data: dict = {}
+        self.global_vars: dict[str, object] = {}
+        self.default: dict = {}
+        self.workflow_rules: list | None = None
+        self.admits: dict[str, bool] = {}
+        self.jobs: dict[str, Job] = {}
+        try:
+            data = load_ci(text)
+            self.data = data
+            self.global_vars = variables_of(data.get("variables"))
+            default = data.get("default")
+            self.default = dict(default) if isinstance(default, dict) else {}
+            for key in LEGACY_DEFAULTS:
+                if key in data and key not in self.default:
+                    self.default[key] = data[key]
+            workflow = data.get("workflow")
+            rules = workflow.get("rules") if isinstance(workflow, dict) else None
+            self.workflow_rules = rules if isinstance(rules, list) else None
+            self.admits = {pipeline: self.workflow_rules is None
+                           or first_match(self.workflow_rules, self.env(pipeline)) not in (None, "never")
+                           for pipeline in PIPELINES}
+            self.jobs = {name: self.job(name) for name, block in data.items()
+                         if isinstance(name, str) and name not in RESERVED and not name.startswith(".")
+                         and isinstance(block, dict)}
+        except (CIError, RecursionError) as error:
+            self.error = str(error) if isinstance(error, CIError) else "it nests too deep to resolve"
+            self.jobs = {}
 
-    def env(self, pipeline: str) -> dict[str, str]:
-        env = dict(self.global_vars)
+    def env(self, pipeline: str, variables: dict[str, str] | None = None) -> dict[str, str]:
+        """What `rules:if` sees in `pipeline`: `variables` (the global ones
+        when None, which is what `workflow:rules` sees), then the pipeline's own."""
+        env = dict(as_strings(self.global_vars) if variables is None else variables)
         env.update({"CI_DEFAULT_BRANCH": "main"})
         env.update(PIPELINES[pipeline])
         return env
 
     def admitted(self, pipeline: str) -> bool:
-        if self.workflow_rules is None:
-            return True
-        return first_match(self.workflow_rules, self.env(pipeline)) not in (None, "never")
+        return self.admits.get(pipeline, False)
 
-    def resolve(self, name: str, seen: set[str]) -> tuple[dict, list[str], dict[str, str]]:
-        """(attributes, text blocks, variables) of a block with its extends applied."""
-        lines = self.blocks.get(name)
-        if lines is None or name in seen:
-            return {}, [], {}
-        seen = seen | {name}
-        own = children(lines)
-        attrs: dict = {}
-        texts: list[str] = []
-        variables: dict[str, str] = {}
-        parents = list_values(*own["extends"]) if "extends" in own else []
+    def resolve(self, name: str, chain: tuple[str, ...] = ()) -> dict:
+        """A block with its `extends` merged in: parents in order, later over earlier, the block over all."""
+        if name in chain:
+            raise CIError(f"extends loops: {' -> '.join(chain + (name,))}")
+        if len(chain) > EXTENDS_DEPTH:
+            raise CIError(f"{chain[0]}: extends nests deeper than {EXTENDS_DEPTH} levels")
+        block = self.data.get(name)
+        if not isinstance(block, dict):
+            raise CIError(f"{chain[-1]} extends {name}, which .gitlab-ci.yml does not define")
+        parents = block.get("extends", [])
+        parents = [parents] if isinstance(parents, str) else parents
+        if not isinstance(parents, list) or not all(isinstance(parent, str) for parent in parents):
+            raise CIError(f"{name}: extends is neither a name nor a list of names")
+        merged: object = {}
         for parent in parents:
-            p_attrs, p_texts, p_vars = self.resolve(parent, seen)
-            attrs.update(p_attrs)
-            texts += p_texts
-            variables.update(p_vars)
-        attrs.update(own)
-        variables.update(scalar_map(own.get("variables", ("", []))[1]))
-        texts.append("\n".join(lines))
-        for anchor in re.findall(r"\*([\w-]+)", "\n".join(lines)):
-            holder = self.anchors.get(anchor)
-            if holder and holder != name:
-                texts.append("\n".join(self.blocks[holder]))
-        return attrs, texts, variables
+            merged = deep_merge(merged, self.resolve(parent, chain + (name,)))
+        return deep_merge(merged, {key: value for key, value in block.items() if key != "extends"})
 
     def job(self, name: str) -> Job:
-        attrs, texts, variables = self.resolve(name, set())
-        inherits = bool(self.default_before) and "before_script" not in attrs and self.inherits_default_before(attrs)
-        if inherits:
-            inline, lines = self.default_before
-            texts.insert(0, "\n".join(["before_script: " + inline] + lines))
-        text = "\n".join(dict.fromkeys(texts))
-        job = Job(name, attrs, text, variables, inherits_default_before=inherits)
-        rules = parse_rules(attrs["rules"][1]) if "rules" in attrs else None
-        job_when = attrs.get("when", ("on_success", []))[0] or "on_success"
+        config = self.resolve(name)
+        inherit = config.get("inherit") if isinstance(config.get("inherit"), dict) else {}
+        defaulted = set()
+        for key, value in self.default.items():
+            if key not in config and inherited(inherit.get("default", True), key):
+                config[key] = value
+                defaulted.add(key)
+        global_variables = {key: value for key, value in self.global_vars.items()
+                            if inherited(inherit.get("variables", True), key)}
+        job = Job(name, config, frozenset(defaulted), global_variables, self.source)
+        rules = config.get("rules")
+        job_when = gitlab_str(config.get("when") or "on_success")
         for pipeline in PIPELINES:
             if not self.admitted(pipeline):
                 job.runs[pipeline] = False
                 continue
-            when = first_match(rules, self.env(pipeline)) if rules is not None else job_when
+            # A job's rules see its own variables over the global ones it inherits.
+            when = first_match(rules, self.env(pipeline, job.strings)) if isinstance(rules, list) else job_when
             job.runs[pipeline] = when in ("on_success", "always", "delayed")
-        job.scripts = inline_scripts(text, self.source)
         return job
 
-    @staticmethod
-    def inherits_default_before(attrs: dict) -> bool:
-        """False when `inherit: default:` is false or a list without before_script."""
-        if "inherit" not in attrs:
-            return True
-        inherit = children(["inherit:"] + attrs["inherit"][1])
-        if "default" not in inherit:
-            return True
-        value = inherit["default"][0]
-        if value in ("true", "false"):
-            return value == "true"
-        return "before_script" in list_values(*inherit["default"])
-
-    def setup_text(self, job: Job) -> str:
-        """The job's effective `before_script` and `script`, `default:` left out.
-
-        Unlike `job.text`, which joins every block the job extends, this takes
-        the one `before_script` and `script` the job ends up with: its own, or
-        else the template's merged last, as GitLab replaces arrays along
-        `extends`. The anchor blocks they pull in are added.
-        """
-        parts = []
-        for key in ("before_script", "script"):
-            if key in job.attrs:
-                inline, lines = job.attrs[key]
-                parts.append("\n".join([f"{key}: {inline}"] + lines))
-        text = "\n".join(parts)
-        for anchor in dict.fromkeys(re.findall(r"\*([\w-]+)", text)):
-            holder = self.anchors.get(anchor)
-            if holder:
-                text += "\n" + "\n".join(self.blocks[holder])
-        return text
-
-    def default_before_text(self) -> str:
-        if not self.default_before:
-            return ""
-        inline, lines = self.default_before
-        return "\n".join(["before_script: " + inline] + lines)
+    def default_before(self) -> list[str]:
+        """The items of `default: before_script` (or the top-level one)."""
+        return script_items(self.default.get("before_script"))
 
     def images(self, job: Job) -> list[str]:
         """The job's image(s), expanded through parallel:matrix and variables."""
-        inline, lines = job.attrs.get("image", ("", []))
-        image = unquote(inline) if inline else ""
-        if not image:
-            name = scalar_map(lines).get("name", "")
-            image = name or self.default_image
-        image = unquote(image)
+        image = job.config.get("image")
+        if isinstance(image, dict):
+            image = image.get("name")
+        image = "" if isinstance(image, (dict, list)) else gitlab_str(image)
         matrix: dict[str, list[str]] = {}
-        if "parallel" in job.attrs:
-            plines = job.attrs["parallel"][1]
-            current = None
-            for line in plines:
-                m = re.match(r"\s*(?:- )?([A-Z_][A-Z0-9_]*):\s*(.*)$", line)
-                if m:
-                    current = m.group(1)
-                    matrix.setdefault(current, []).extend(list_values(m.group(2), []) if m.group(2) else [])
-                elif current and line.strip().startswith("- "):
-                    matrix[current].append(unquote(line.strip()[2:]))
+        for entry in job.matrix():
+            for var, values in entry.items():
+                values = values if isinstance(values, list) else [values]
+                matrix.setdefault(str(var), []).extend(gitlab_str(value) for value in values)
+        variables = job.strings
         out = [image]
         for _ in range(3):
             expanded = []
@@ -929,8 +1042,7 @@ class CI:
                 if not m:
                     expanded.append(img)
                     continue
-                var = m.group(1)
-                values = matrix.get(var) or [job.variables.get(var) or self.global_vars.get(var) or ""]
+                values = matrix.get(m.group(1)) or [variables.get(m.group(1), "")]
                 expanded += [img[:m.start()] + v + img[m.end():] for v in values]
             out = expanded
         return [img for img in out if img]
@@ -939,8 +1051,11 @@ class CI:
 CHECK_RE = re.compile(r"rcmdcheck::rcmdcheck\s*\(|\bR CMD check\b|\"CMD\",\s*\"check\"")
 AS_CRAN_RE = re.compile(r"--as-cran")
 ERROR_ON_RE = re.compile(r"error_on\s*=\s*\\?[\"']warning\\?[\"']")
-INCOMING_OFF_RE = re.compile(r"_R_CHECK_CRAN_INCOMING_[\"']?\s*[=:]\s*[\"']?(?:false|FALSE|0)\b")
-INCOMING_REMOTE_OFF_RE = re.compile(r"_R_CHECK_CRAN_INCOMING_REMOTE_[\"']?\s*[=:]\s*[\"']?(?:false|FALSE|0)\b")
+# R reads a check setting with tools:::config_val_to_logical(): lower-cased,
+# "false", "no" and "0" are off.
+R_FALSE = ("false", "no", "0")
+INCOMING_OFF_RE = re.compile(rf"_R_CHECK_CRAN_INCOMING_[\"']?\s*[=:]\s*[\"']?(?i:{'|'.join(R_FALSE)})\b")
+INCOMING_REMOTE_OFF_RE = re.compile(rf"_R_CHECK_CRAN_INCOMING_REMOTE_[\"']?\s*[=:]\s*[\"']?(?i:{'|'.join(R_FALSE)})\b")
 URL_CHECK_RE = re.compile(r"check_url_db|url_db_from_package_sources|urlchecker::url_check|\burl_check\s*\(")
 SANITIZER_IMAGE_RE = re.compile(r"-san\b|clang-asan|gcc-asan|r-debug|asan|ubsan", re.I)
 R_JOB_RE = re.compile(r"\bRscript\b|\bR CMD\b")
@@ -1040,46 +1155,6 @@ def pandoc_assignments(text: str) -> tuple[tuple[int, str], ...]:
     """(line number, value) of each PANDOC_VERSION assignment in a .gitlab-ci.yml."""
     read_pandoc_assignments([text])
     return PIN_READS[text]
-
-
-def script_entries(text: str) -> list[str]:
-    """The shell text of each list item in a YAML `before_script`/`script` text.
-
-    GitLab fails the job when an item exits non-zero. A `- |` block is one
-    item, its lines joined by newlines; a `- >` block or a plain scalar over
-    several lines is one line; a flow sequence, `script: [a, "b"]`, is an item
-    per element.
-    """
-    lines = text.splitlines()
-    entries: list[str] = []
-    i = 0
-    while i < len(lines):
-        flow = re.match(r"\s*(?:before_script|script):\s*(\[.*)$", lines[i])
-        m = re.match(r"(\s*)- (.*)$", lines[i])
-        i += 1
-        if flow:
-            seq = flow.group(1).strip()
-            while not seq.endswith("]") and i < len(lines):
-                seq += " " + lines[i].strip()
-                i += 1
-            for item in re.findall(r"\s*(\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'|[^,]+?)\s*(?:,|$)", seq[1:-1]):
-                entries.append(re.sub(r"\\(.)", r"\1", item[1:-1]) if item.startswith('"') else unquote(item))
-            continue
-        if not m:
-            continue
-        indent, head = len(m.group(1)), m.group(2).strip()
-        body = []
-        while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > indent):
-            body.append(lines[i])
-            i += 1
-        block = re.fullmatch(r"([|>])[-+]?\d*", head)
-        if block:
-            margin = min((len(line) - len(line.lstrip()) for line in body if line.strip()), default=0)
-            body = [line[margin:] for line in body]
-            entries.append("\n".join(body) if block.group(1) == "|" else " ".join(line for line in body if line))
-        else:
-            entries.append(unquote(" ".join([head] + [line.strip() for line in body if line.strip()])))
-    return entries
 
 
 class Shell:
@@ -1225,6 +1300,203 @@ def pandoc_install_state(entries: list[str]) -> str:
     return best
 
 
+# A PANDOC_VERSION assignment command, read on the Shell mask. It starts a
+# command: a line's start, or after `;`, `&&`, `||`, a lone `&` (the command
+# before it is backgrounded, not this one), a `{` group, a case pattern's `)`,
+# `then`, `do` or `else`. Not after `(` or `|`: a subshell or a pipeline stage. The command is
+# assignments only (`A=1 PANDOC_VERSION=3.10`) or the `export`, `readonly`,
+# `declare` or `typeset` builtin, and it ends there: with a command word after
+# it (`PANDOC_VERSION=3.10 curl …/$PANDOC_VERSION/…`), the assignment reaches
+# that one command's environment, after its words are expanded, and with `|`
+# or `&` after it, a subshell. Whether the compound command around it runs in
+# the current shell is shell_frames()' to say.
+PIN_HEAD = r"(?:^|;|&&|\|\||(?<![&|>])&(?![&>])|(?<!\$)\{|\))[ \t]*(?:(?:then|do|else)[ \t]+)?"
+PIN_WORD = r"[^\s;&|<>()]*"
+PIN_TAIL = r"(?=[ \t]*(?:$|;|&&|\|\|))"
+PIN_ASSIGN_RE = re.compile(
+    rf"{PIN_HEAD}(?:(?:\w+={PIN_WORD}[ \t]+)*PANDOC_VERSION={PIN_WORD}(?:[ \t]+\w+={PIN_WORD})*"
+    rf"|(?:export|readonly|declare|typeset)(?:[ \t]+[-+]\w+)*(?:[ \t]+\w+(?:={PIN_WORD})?)*?"
+    rf"[ \t]+PANDOC_VERSION={PIN_WORD}(?:[ \t]+\w+(?:={PIN_WORD})?)*){PIN_TAIL}", re.M)
+# `local` is valid only in a function, where the pin reaches what the function
+# runs, and only if it is called: not judged.
+PIN_LOCAL_RE = re.compile(rf"{PIN_HEAD}local(?:[ \t]+[-+]\w+)*(?:[ \t]+\w+(?:={PIN_WORD})?)*?[ \t]+PANDOC_VERSION=",
+                          re.M)
+# Where an assignment would run out of this reader's sight.
+OPAQUE_SHELL_RE = re.compile(r"\$\(|`|\beval\b|\b(?:ba|da|k|z)?sh\s+(?:-\w+\s+)*-\w*c\b")
+# A here-document's operator; `<<<` is a here-string, one word.
+HEREDOC_RE = re.compile(r"(?<!<)<<(-?)(?!<)[ \t]*")
+# Its delimiter: one shell word, quoted in part or whole (`'END-PIN'`, `EOF.x`, `\\EOF`).
+HEREDOC_WORD_RE = re.compile(r"(?:'[^']*'|\"(?:[^\"\\]|\\.)*\"|\\.|[^\s;&|<>()'\"\\])+")
+# `(( … ))` arithmetic, where `<<` is a shift (the mask already blanks `$(( … ))`).
+ARITHMETIC_RE = re.compile(r"\(\((?:[^()]|\([^()]*\))*\)\)")
+# The mask's tokens: operators, parentheses, redirections and words.
+SHELL_TOKEN_RE = re.compile(r"\n|;;&|;;|;&|;|&&|\|\||\|&|\||&|\(|\)|[<>]+&?|[^\s;&|()<>]+")
+SHELL_SEPARATORS = {"\n", ";", "&&", "||", "|", "|&", "&", ";;", ";&", ";;&"}
+# Reserved words that open a compound command, and the word that closes it.
+SHELL_CLOSERS = {"if": "fi", "while": "done", "until": "done", "for": "done", "select": "done",
+                 "case": "esac", "{": "}"}
+# Words after which the next word still starts a command.
+SHELL_PREFIXES = {"then", "do", "else", "elif", "!", "time"}
+
+
+@dataclass(eq=False)
+class Frame:
+    """A compound command in a Shell mask: `(…)`, `{…}`, `if…fi`, a loop or
+    `case…esac`, spanning [start, end). `piped` when it is a pipeline stage
+    or backgrounded, so a subshell; `function` when it is a function's body."""
+
+    kind: str
+    start: int
+    end: int = -1
+    piped: bool = False
+    function: bool = False
+    case_state: str = ""
+
+
+def shell_frames(mask: str) -> list[Frame]:
+    """Each compound command in a Shell mask (here-documents blanked), read
+    as sh reads it: reserved words count only at a command's start, a case
+    pattern's `)` closes nothing, `(( … ))` and `[[ … ]]` open nothing, and
+    `name ()` or `function name` makes the next compound command a function
+    body. A frame left open runs to the end."""
+    frames: list[Frame] = []
+    stack: list[Frame] = []
+    ended: list[Frame] = []
+    tokens = list(SHELL_TOKEN_RE.finditer(mask))
+    start, function_next, last = True, False, "\n"
+    k = 0
+
+    def open_frame(kind: str, at: int) -> None:
+        nonlocal function_next
+        frame = Frame(kind, at, piped=last in ("|", "|&"), function=function_next,
+                      case_state="subject" if kind == "case" else "")
+        function_next = False
+        frames.append(frame)
+        stack.append(frame)
+
+    def close_frame(at: int) -> None:
+        nonlocal ended
+        frame = stack.pop()
+        frame.end = at
+        ended = [frame]
+
+    while k < len(tokens):
+        m = tokens[k]
+        tok = m.group(0)
+        k += 1
+        top = stack[-1] if stack else None
+        if top is not None and top.case_state in ("subject", "pattern"):
+            if top.case_state == "subject" and tok == "in":
+                top.case_state = "pattern"
+            elif top.case_state == "pattern" and tok == ")":
+                top.case_state, start = "body", True
+            elif top.case_state == "pattern" and tok == "esac":
+                close_frame(m.end())
+                start = False
+            last = tok
+            continue
+        if tok in SHELL_SEPARATORS:
+            if tok in ("|", "|&", "&"):
+                for frame in ended:
+                    frame.piped = True
+            ended = []
+            if top is not None and top.kind == "case" and tok in (";;", ";&", ";;&"):
+                top.case_state = "pattern"
+            start, last = True, tok
+            continue
+        if tok == "(":
+            nxt = tokens[k] if k < len(tokens) else None
+            if mask.startswith("((", m.start()) and (start or last == "for"):
+                arithmetic = ARITHMETIC_RE.match(mask, m.start())
+                stop = arithmetic.end() if arithmetic else len(mask)
+                while k < len(tokens) and tokens[k].start() < stop:
+                    k += 1
+                start, last = False, "))"
+                continue
+            if not start and nxt is not None and nxt.group(0) == ")":
+                k += 1
+                function_next, start, last = True, True, ")"
+                continue
+            open_frame("(", m.start())
+            start, last = True, tok
+            continue
+        if tok == ")":
+            if top is not None and top.kind == "(":
+                close_frame(m.end())
+            start, last = False, tok
+            continue
+        if start and tok in SHELL_CLOSERS:
+            open_frame(tok, m.start())
+            start = tok == "{"
+        elif start and top is not None and tok == SHELL_CLOSERS.get(top.kind):
+            close_frame(m.end())
+            start = False
+        elif start and tok == "function":
+            k += 1
+            function_next, start = True, True
+        elif start and tok == "[[":
+            while k < len(tokens) and tokens[k].group(0) != "]]":
+                k += 1
+            k += 1
+            start = False
+        else:
+            start = start and (tok in SHELL_PREFIXES or tok in ("if", "while", "until"))
+        last = tok
+    for frame in stack:
+        frame.end = len(mask)
+    return frames
+
+
+def without_heredocs(shell: Shell) -> str:
+    """The mask with each here-document's body blanked, its delimiter line
+    included: its lines are data. The bodies follow the line that opens
+    them, in order; `<<-` lets the delimiter line lead with tabs. The
+    delimiter is a shell word with its quotes removed; a `<<` inside
+    `(( … ))` is a shift, no here-document."""
+    mask, pending, pos = list(shell.mask), [], 0
+    for line in shell.text.split("\n"):
+        end = pos + len(line)
+        if pending:
+            delimiter, dash = pending[0]
+            mask[pos:end] = " " * len(line)
+            if (line.lstrip("\t") if dash else line) == delimiter:
+                pending.pop(0)
+        else:
+            for m in HEREDOC_RE.finditer(shell.mask, pos, end):
+                if any(a.start() <= m.start() < a.end() for a in ARITHMETIC_RE.finditer(shell.mask, pos, end)):
+                    continue
+                word = HEREDOC_WORD_RE.match(shell.text, m.end(), end)
+                if word:
+                    pending.append((re.sub(r"\\(.)|['\"]", r"\1", word.group(0)), bool(m.group(1))))
+        pos = end + 1
+    return "".join(mask)
+
+
+def pin_assignment(item: str) -> str | None:
+    """How a script item supplies PANDOC_VERSION: "assigns" when sh runs an
+    assignment of it that the commands after it see (PIN_ASSIGN_RE, outside
+    any subshell, pipeline stage or function), "opaque" when one may run
+    where this reader cannot see (in a function's body, which runs only if
+    called, under `local`, eval, sh -c, `$(...)` or backticks), else None:
+    the name in a comment, an echoed string, a word or a here-document
+    assigns nothing, and neither does an assignment in a subshell, in a
+    compound command that is a pipeline stage or backgrounded, or in a
+    command's prefix."""
+    shell = Shell(item)
+    mask = without_heredocs(shell)
+    frames = shell_frames(mask)
+    opaque = False
+    for m in PIN_ASSIGN_RE.finditer(mask):
+        around = [frame for frame in frames if frame.start <= m.end() - 1 < frame.end]
+        if any(frame.function for frame in around):
+            opaque = True
+        elif not any(frame.kind == "(" or frame.piped for frame in around):
+            return "assigns"
+    if opaque or PIN_LOCAL_RE.search(mask) or ("PANDOC_VERSION=" in shell.text and OPAQUE_SHELL_RE.search(shell.text)):
+        return "opaque"
+    return None
+
+
 def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     """Every R job on push installs PANDOC_PIN from the release, sha256-checked.
 
@@ -1238,24 +1510,29 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     in all of .gitlab-ci.yml. A shell assignment overrides `variables:` at run
     time, so with two values the one a job installs depends on where each
     sits; two are a gap, as they are an error to check-toolchain.R. A job
-    must also see an assignment: in its variables, the global ones, or a line
-    of its setup. A `parallel: matrix` entry is a gap of its own: a pin per
-    leg is not one pin.
+    must also see the pin: a variable it gets (its own or a global one), or an
+    assignment in an item of its setup that the commands after it see
+    (pin_assignment()): not the name in a comment, an echoed string or a
+    here-document, nor an assignment in a subshell, a pipeline stage or a
+    command's prefix. An assignment where this reader cannot see (in a
+    function's body, or under `eval`, `sh -c` or `$(...)`) is not judged,
+    and leaves the run incomplete. A `parallel: matrix` entry is a gap of its
+    own: a pin per leg is not one pin.
     """
-    matrix = [job.name for job in ci.jobs.values()
-              if "PANDOC_VERSION" in "\n".join(job.attrs.get("parallel", ("", []))[1])]
+    matrix = [job.name for job in ci.jobs.values() if any("PANDOC_VERSION" in entry for entry in job.matrix())]
     if matrix:
         report.gap("ci", f"{', '.join(matrix)}: sets PANDOC_VERSION in `parallel: matrix`; record the pin once, in "
                          "`variables:` or the shared setup, so every leg installs the same pandoc")
     unpinned, in_default, unrecorded, candidates = [], [], {}, []
     for job in on_push:
-        if not R_JOB_RE.search(job.full_text()):
+        if not R_JOB_RE.search(job.full_text):
             continue
-        setup = ci.setup_text(job)
-        bodies = [body for _, body in inline_scripts(setup, ci.source)]
-        tokens = {t for chunk in [setup] + bodies for t in PANDOC_URL_RE.findall(chunk)}
+        setup = job.script(with_default=False)
+        commands = "\n".join(strip_comment_lines(item) for item in setup)
+        bodies = [body for _, body in inline_scripts(commands, ci.source)]
+        tokens = {t for chunk in [commands] + bodies for t in PANDOC_URL_RE.findall(chunk)}
         if not tokens:
-            if job.inherits_default_before and PANDOC_URL_RE.search(ci.default_before_text()):
+            if job.inherits_default_before and any(PANDOC_URL_RE.search(item) for item in ci.default_before()):
                 in_default.append(job.name)
             else:
                 unpinned.append(job.name)
@@ -1266,37 +1543,33 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
             continue
         candidates.append((job, setup, bodies))
     values: list[str] | None = None
-    assigning: set[str] = set()
     if candidates:
         try:
-            found = pandoc_assignments(ci.text)
-            values = list(dict.fromkeys(value for _, value in found))
-            lines = re.split(r"\r\n|\r|\n", ci.text)
-            assigning = {lines[n - 1] for n, _ in found if 0 < n <= len(lines)}
+            values = list(dict.fromkeys(value for _, value in pandoc_assignments(ci.text)))
         except ProbeError as error:
-            report.skip("ci", f"the pandoc pin was not read, only the install steps (probe failed: {error})")
+            report.skip("ci", f"the pandoc pin was not read, only the install steps (probe failed: {error})", incomplete=True)
     if values and len(values) > 1:
         report.gap("ci", f".gitlab-ci.yml assigns PANDOC_VERSION more than once, with different values "
                          f"({', '.join(values)}); keep one pin, as check-toolchain.R requires")
-    never, unseen, other, unverified = [], [], [], {}
+    never, unseen, opaque, other, unverified = [], [], [], [], {}
     for job, setup, bodies in candidates:
         if values is not None:
-            visible = setup.splitlines()
-            if job.inherits_default_before:
-                visible += ci.default_before_text().splitlines()
+            visible = setup + (ci.default_before() if job.inherits_default_before else [])
             if not values:
                 never.append(job.name)
                 continue
-            if not ("PANDOC_VERSION" in job.variables or "PANDOC_VERSION" in ci.global_vars
-                    or any(line in assigning for line in visible)):
-                unseen.append(job.name)
-                continue
+            supplied = {pin_assignment(item) for item in visible}
+            if "PANDOC_VERSION" not in job.all_variables() and "assigns" not in supplied:
+                if "opaque" not in supplied:
+                    unseen.append(job.name)
+                    continue
+                opaque.append(job.name)
             if len(values) > 1:
                 continue
             if values[0] != PANDOC_PIN:
                 other.append(job.name)
                 continue
-        state = max([pandoc_install_state(script_entries(setup))] + [pandoc_install_state([body]) for body in bodies],
+        state = max([pandoc_install_state(setup)] + [pandoc_install_state([body]) for body in bodies],
                     key=INSTALL_STATES.index)
         if state != "installed":
             unverified.setdefault(state, []).append(job.name)
@@ -1315,6 +1588,10 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     if unseen:
         report.gap("ci", f"{', '.join(unseen)}: downloads pandoc at $PANDOC_VERSION, which neither its variables "
                          "nor its setup assign")
+    if opaque:
+        report.skip("ci", f"{', '.join(opaque)}: whether the setup assigns PANDOC_VERSION is not judged (an "
+                          "assignment in a function's body, or under eval, sh -c, `$(...)` or backticks)",
+                    incomplete=True)
     if other:
         report.gap("ci", f"{', '.join(other)}: pins pandoc {values[0]}, not the fleet's {PANDOC_PIN}")
     reasons = {
@@ -1436,18 +1713,18 @@ BADGE_RE = re.compile(r"\[!\[([^\]]*)\]\(([^)\s]+)\)\]\(([^)\s]+)\)")
 def required_slots(pkg: str, state: State, concept_doi: str | None, report: Report) -> list[int] | None:
     """Slot numbers in the order the README must show them, or None if unknowable."""
     if state.on_cran is None:
-        report.skip("badges", "CRAN status unknown, so the CRAN slots and the order are not judged")
+        report.skip("badges", "CRAN status unknown, so the CRAN slots and the order are not judged", incomplete=False)
         return None
     order = [1, 2, 3, 4] if state.on_cran else [4]
     order += [5, 6, 7]
     if state.has_release is None:
-        report.skip("badges", "GitLab Release state unknown; slot 8 (latest release) not judged")
+        report.skip("badges", "GitLab Release state unknown; slot 8 (latest release) not judged", incomplete=False)
     elif state.has_release:
         order.append(8)
     order += [9, 10]
     if concept_doi:
         if state.doi_resolves is None:
-            report.skip("badges", f"DOI {concept_doi} not resolved (offline or probe failed); slot 11 not judged")
+            report.skip("badges", f"DOI {concept_doi} not resolved (offline or probe failed); slot 11 not judged", incomplete=False)
         elif state.doi_resolves:
             order.append(11)
     order += [12, 13, 14]
@@ -1456,7 +1733,7 @@ def required_slots(pkg: str, state: State, concept_doi: str | None, report: Repo
     order.append(16)
     if pkg in FOSSA_PACKAGES:
         if state.fossa_project is None:
-            report.skip("badges", "FOSSA project state unknown; slot 17 not judged")
+            report.skip("badges", "FOSSA project state unknown; slot 17 not judged", incomplete=False)
         elif state.fossa_project:
             order += [17, 18]
     return order
@@ -1535,7 +1812,7 @@ def check_badges(pkg: str, source, state: State, report: Report) -> list[str]:
     if state.on_runiverse is False:
         report.gap("badges", "package is not on r-universe, so the r-universe badge cannot render")
     elif state.on_runiverse is None:
-        report.skip("badges", "r-universe presence unknown")
+        report.skip("badges", "r-universe presence unknown", incomplete=False)
     return [image for _, image, _ in badges]
 
 
@@ -1557,7 +1834,7 @@ def check_images(images: list[str], fetch: Callable[[str], tuple[int, str, bytes
         results = list(pool.map(one, images))
     for url, result, error in results:
         if error is not None:
-            report.skip("badge images", f"network error fetching {url}: {error}")
+            report.skip("badge images", f"network error fetching {url}: {error}", incomplete=True)
             continue
         status, ctype, body = result
         if status != 200:
@@ -1628,7 +1905,7 @@ def check_readme(pkg: str, source, state: State, report: Report) -> None:
                 report.gap("readme", "Installation has no r-universe install.packages() command")
             cran_command = re.search(rf"install\.packages\(\s*[\"']{pkg}[\"']\s*\)", section)
             if state.on_cran is None:
-                report.skip("readme", "Installation: the CRAN command is not judged (CRAN status unknown)")
+                report.skip("readme", "Installation: the CRAN command is not judged (CRAN status unknown)", incomplete=False)
             elif state.on_cran and not cran_command:
                 report.gap("readme", f'Installation has no install.packages("{pkg}") for CRAN')
             elif not state.on_cran and cran_command:
@@ -1753,7 +2030,7 @@ def check_description(pkg: str, source, state: State, report: Report) -> str | N
         expected.append(f"https://CRAN.R-project.org/package={pkg}")
     urls = [u.rstrip("/") for u in re.split(r"[,\s]+", fields.get("URL", "")) if u]
     if state.on_cran is None:
-        report.skip("description", "URL: the CRAN entry is not judged (CRAN status unknown)")
+        report.skip("description", "URL: the CRAN entry is not judged (CRAN status unknown)", incomplete=False)
         urls = [u for u in urls if "CRAN.R-project.org" not in u]
     if urls != expected:
         report.gap("description", f"URL is {', '.join(urls) or '(empty)'}; the standard's is {', '.join(expected)}")
@@ -1777,41 +2054,83 @@ def check_description(pkg: str, source, state: State, report: Report) -> str | N
     return minor(fm.group(1))
 
 
+def switched_off(variables: dict[str, object], name: str) -> bool:
+    """Whether a variable the job gets turns an R check setting off, as R reads it (R_FALSE)."""
+    return name in variables and gitlab_str(variables[name]).lower() in R_FALSE
+
+
+def coverage_format(job: Job) -> object:
+    """`artifacts: reports: coverage_report: coverage_format`, or None."""
+    node: object = job.config
+    for key in ("artifacts", "reports", "coverage_report", "coverage_format"):
+        node = node.get(key) if isinstance(node, dict) else None
+    return node
+
+
+def sanitizer_flags(job: Job) -> bool:
+    """ASAN and UBSAN switched on in the job's commands, the scripts they run or its variables."""
+    text = job.full_text
+    return bool(re.search(r"fsanitize=address|\bASAN\b", text)
+                and re.search(r"fsanitize=[\w,]*undefined|\bUBSAN\b", text))
+
+
+def check_audit_files(source, report: Report) -> None:
+    tree = source.tree()
+    missing = [p for p in AUDIT_TEST_FILES if p not in tree]
+    if missing:
+        report.gap("ci", f"audit jobs lack seor's disposition-row shape: missing {', '.join(missing)}")
+
+
 def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) -> None:
     text = source.read(".gitlab-ci.yml")
     if text is None:
         report.gap("ci", "no .gitlab-ci.yml")
         return
     ci = CI(text, source)
+    if ci.error:
+        report.skip("ci", f"could not read .gitlab-ci.yml ({ci.error}), so none of its CI rules is judged: R CMD "
+                          "check, CRAN incoming, coverage, pages, the pandoc pin, the gates, the deep-check and "
+                          "sanitizer legs, the audit jobs and FOSSA", incomplete=True)
+        check_audit_files(source, report)
+        return
+    try:
+        for job in ci.jobs.values():
+            job.view  # noqa: B018 - read every job's scripts now, where a failed read can be reported
+    except ProbeError as error:
+        report.skip("ci", f"could not read a script the CI jobs run ({error}), so none of the CI rules is judged",
+                    incomplete=True)
+        check_audit_files(source, report)
+        return
     if not ci.admitted("push"):
         report.gap("ci", "workflow: rules admit no push to main")
     on_push = [j for j in ci.jobs.values() if j.runs["push"]]
 
-    checks = [j for j in on_push if CHECK_RE.search(j.full_text())]
+    checks = [j for j in on_push if CHECK_RE.search(j.full_text)]
     if not checks:
         report.gap("ci", "no R CMD check runs on a push to main")
     else:
-        if not any(AS_CRAN_RE.search(j.full_text()) for j in checks):
+        if not any(AS_CRAN_RE.search(j.full_text) for j in checks):
             report.gap("ci", f"R CMD check on push ({', '.join(j.name for j in checks)}) does not use --as-cran")
-        if not any(ERROR_ON_RE.search(j.full_text()) for j in checks):
+        if not any(ERROR_ON_RE.search(j.full_text) for j in checks):
             report.gap("ci", "R CMD check on push is not rcmdcheck with error_on = \"warning\"")
     for job in ci.jobs.values():
-        body = job.full_text()
-        if pkg != "seor" and INCOMING_OFF_RE.search(body):
+        body = job.full_text
+        variables = job.all_variables()
+        if pkg != "seor" and (INCOMING_OFF_RE.search(body) or switched_off(variables, "_R_CHECK_CRAN_INCOMING_")):
             report.gap("ci", f"{job.name}: turns CRAN incoming off (only seor may, ADR 0004)")
-        if pkg not in ("seor", "pslr") and INCOMING_REMOTE_OFF_RE.search(body):
+        if pkg not in ("seor", "pslr") and (INCOMING_REMOTE_OFF_RE.search(body)
+                                            or switched_off(variables, "_R_CHECK_CRAN_INCOMING_REMOTE_")):
             report.gap("ci", f"{job.name}: turns remote CRAN incoming off (only pslr is grandfathered, ADR 0004)")
 
-    coverage = [j for j in on_push if j.attrs.get("coverage", ("", []))[0]]
+    coverage = [j for j in on_push if j.config.get("coverage")]
     if not coverage:
         report.gap("ci", "no coverage job with a coverage: regex runs on a push to main")
     for job in coverage:
-        body = job.full_text()
-        if not re.search(r"coverage_format:\s*cobertura", body):
+        if coverage_format(job) != "cobertura":
             report.gap("ci", f"{job.name}: no cobertura coverage_report artifact")
-        if job.attrs.get("allow_failure", ("", []))[0] == "true":
+        if job.config.get("allow_failure") is True:
             report.gap("ci", f"{job.name}: allow_failure: true, so coverage cannot fail the pipeline")
-        thresholds = coverage_thresholds(body)
+        thresholds = coverage_thresholds(job.full_text)
         if not thresholds:
             report.gap("ci", f"{job.name}: no {COVERAGE_MIN:g}% coverage threshold")
         elif min(thresholds) < COVERAGE_MIN:
@@ -1822,12 +2141,13 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
             if not any(j.runs[kind] for j in coverage):
                 report.gap("ci", f"coverage job does not run on the {kind} schedule")
 
-    if not any(j.name == "pages" or j.attrs.get("pages", ("", []))[0] == "true" for j in on_push):
+    if not any(j.name == "pages" or j.config.get("pages") is True or isinstance(j.config.get("pages"), dict)
+               for j in on_push):
         report.gap("ci", "pages does not deploy on a push to main")
 
     check_pandoc_pin(on_push, ci, report)
 
-    chunks = [chunk for j in on_push for chunk in j.chunks()]
+    chunks = [chunk for j in on_push for chunk in j.view]
     for gate, patterns in GATES.items():
         if not any(all(p.search(chunk) for p in patterns) for chunk in chunks):
             report.gap("ci", f"no {gate} gate runs on a push to main")
@@ -1836,22 +2156,19 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
             if j.runs["deep-check"] and not j.runs["push"] and not j.runs["dependency-audit"]]
     roles: set[str] = set()
     for job in legs:
-        if CHECK_RE.search(job.full_text()):
+        if CHECK_RE.search(job.full_text):
             for image in ci.images(job):
                 if not SANITIZER_IMAGE_RE.search(image):
                     roles |= leg_roles(image, state, floor)
     if state.r_release is None:
-        report.skip("ci", "current R release/oldrel unknown; numeric deep-check legs judged for the floor only")
+        report.skip("ci", "current R release/oldrel unknown; numeric deep-check legs judged for the floor only", incomplete=False)
     for leg in ("release", "oldrel", "devel"):
         if leg not in roles:
             report.gap("ci", f"no deep-check leg for R {leg}")
     if floor and "floor" not in roles:
         report.gap("ci", f"no deep-check leg at the declared R floor ({floor})")
     if pkg in SANITIZER_PACKAGES:
-        sanitized = [j for j in legs
-                     if any(SANITIZER_IMAGE_RE.search(i) for i in ci.images(j))
-                     or (re.search(r"fsanitize=address|\bASAN\b", j.full_text())
-                         and re.search(r"fsanitize=[\w,]*undefined|\bUBSAN\b", j.full_text()))]
+        sanitized = [j for j in legs if any(SANITIZER_IMAGE_RE.search(i) for i in ci.images(j)) or sanitizer_flags(j)]
         if not sanitized:
             report.gap("ci", "no ASAN/UBSAN sanitizer leg on the deep-check schedule")
 
@@ -1861,12 +2178,9 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
             report.gap("ci", f"no {name} job")
         elif not job.runs["dependency-audit"] or job.runs["push"] or job.runs["deep-check"]:
             report.gap("ci", f"{name} does not run only on the dependency-audit schedule")
-    tree = source.tree()
-    missing = [p for p in AUDIT_TEST_FILES if p not in tree]
-    if missing:
-        report.gap("ci", f"audit jobs lack seor's disposition-row shape: missing {', '.join(missing)}")
+    check_audit_files(source, report)
 
-    if pkg in FOSSA_PACKAGES and not any(re.search(r"\bfossa analyze\b", j.full_text()) for j in ci.jobs.values()):
+    if pkg in FOSSA_PACKAGES and not any(re.search(r"\bfossa analyze\b", j.full_text) for j in ci.jobs.values()):
         report.gap("ci", "no fossa analyze job")
 
 
@@ -1878,7 +2192,12 @@ def check_local_gate(source, report: Report) -> None:
     body = strip_comment_lines(text)
     # R and shell only: a Python script that merely names check_url_db (this
     # one, check-bugreports.py's docstring) runs no URL check.
-    named = [(path, s) for path, s in inline_scripts(body, source, depth=3) if Path(path).suffix in ("", ".R", ".r", ".sh")]
+    try:
+        named = [(path, s) for path, s in inline_scripts(body, source, depth=3)
+                 if Path(path).suffix in ("", ".R", ".r", ".sh")]
+    except ProbeError as error:
+        report.skip("local gate", f"could not read a script the pre-push gate runs ({error})", incomplete=True)
+        return
     scripts = [s for _, s in named]
     if not any(URL_CHECK_RE.search(chunk) for chunk in [body] + scripts):
         report.gap("local gate", "no URL check in the pre-push gate")
@@ -1899,7 +2218,7 @@ def check_local_gate(source, report: Report) -> None:
 
 def check_schedules(state: State, report: Report) -> None:
     if state.schedules is None:
-        report.skip("schedules", "pipeline schedules not read")
+        report.skip("schedules", "pipeline schedules not read", incomplete=False)
         return
     kinds: dict[str, list[dict]] = {}
     for schedule in state.schedules:
@@ -1924,10 +2243,10 @@ def check_repo(pkg: str, source, state: State,
                fetch: Callable[[str], tuple[int, str, bytes]] | None = None) -> Report:
     report = Report(pkg)
     for area, error in state.errors:
-        report.skip(area, f"probe failed: {error}")
+        report.skip(area, f"probe failed: {error}", incomplete=True)
     images = check_badges(pkg, source, state, report)
     if fetch is None:
-        report.skip("badge images", "not fetched (--offline)")
+        report.skip("badge images", "not fetched (--offline)", incomplete=False)
     elif images:
         check_images(images, fetch, report)
     check_readme(pkg, source, state, report)
@@ -1948,7 +2267,7 @@ def run_one(pkg: str, local: Path | None, offline: bool) -> Report:
         return check_repo(pkg, source, state, None if offline else http_get)
     except ProbeError as error:
         report = Report(pkg)
-        report.skip("source", f"could not read the repository: {error}")
+        report.skip("source", f"could not read the repository: {error}", incomplete=True)
         return report
 
 
@@ -2035,7 +2354,8 @@ check:
 coverage:
   extends: [.r, .on-main]
   script:
-    - Rscript -e 'cov <- covr::package_coverage(); covr::to_cobertura(cov); pct <- covr::percent_coverage(cov); cat(sprintf("Coverage: %.2f%%\\n", pct)); if (pct < 95) quit(status = 1)'
+    - |
+      Rscript -e 'cov <- covr::package_coverage(); covr::to_cobertura(cov); pct <- covr::percent_coverage(cov); cat(sprintf("Coverage: %.2f%%\\n", pct)); if (pct < 95) quit(status = 1)'
   coverage: '/Coverage: (\\d+\\.\\d+)%/'
   artifacts:
     reports:
@@ -2190,13 +2510,21 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
             return Report(pkg)
         return check_repo(pkg, DictSource(files), state, fetch)
 
+    def loads(tag: str, report: Report) -> None:
+        # A fixture GitLab would refuse leaves CI not judged, and a clean
+        # report would then prove nothing: only the load-error rows want that.
+        if any("could not read .gitlab-ci.yml" in text for _, text in report.unjudged):
+            failures.append(f"{tag}: the fixture's .gitlab-ci.yml did not load: {report.unjudged}")
+
     def expect_clean(tag: str, pkg: str, files: dict, state: State, fetch=None) -> None:
         report = run(pkg, files, state, fetch)
+        loads(tag, report)
         if report.gaps:
             failures.append(f"{tag}: expected no gaps, got {report.gaps}")
 
     def expect_gap(tag: str, needle: str, pkg: str, files: dict, state: State, fetch=None) -> Report:
         report = run(pkg, files, state, fetch)
+        loads(tag, report)
         if not any(needle in text for _, text in report.gaps):
             failures.append(f"{tag}: expected a gap containing {needle!r}, got {report.gaps}")
         return report
@@ -2710,7 +3038,8 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
          (if_block(f"{dl_cmd} && {check_cmd}"), install_line)),
         ("if without an else", (if_block(f"{dl_cmd} && {check_cmd} && dpkg -i /tmp/pandoc.deb", ""),)),
         ("|| inside the if", (if_block(f"{dl_cmd} && {check_cmd} || true && dpkg -i /tmp/pandoc.deb"),)),
-        ("negated check", (f"    - {dl_cmd}\n", f"    - ! {check_cmd}\n", install_line)),
+        # Quoted: unquoted, `- ! cmd` is YAML's non-specific tag and the item is `cmd`.
+        ("negated check", (f"    - {dl_cmd}\n", f"    - '! {check_cmd}'\n", install_line)),
         # A pipeline's status is its last command's: `| tee` hides the check.
         ("check piped into tee", (f"    - {dl_cmd}\n", f"    - {check_cmd} | tee /tmp/sha.log\n", install_line)),
         ("check piped into tee inside the if",
@@ -2749,6 +3078,353 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                          f"wget -q --timeout=60 --tries=20 -O /tmp/pandoc.deb {url}"):
         expect_gap(f"download unbounded: {unbounded_dl[:40]!r}", unbounded, "punycoder",
                    setup(f"    - {unbounded_dl}\n", check_line, install_line), fixture_state())
+
+    # The CI reader's case table (SEOR-oznwzhem). Every expected value is what
+    # GitLab makes of the YAML, written down from the YAML 1.1 spec and GitLab's
+    # documented semantics (`extends` deep-merges mappings and replaces arrays,
+    # `default:` fills only the keys a job leaves unset, script lists flatten),
+    # never what an earlier reader printed. First the reader itself, then the
+    # same cases end to end.
+    def ci_of(text: str) -> CI:
+        return CI(text, DictSource({ci: text}))
+
+    def config_of(c: CI, name: str) -> dict:
+        return c.jobs[name].config
+
+    deep_merge_ci = (
+        ".base:\n  image:\n    name: rocker/r-ver:4.5.3\n  variables: {A: \"1\", B: \"1\"}\n"
+        "  artifacts:\n    reports:\n      coverage_report:\n        coverage_format: cobertura\n"
+        "  script: [echo base]\n  rules:\n    - if: $CI_COMMIT_TAG\n"
+        ".mid:\n  extends: .base\n  variables: {B: \"2\"}\n"
+        "  artifacts:\n    reports:\n      coverage_report:\n        path: cobertura.xml\n"
+        "job:\n  extends: .mid\n  image:\n    entrypoint: [\"\"]\n  variables:\n    C: \"3\"\n"
+        "  rules:\n    - when: manual\n")
+    default_ci = (
+        "default:\n  image: rocker/r-ver:4.6.1\n  before_script: [echo default]\n  artifacts:\n    paths: [a]\n"
+        "bare:\n  script: [echo x]\n"
+        "own:\n  before_script: [echo own]\n  artifacts:\n    expire_in: 1 week\n  script: [echo y]\n"
+        "picky:\n  inherit:\n    default: [image]\n  script: [echo z]\n"
+        "none:\n  inherit:\n    default: false\n  script: [echo w]\n")
+    reader_cases: tuple[tuple[str, str, Callable[[CI], object], object], ...] = (
+        ("extends with a trailing comment keeps its template",
+         ".r:\n  image: rocker/r-ver:4.6.1\n  script:\n    - Rscript -e 'rcmdcheck::rcmdcheck()'\n"
+         "check:\n  extends: .r  # template\n",
+         lambda c: (config_of(c, "check").get("image"), c.jobs["check"].script()),
+         ("rocker/r-ver:4.6.1", ["Rscript -e 'rcmdcheck::rcmdcheck()'"])),
+        ("when with a trailing comment runs on push", "job:\n  script: [x]\n  when: on_success # explicit\n",
+         lambda c: c.jobs["job"].runs["push"], True),
+        ("a quoted image with a trailing comment", "job:\n  image: \"rocker/r-ver:4.5\" # newer\n  script: [x]\n",
+         lambda c: c.images(c.jobs["job"]), ["rocker/r-ver:4.5"]),
+        ("allow_failure with a trailing comment is the boolean",
+         "job:\n  script: [x]\n  allow_failure: true # soft for now\n",
+         lambda c: config_of(c, "job").get("allow_failure"), True),
+        ("YAML 1.1: an unquoted 3.10 is the float 3.1",
+         "variables:\n  A: 3.10\n  B: \"3.10\"\njob:\n  script: [x]\n  variables:\n    C: 4.10\n",
+         lambda c: (c.global_vars, c.jobs["job"].variables, c.env("push")["A"]),
+         ({"A": 3.1, "B": "3.10"}, {"C": 4.1}, "3.1")),
+        ("YAML 1.1 booleans, and the string GitLab hands the job",
+         "variables:\n  A: true\n  B: \"true\"\n  C: yes\n  D: off\n  E: False\njob:\n  script: [x]\n",
+         lambda c: (c.global_vars, [c.env("push")[k] for k in "ABCDE"]),
+         ({"A": True, "B": "true", "C": True, "D": False, "E": False}, ["true", "true", "true", "false", "false"])),
+        ("flow and block lists, `- |` and `- >`",
+         "job:\n  before_script: [echo a, \"echo b\", 'echo ''c''']\n  script:\n    - |\n      line one\n      line two\n"
+         "    - >\n      folded one\n      folded two\n    - plain\n      continued\n    - \"quoted # not a comment\"\n",
+         lambda c: c.jobs["job"].script(),
+         ["echo a", "echo b", "echo 'c'", "line one\nline two\n", "folded one folded two\n", "plain continued",
+          "quoted # not a comment"]),
+        ("a script given as one string", "job:\n  script: Rscript -e 'x'  # one item\n",
+         lambda c: c.jobs["job"].script(), ["Rscript -e 'x'"]),
+        ("`- ! cmd` is YAML's non-specific tag, not a negation", "job:\n  script:\n    - ! sha256sum -c x\n    - '! true'\n",
+         lambda c: c.jobs["job"].script(), ["sha256sum -c x", "! true"]),
+        ("an anchored `- &name |` item reused in a job's own list",
+         ".r:\n  before_script:\n    - &pandoc |\n      echo install\n    - echo other\n"
+         "check:\n  extends: .r\n  before_script:\n    - echo own\n    - *pandoc\n  script: [echo run]\n",
+         lambda c: c.jobs["check"].script(), ["echo own", "echo install\n", "echo run"]),
+        ("nested script lists flatten, aliases included",
+         ".deps: &deps\n  - echo one\n  - echo two\njob:\n  script:\n    - *deps\n    - echo three\n"
+         "    - [echo four, [echo five]]\n",
+         lambda c: c.jobs["job"].script(), ["echo one", "echo two", "echo three", "echo four", "echo five"]),
+        ("YAML merge keys come from YAML",
+         ".tpl: &tpl\n  image: rocker/r-ver:4.5.3\n  script: [echo tpl]\njob:\n  <<: *tpl\n  script: [echo own]\n",
+         lambda c: (config_of(c, "job").get("image"), c.jobs["job"].script()), ("rocker/r-ver:4.5.3", ["echo own"])),
+        ("nested extends deep-merges mappings and replaces arrays", deep_merge_ci,
+         lambda c: (config_of(c, "job").get("image"), c.jobs["job"].variables, config_of(c, "job").get("artifacts"),
+                    c.jobs["job"].script(), config_of(c, "job").get("rules")),
+         ({"name": "rocker/r-ver:4.5.3", "entrypoint": [""]}, {"A": "1", "B": "2", "C": "3"},
+          {"reports": {"coverage_report": {"coverage_format": "cobertura", "path": "cobertura.xml"}}},
+          ["echo base"], [{"when": "manual"}])),
+        ("several parents: the later one wins, mappings still merge",
+         ".a:\n  script: [a]\n  variables: {X: a, Y: a}\n.b:\n  script: [b]\n  variables: {Y: b}\njob:\n  extends: [.a, .b]\n",
+         lambda c: (c.jobs["job"].script(), c.jobs["job"].variables), (["b"], {"X": "a", "Y": "b"})),
+        ("a job overrides its parent's script",
+         ".tpl:\n  script:\n    - R CMD check --as-cran x.tar.gz\njob:\n  extends: .tpl\n  script:\n    - echo skipped\n",
+         lambda c: (c.jobs["job"].script(), [chunk for chunk in c.jobs["job"].view if "R CMD check" in chunk]),
+         (["echo skipped"], [])),
+        ("default: fills only the keys a job leaves unset", default_ci,
+         lambda c: [(config_of(c, n).get("image"), config_of(c, n).get("artifacts"), c.jobs[n].script())
+                    for n in ("bare", "own", "picky", "none")],
+         [("rocker/r-ver:4.6.1", {"paths": ["a"]}, ["echo default", "echo x"]),
+          ("rocker/r-ver:4.6.1", {"expire_in": "1 week"}, ["echo own", "echo y"]),
+          ("rocker/r-ver:4.6.1", None, ["echo z"]),
+          (None, None, ["echo w"])]),
+        ("an unknown tag is a load error", "job:\n  script:\n    - !reference [.r, script]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("a syntax error is a load error", "job:\n  script: [x\n", lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("extends naming no block is a load error", "job:\n  extends: .missing\n  script: [x]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        # Every failure to load fails closed: PyYAML raises a plain ValueError
+        # for a scalar its tag cannot hold, and a recursive alias would
+        # recurse without end in the resolver.
+        ("an impossible date is a load error", "variables: {D: 2026-02-30}\njob:\n  script: [x]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("a scalar its tag cannot hold is a load error", "x: !!int 'abc'\njob:\n  script: [x]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("a recursive alias in a script is a load error", "a: &a [*a]\njob:\n  script: *a\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("a recursive alias along extends is a load error", ".t: &t {v: *t}\njob: {extends: .t, v: *t, script: [x]}\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        # A `rules:if` that does not read is a load error, an empty one included.
+        ("an empty rules:if is a load error", "job:\n  script: [x]\n  rules:\n    - if:\n      when: always\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("an empty workflow rules:if is a load error", "workflow:\n  rules:\n    - if: ''\njob:\n  script: [x]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("a rules:if cut short is a load error", "job:\n  script: [x]\n  rules:\n    - if: $A ==\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("words left over in a rules:if are a load error", "job:\n  script: [x]\n  rules:\n    - if: $A $B\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        # A job's rules see its own variables over the global ones `inherit:` lets through.
+        ("a job's rules see its own variables and the global ones it inherits",
+         "variables: {G: \"on\", H: \"on\"}\n"
+         "own:\n  variables: {RUN: \"yes\"}\n  rules:\n    - if: $RUN == \"yes\"\n  script: [x]\n"
+         "over:\n  variables: {G: \"off\"}\n  rules:\n    - if: $G == \"on\"\n  script: [x]\n"
+         "barred:\n  inherit: {variables: false}\n  rules:\n    - if: $G == \"on\"\n  script: [x]\n"
+         "picky:\n  inherit: {variables: [G]}\n  rules:\n    - if: $G == \"on\"\n  script: [x]\n"
+         "left:\n  inherit: {variables: [G]}\n  rules:\n    - if: $H == \"on\"\n  script: [x]\n",
+         lambda c: [c.jobs[n].runs["push"] for n in ("own", "over", "barred", "picky", "left")],
+         [True, False, False, True, False]),
+        # One config document, after at most a `spec:` header (an include's inputs).
+        ("a trailing `---` adds no document", "job:\n  script: [x]\n---\n",
+         lambda c: (c.error, c.jobs["job"].script()), (None, ["x"])),
+        # A pattern held in a variable, slashes included, is a pattern; one that
+        # holds no /regex/ does not read.
+        ("`=~ $VAR` matches the /regex/ the variable holds",
+         "variables: {MAIN_RE: /^ma.n$/, CASE_RE: /^MAIN$/i}\n"
+         "a:\n  script: [x]\n  rules: [{if: $CI_COMMIT_BRANCH =~ $MAIN_RE}]\n"
+         "b:\n  script: [x]\n  rules:\n    - if: $CI_COMMIT_BRANCH !~ ${MAIN_RE}\n"
+         "c:\n  script: [x]\n  rules: [{if: $CI_COMMIT_BRANCH =~ $CASE_RE}]\n",
+         lambda c: (c.error, [c.jobs[n].runs["push"] for n in "abc"]), (None, [True, False, True])),
+        ("`=~ $VAR` with no /regex/ in it does not read",
+         "variables: {PLAIN: main}\njob:\n  script: [x]\n  rules: [{if: $CI_COMMIT_BRANCH =~ $PLAIN}]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("a `spec:` header document, then the config",
+         "spec:\n  inputs:\n    stage:\n      default: check\n---\njob:\n  script: [x]\n",
+         lambda c: (c.error, c.jobs["job"].script()), (None, ["x"])),
+        ("two config documents are a load error", "a:\n  script: [x]\n---\njob:\n  script: [x]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("a header holding more than `spec:` is a load error", "spec: {inputs: {}}\nstages: [x]\n---\njob:\n  script: [x]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("two documents after a `spec:` header are a load error", "spec: {}\n---\na: 1\n---\njob:\n  script: [x]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        # The text rules' view holds the variables a job's commands read, once,
+        # beside its items: not one nothing reads, and one another one's value reads.
+        ("the text view holds the job's script items, then the variables they read",
+         "variables: {G: \"1\"}\njob:\n  variables: {ARGS: --as-cran}\n  script: [R CMD check $ARGS x.tar.gz]\n",
+         lambda c: list(c.jobs["job"].view), ["R CMD check $ARGS x.tar.gz\nARGS=--as-cran"]),
+        ("a variable read through another one's value is in the text view",
+         "variables: {B: --as-cran, C: x}\njob:\n  variables: {A: \"${B} -v\"}\n  script: [R CMD check $A x.tar.gz]\n",
+         lambda c: list(c.jobs["job"].view), ["R CMD check $A x.tar.gz\nB=--as-cran\nA=${B} -v"]),
+    )
+    if collect is None:
+        for tag, text, probe, want in reader_cases:
+            try:
+                got = probe(ci_of(text))
+            except Exception as error:  # noqa: BLE001 - a reader that raises fails the row
+                got = f"raised {type(error).__name__}: {error}"
+            if got != want:
+                failures.append(f"reader: {tag}: expected {want!r}, got {got!r}")
+
+    check_tpl = edit(cran, ci, "check:\n  extends: [.r, .on-main]\n  script:\n",
+                     ".check-tpl:\n  extends: [.r, .on-main]\n  script:\n")
+    expect_clean("reader e2e: extends with a trailing comment", "punycoder",
+                 edit(check_tpl, ci, "coverage:\n  extends", "check:\n  extends: .check-tpl  # template\ncoverage:\n  extends"),
+                 fixture_state())
+    expect_gap("reader e2e: a job overrides its parent's script", "no R CMD check runs on a push to main", "punycoder",
+               edit(check_tpl, ci, "coverage:\n  extends",
+                    "check:\n  extends: .check-tpl\n  script:\n    - echo skipped\ncoverage:\n  extends"), fixture_state())
+    expect_clean("reader e2e: when with a trailing comment", "punycoder",
+                 edit(cran, ci, "pages:\n  extends: [.r, .on-main]\n",
+                      "pages:\n  extends: .r\n  rules:\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n"
+                      "      when: on_success # explicit\n"), fixture_state())
+    rcmdcheck_item = "  script:\n    - Rscript -e 'rcmdcheck::rcmdcheck(args = \"--as-cran\", error_on = \"warning\")'\n"
+    no_oldrel = edit(cran, ci, '"4.6.1", "4.5.3", "devel"', '"4.6.1", "devel"')
+    expect_clean("reader e2e: a quoted image with a trailing comment", "punycoder",
+                 edit(no_oldrel, ci, "sanitizers:\n", "\"check:oldrel\":\n  extends: .deep\n"
+                      "  image: \"rocker/r-ver:4.5.3\" # oldrel\n" + rcmdcheck_item + "sanitizers:\n"), fixture_state())
+    expect_clean("reader e2e: an image mapping deep-merged along extends", "punycoder",
+                 edit(no_oldrel, ci, "sanitizers:\n", ".oldrel-image:\n  image:\n    name: \"rocker/r-ver:4.5.3\"\n"
+                      "\"check:oldrel\":\n  extends: [.deep, .oldrel-image]\n  image:\n    entrypoint: [\"\"]\n"
+                      + rcmdcheck_item + "sanitizers:\n"), fixture_state())
+    expect_gap("reader e2e: allow_failure with a trailing comment", "coverage: allow_failure: true", "punycoder",
+               edit(cran, ci, "coverage:\n  extends: [.r, .on-main]\n",
+                    "coverage:\n  extends: [.r, .on-main]\n  allow_failure: true # soft for now\n"), fixture_state())
+    no_floor = edit(cran, ci, ', "4.1.3"]', "]")
+    floor_job = "floor:\n  extends: .deep\n  image: rocker/r-ver:$R_FLOOR\n  variables:\n    R_FLOOR: {}\n" + rcmdcheck_item
+    expect_clean("reader e2e: an unquoted 4.10 is R 4.1", "punycoder",
+                 edit(no_floor, ci, "sanitizers:\n", floor_job.format("4.10") + "sanitizers:\n"), fixture_state())
+    expect_gap("reader e2e: a quoted \"4.10\" is not R 4.1", "no deep-check leg at the declared R floor (4.1)", "punycoder",
+               edit(no_floor, ci, "sanitizers:\n", floor_job.format('"4.10"') + "sanitizers:\n"), fixture_state())
+    expect_gap("reader e2e: incoming off as a boolean job variable", "check: turns CRAN incoming off", "punycoder",
+               edit(cran, ci, "check:\n  extends: [.r, .on-main]\n",
+                    "check:\n  extends: [.r, .on-main]\n  variables:\n    _R_CHECK_CRAN_INCOMING_: false\n"), fixture_state())
+    expect_gap("reader e2e: incoming off as a global variable", "check: turns CRAN incoming off", "punycoder",
+               edit(cran, ci, "variables:\n", "variables:\n  _R_CHECK_CRAN_INCOMING_: \"FALSE\"\n"), fixture_state())
+    # R lower-cases a check setting: "false", "no" and "0" are off, in any case.
+    for value in ('"no"', '"False"', "'NO'"):
+        expect_gap(f"reader e2e: incoming off as {value}", "check: turns CRAN incoming off", "punycoder",
+                   edit(cran, ci, "check:\n  extends: [.r, .on-main]\n",
+                        f"check:\n  extends: [.r, .on-main]\n  variables:\n    _R_CHECK_CRAN_INCOMING_: {value}\n"),
+                   fixture_state())
+    expect_gap("reader e2e: remote incoming off as \"No\"", "check: turns remote CRAN incoming off", "punycoder",
+               edit(cran, ci, "check:\n  extends: [.r, .on-main]\n",
+                    "check:\n  extends: [.r, .on-main]\n  variables:\n    _R_CHECK_CRAN_INCOMING_REMOTE_: \"No\"\n"),
+               fixture_state())
+    expect_gap("incoming off as \"No\" in the commands", "turns CRAN incoming off", "punycoder",
+               edit(cran, ci, 'error_on = "warning")\'\ncoverage',
+                    'error_on = "warning", env = c("_R_CHECK_CRAN_INCOMING_" = "No"))\'\ncoverage'), fixture_state())
+    # The text rules see the variables a job gets: a flag or a script path its
+    # commands take from one counts, and a script a variable names is followed.
+    expect_clean("reader e2e: --as-cran from a job variable", "punycoder",
+                 edit(edit(cran, ci, 'rcmdcheck(args = "--as-cran", error_on = "warning")\'\ncoverage',
+                           'rcmdcheck(args = Sys.getenv("CHECK_ARGS"), error_on = "warning")\'\ncoverage'),
+                      ci, "check:\n  extends: [.r, .on-main]\n",
+                      "check:\n  extends: [.r, .on-main]\n  variables:\n    CHECK_ARGS: --as-cran\n"), fixture_state())
+    expect_clean("reader e2e: error_on from a global variable", "punycoder",
+                 edit(edit(cran, ci, "    - Rscript -e 'res <- rcmdcheck::rcmdcheck(args = \"--as-cran\", error_on = \"warning\")'\n",
+                           "    - Rscript -e \"res <- rcmdcheck::rcmdcheck(args = '--as-cran', $ERROR_ON)\"\n"),
+                      ci, "variables:\n", "variables:\n  ERROR_ON: error_on = \"warning\"\n"), fixture_state())
+    expect_clean("reader e2e: the gates script named by a variable", "punycoder",
+                 edit(edit(cran, ci, "    - *deps\n    - Rscript tools/gates.R\n", "    - *deps\n    - Rscript $GATES\n"),
+                      ci, "gates:\n  extends: [.r, .on-main]\n",
+                      "gates:\n  extends: [.r, .on-main]\n  variables:\n    GATES: tools/gates.R\n"), fixture_state())
+    # A variable nothing reads is no command: it neither supplies a flag nor
+    # makes a job an R job.
+    expect_gap("reader e2e: --as-cran only in a variable nothing reads", "does not use --as-cran", "punycoder",
+               edit(edit(cran, ci, 'rcmdcheck(args = "--as-cran", error_on = "warning")\'\ncoverage',
+                         'rcmdcheck(error_on = "warning")\'\ncoverage'),
+                    ci, "variables:\n", "variables:\n  ARGS: --as-cran\n"), fixture_state())
+    expect_clean("reader e2e: an R command in a variable nothing reads", "punycoder",
+                 edit(cran, ci, "variables:\n", "variables:\n  RUNNER_CMD: Rscript tools/gates.R\n"), fixture_state())
+    # A script a job runs that cannot be read leaves CI not judged, never a gap.
+    class Unreadable(DictSource):
+        def read(self, path: str) -> str | None:
+            if path == "tools/gates.R":
+                raise ProbeError("reading tools/gates.R: 503")
+            return super().read(path)
+
+    if collect is None:
+        report = check_repo("punycoder", Unreadable(cran), fixture_state(), None)
+        if (any(area == "ci" for area, _ in report.gaps)
+                or not any(area == "ci" and "could not read a script" in t for area, t in report.unjudged)
+                or exit_status([report]) != 2):
+            failures.append(f"reader e2e: an unreadable script a job runs: expected CI not judged and exit 2, got "
+                            f"{report.gaps} / {report.unjudged}")
+    # A `spec:` header document before the config is valid GitLab.
+    expect_clean("reader e2e: a `spec:` header, then the config", "punycoder",
+                 dict(cran, **{ci: "spec:\n  inputs:\n    image:\n      default: rocker/r-ver:4.6.1\n---\n" + cran[ci]}),
+                 fixture_state())
+    cov_artifacts = ("  artifacts:\n    reports:\n      coverage_report:\n        coverage_format: cobertura\n"
+                     "        path: cobertura.xml\n")
+    in_default_artifacts = edit(edit(cran, ci, cov_artifacts, ""), ci, "default:\n  image: rocker/r-ver:4.6.1\n",
+                                "default:\n  image: rocker/r-ver:4.6.1\n" + cov_artifacts)
+    expect_clean("reader e2e: default: artifacts reach a job that sets none", "punycoder", in_default_artifacts,
+                 fixture_state())
+    expect_gap("reader e2e: default: does not merge into a job's own artifacts", "coverage: no cobertura", "punycoder",
+               edit(in_default_artifacts, ci, "  coverage: '/Coverage",
+                    "  artifacts:\n    paths: [cobertura.xml]\n  coverage: '/Coverage"), fixture_state())
+    anchored = edit(cran, ci, pin_lines, seor_shape.replace("    - |\n", "    - &pandoc |\n", 1))
+    expect_clean("reader e2e: an anchored install item reused in a job's own before_script", "punycoder",
+                 edit(anchored, ci, "check:\n  extends: [.r, .on-main]\n",
+                      "check:\n  extends: [.r, .on-main]\n  before_script:\n    - PANDOC_VERSION=3.10\n    - *pandoc\n"),
+                 fixture_state())
+    # The pin reaches a job through a variable or an assignment sh runs, not a
+    # mention; an assignment this reader cannot see into is not judged.
+    pin_elsewhere = edit(cran, ci, "    - fossa analyze\n", "    - PANDOC_VERSION=3.10\n    - fossa analyze\n")
+    for echoed in ('echo "PANDOC_VERSION=3.10 is set in fossa"', 'echo "set in fossa; PANDOC_VERSION=3.10"',
+                   "echo done  # PANDOC_VERSION=3.10"):
+        expect_gap(f"reader e2e: the pin only in {echoed!r}", "which neither its variables nor its setup assign",
+                   "punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl",
+                                     f"    - {echoed}\n    - curl"), fixture_state())
+    # Nor an assignment that ends before the commands after it: in a subshell,
+    # a pipeline stage or a here-document's body, or as a command's prefix,
+    # which reaches that one command after its words are expanded.
+    for form, item in (("a subshell", "    - (PANDOC_VERSION=3.10)\n"),
+                       ("a pipeline stage", "    - echo a | PANDOC_VERSION=3.10 true\n"),
+                       ("a here-document", "    - |\n      cat <<EOF > /tmp/pin.env\n      PANDOC_VERSION=3.10\n      EOF\n"),
+                       ("a command's prefix", "    - PANDOC_VERSION=3.10 curl -fsSL -o /tmp/v https://example.org/$PANDOC_VERSION/v\n"),
+                       ("a subshell, after a command", "    - (cd /tmp; PANDOC_VERSION=3.10; true)\n"),
+                       ("a subshell's && chain", "    - ( true && PANDOC_VERSION=3.10 && true )\n"),
+                       ("a subshell over lines", "    - |\n      (\n      PANDOC_VERSION=3.10\n      )\n"),
+                       ("a group that is a pipeline stage", "    - echo a | { PANDOC_VERSION=3.10; }\n"),
+                       ("a group piped on", "    - '{ PANDOC_VERSION=3.10; } | cat'\n"),
+                       ("a loop that is a pipeline stage", "    - echo a | while read -r x; do PANDOC_VERSION=3.10; done\n"),
+                       ("a backgrounded loop", "    - while true; do PANDOC_VERSION=3.10; break; done &\n")):
+        expect_gap(f"reader e2e: the pin only in {form}", "which neither its variables nor its setup assign",
+                   "punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"{item}    - curl"),
+                   fixture_state())
+    # A compound command in the current shell keeps the assignment: a group,
+    # a branch, a case clause. A finished subshell, `(( … ))` and a closed
+    # here-document leave the commands after them to be read.
+    for form, item in (("a group", "    - '{ PANDOC_VERSION=3.10; }'\n"),
+                       ("an if branch", "    - if true; then PANDOC_VERSION=3.10; fi\n"),
+                       ("a case clause", "    - case x in a|b) PANDOC_VERSION=3.10;; esac\n"),
+                       ("a line after a subshell", "    - (cd /tmp; true); PANDOC_VERSION=3.10\n"),
+                       ("a line after a shift", "    - |\n      (( n = 1 << 2 ))\n      PANDOC_VERSION=3.10\n"),
+                       ("a line after a here-document ended by END-PIN",
+                        "    - |\n      cat <<END-PIN > /tmp/x\n      hi\n      END-PIN\n      PANDOC_VERSION=3.10\n"),
+                       ("a line after a here-document ended by 'EOF.x'",
+                        "    - |\n      cat <<'EOF.x' > /tmp/x\n      hi\n      EOF.x\n      PANDOC_VERSION=3.10\n")):
+        expect_clean(f"reader e2e: the pin assigned in {form}", "punycoder",
+                     edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"{item}    - curl"),
+                     fixture_state())
+    # The builtins that assign in the current shell count as assignments.
+    for spelling in ("readonly PANDOC_VERSION=3.10", "declare -x PANDOC_VERSION=3.10", "typeset -x PANDOC_VERSION=3.10"):
+        expect_clean(f"reader e2e: the pin assigned with {spelling.split()[0]}", "punycoder",
+                     edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"    - {spelling}\n    - curl"),
+                     fixture_state())
+    # An assignment this reader cannot see into is not judged, and the run is incomplete.
+    # A function's body runs only if the function is called: not judged, `local` or not.
+    for form, item in (("eval", "eval \"PANDOC_VERSION=3.10\""), ("local", "local PANDOC_VERSION=3.10"),
+                       ("a function's body", "f() { PANDOC_VERSION=3.10; }"),
+                       ("a `function` body", "function f { PANDOC_VERSION=3.10; }")):
+        report = run("punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"    - {item}\n    - curl"),
+                     fixture_state())
+        if collect is None and (report.gaps
+                                or not any("PANDOC_VERSION" in t and "not judged" in t for _, t in report.unjudged)
+                                or exit_status([report]) != 2):
+            failures.append(f"reader e2e: an assignment under {form}: expected not judged and exit 2, got "
+                            f"{report.gaps} / {report.unjudged}")
+    # A judgment left out by choice (--offline) does not make the run incomplete.
+    report = run("punycoder", cran, fixture_state())
+    if collect is None and (not report.unjudged or exit_status([report]) != 0):
+        failures.append(f"an --offline skip alone: expected exit 0, got {exit_status([report])} for {report.unjudged}")
+    # A load error: CI is not judged, the run is incomplete, the other areas are still judged.
+    for tag, old, new in (("an unknown tag", "    - *deps\n    - Rscript tools/gates.R\n",
+                           "    - !reference [.deps]\n    - Rscript tools/gates.R\n"),
+                          ("a syntax error", "stages: [check, deploy, audit]\n", "stages: [check, deploy, audit\n"),
+                          ("an impossible date", "stages: [check, deploy, audit]\n",
+                           "stages: [check, deploy, audit]\nreleased: 2026-02-30\n"),
+                          ("a recursive alias", "    - *deps\n    - Rscript tools/gates.R\n",
+                           "    - &loop [*loop]\n    - Rscript tools/gates.R\n"),
+                          ("an empty rules:if", ".on-main:\n  rules:\n",
+                           ".on-main:\n  rules:\n    - if:\n      when: always\n")):
+        broken = edit(no_arch, ci, old, new)
+        report = run("punycoder", broken, fixture_state())
+        if collect is None and (any(area == "ci" for area, _ in report.gaps)
+                                or not any("missing ARCHITECTURE.md" in t for _, t in report.gaps)
+                                or not any(area == "ci" and "could not read .gitlab-ci.yml" in t
+                                           for area, t in report.unjudged)
+                                or exit_status([Report("x", unjudged=report.unjudged, incomplete=report.incomplete)]) != 2):
+            failures.append(f"reader e2e: {tag}: expected CI not judged and exit 2, got {report.gaps} / {report.unjudged}")
 
     # NEGATIVE: local gate and schedules.
     expect_gap("URL check missing", "no URL check", "punycoder",
@@ -2803,6 +3479,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--self-test", action="store_true", help="run the offline fixtures")
     args = parser.parse_args(argv)
 
+    if yaml is None:
+        print("check-fleet-standard: PyYAML is not installed, and .gitlab-ci.yml is read with it. Install it with "
+              "`python3 -m pip install pyyaml==6.0.3`, or run the pre-commit hook, which installs it.", file=sys.stderr)
+        return 2
     if args.self_test:
         failures = self_test()
         if failures:
@@ -2825,10 +3505,14 @@ def main(argv: list[str]) -> int:
     incomplete = sum(len(r.unjudged) for r in reports)
     print(f"{total} gap(s) in {sum(1 for r in reports if r.gaps)} of {len(reports)} package(s); "
           f"{incomplete} item(s) not judged.")
-    if total:
+    return exit_status(reports)
+
+
+def exit_status(reports: list[Report]) -> int:
+    """1 on any gap; else 2 when a report is incomplete (Report.skip), so the run is; else 0."""
+    if any(r.gaps for r in reports):
         return 1
-    return 2 if any("probe failed" in t or "could not read" in t or "network error" in t
-                    for r in reports for _, t in r.unjudged) else 0
+    return 2 if any(r.incomplete for r in reports) else 0
 
 
 if __name__ == "__main__":
