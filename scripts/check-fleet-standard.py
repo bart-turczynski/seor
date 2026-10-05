@@ -616,11 +616,11 @@ def load_ci(text: str) -> dict:
     a scalar its tag cannot hold (`2026-02-30`, `!!int 'abc'`), which PyYAML
     raises as a plain ValueError. The file is one document, or a header
     document holding only `spec:` (an include's inputs), `---`, then the
-    config. A node that contains itself (`a: &a [*a]`) is refused here, so
+    config; an empty document (a trailing `---`) is no document. A node that contains itself (`a: &a [*a]`) is refused here, so
     nothing downstream recurses into it.
     """
     try:
-        documents = list(yaml.safe_load_all(text))
+        documents = [document for document in yaml.safe_load_all(text) if document is not None]
     except Exception as error:  # noqa: BLE001 - any failure to load is a load error
         detail = str(error) if isinstance(error, yaml.YAMLError) else f"{type(error).__name__}: {error}"
         raise CIError(" ".join(detail.split())[:300]) from error
@@ -705,14 +705,17 @@ def inherited(setting: object, key: str) -> bool:
 
 # A variable a command or script reads: `$NAME`, `${NAME…}`, or R's `Sys.getenv("NAME")`.
 VAR_READ_RE = re.compile(r"\$\{?(\w+)|Sys\.getenv\(\s*[\"'](\w+)[\"']")
+REGEX_LITERAL = re.compile(r"/((?:\\.|[^/])*)/([a-z]*)")
 EXPR_TOKEN = re.compile(r"\s*(?:(\$\{?\w+\}?)|(\"[^\"]*\"|'[^']*')|(==|!=|=~|!~|&&|\|\||\(|\))|(null)\b)")
 
 
 def evaluate(expr: str, env: dict[str, str]) -> bool:
     """Evaluate a GitLab `rules:if` expression against variables in `env`.
 
+    The right of `=~`/`!~` is a `/regex/`, or a variable holding one.
     ValueError (or re.error, for a bad regex) when the expression does not
-    read whole: empty, cut short, unbalanced, or with words left over.
+    read whole: empty, cut short, unbalanced, with words left over, or a
+    pattern variable that is unset or holds no `/regex/`.
     """
     tokens: list[tuple[str, str]] = []
     i = 0
@@ -721,11 +724,17 @@ def evaluate(expr: str, env: dict[str, str]) -> bool:
             i += 1
             continue
         if tokens and tokens[-1] == ("op", "=~") or tokens and tokens[-1] == ("op", "!~"):
-            m = re.compile(r"/((?:\\.|[^/])*)/([a-z]*)").match(expr, i)
-            if not m:
+            m = REGEX_LITERAL.match(expr, i)
+            held = None if m else re.compile(r"\$\{?(\w+)\}?").match(expr, i)
+            if held:
+                # A variable on the right holds the pattern, slashes included.
+                m = REGEX_LITERAL.fullmatch(env.get(held.group(1)) or "")
+                if not m:
+                    raise ValueError(f"${held.group(1)} holds no /regex/ for {expr!r}")
+            elif not m:
                 raise ValueError(f"bad regex in {expr!r}")
             tokens.append(("re", m.group(1) + ("\x00i" if "i" in m.group(2) else "")))
-            i = m.end()
+            i = (held or m).end()
             continue
         m = EXPR_TOKEN.match(expr, i)
         if not m or m.end() == i:
@@ -3194,6 +3203,19 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
          lambda c: [c.jobs[n].runs["push"] for n in ("own", "over", "barred", "picky", "left")],
          [True, False, False, True, False]),
         # One config document, after at most a `spec:` header (an include's inputs).
+        ("a trailing `---` adds no document", "job:\n  script: [x]\n---\n",
+         lambda c: (c.error, c.jobs["job"].script()), (None, ["x"])),
+        # A pattern held in a variable, slashes included, is a pattern; one that
+        # holds no /regex/ does not read.
+        ("`=~ $VAR` matches the /regex/ the variable holds",
+         "variables: {MAIN_RE: /^ma.n$/, CASE_RE: /^MAIN$/i}\n"
+         "a:\n  script: [x]\n  rules: [{if: $CI_COMMIT_BRANCH =~ $MAIN_RE}]\n"
+         "b:\n  script: [x]\n  rules:\n    - if: $CI_COMMIT_BRANCH !~ ${MAIN_RE}\n"
+         "c:\n  script: [x]\n  rules: [{if: $CI_COMMIT_BRANCH =~ $CASE_RE}]\n",
+         lambda c: (c.error, [c.jobs[n].runs["push"] for n in "abc"]), (None, [True, False, True])),
+        ("`=~ $VAR` with no /regex/ in it does not read",
+         "variables: {PLAIN: main}\njob:\n  script: [x]\n  rules: [{if: $CI_COMMIT_BRANCH =~ $PLAIN}]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
         ("a `spec:` header document, then the config",
          "spec:\n  inputs:\n    stage:\n      default: check\n---\njob:\n  script: [x]\n",
          lambda c: (c.error, c.jobs["job"].script()), (None, ["x"])),
