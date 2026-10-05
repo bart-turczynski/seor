@@ -362,9 +362,11 @@ tree. There it runs roxygen2 at exactly the version `Config/roxygen2/version`
 pins and fails, printing the diff, when `man/`, `NAMESPACE` or `DESCRIPTION`
 differ from what is committed. It runs the checkout's copy of the check, and
 removes the export on every exit, signals included. robotstxtr's
-`dev/check-docs-drift.R` is the reference; the members carry it as
-`scripts/check-docs-drift.R`. CI runs it too where its image has the pinned
-roxygen2 (rurl, punycoder, raddr, pagerankr; SEOR-fhrisfpt, SEOR-yufxgcre).
+`dev/check-docs-drift.R` is the reference; rurl, pslr, punycoder, raddr,
+pagerankr, seor and ssrfr carry it as `scripts/check-docs-drift.R`. sitemapr's
+`tools/check-docs.R` still regenerates in the working tree (SEOR-zxyztpbr).
+CI runs it too where its image has the pinned roxygen2 (rurl, punycoder,
+raddr, pagerankr; SEOR-fhrisfpt, SEOR-yufxgcre).
 
 ## Files every package carries
 
@@ -573,9 +575,10 @@ What it checks, section by section:
   `rmarkdown::pandoc_version()` and reads `PANDOC_VERSION` from
   `.gitlab-ci.yml`: the comparison with the CI pin. A `pandoc_version()` call
   alone, such as a minimum-version check, is not it, and neither is
-  `Sys.getenv("PANDOC_VERSION", …)`. One such script also calls
-  `roxygen2::roxygenise()`, the docs-drift check; that it runs on an export
-  of the pushed commit and diffs is a review item.
+  `Sys.getenv("PANDOC_VERSION", …)`. The docs-drift check: some script in
+  that chain runs roxygen2 (`roxygenise` or `roxygenize`) and some script
+  runs `git archive`. That the two belong together, and that it diffs, is a
+  review item.
 - **Schedules.** One active `deep-check` and one `dependency-audit` schedule,
   on `main`, with `SCHEDULE_KIND` set on each schedule.
 
