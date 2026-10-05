@@ -2798,14 +2798,6 @@ repos:
         stages: [pre-push]
 """
 
-FIXTURE_TOOLCHAIN_R = """\
-# The pin is read from the CI file; a toolchain check compares the local pandoc to it.
-ci <- readLines(file.path(root, ".gitlab-ci.yml"))
-pin <- read_pin(ci, "PANDOC_VERSION")
-if (!identical(as.character(rmarkdown::pandoc_version()), pin)) quit(status = 1)
-"""
-
-
 def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str | None = "10.5281/zenodo.111") -> dict:
     urls = [f"https://{OWNER}.gitlab.io/{pkg}/", f"https://gitlab.com/{OWNER}/{pkg}",
             f"https://{OWNER}.r-universe.dev/{pkg}"] + ([f"https://CRAN.R-project.org/package={pkg}"] if on_cran else [])
@@ -2830,7 +2822,8 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
         ".pre-commit-config.yaml": FIXTURE_PRECOMMIT,
         "tools/verify.R": "db <- tools:::url_db_from_package_sources('.')\nbad <- tools:::check_url_db(db)\n"
                           "system2(\"git\", c(\"archive\", \"-o\", tarball, ref))\nroxygen2::roxygenise(export)\n",
-        "scripts/check-toolchain.R": FIXTURE_TOOLCHAIN_R,
+        # The vendored copy every member carries: seor's own, byte for byte.
+        "scripts/check-toolchain.R": TOOLCHAIN_R.read_text(encoding="utf-8", errors="replace"),
         "scripts/check-citation.py": "print('ok')\n",
         ".gitlab/issue_templates/Bug.md": "x\n",
         ".gitlab/merge_request_templates/Default.md": "x\n",
@@ -3355,6 +3348,26 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                edit(cran, ci, "      - R_VERSION: [\"4.6.1\", \"4.5.3\", \"devel\", \"4.1.3\"]\n",
                     "      - R_VERSION: [\"4.6.1\", \"4.5.3\", \"devel\", \"4.1.3\"]\n        PANDOC_VERSION: \"3.10\"\n"),
                fixture_state())
+    # GitLab's expanded form, `PANDOC_VERSION: {value: …, description: …}`,
+    # block or flow, global or a job's: check-toolchain.R reads a plain
+    # scalar only, so it sees no pin in the block form and the pin
+    # `{value: "3.10"}` in the flow form.
+    # WRONG TODAY (SEOR-eodwtiqv): each reports a symptom of the misreading,
+    # not the cause.
+    no_shell_pin = edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "")
+    expect_gap("pin in the expanded form, block, global", "which .gitlab-ci.yml never assigns", "punycoder",
+               edit(no_shell_pin, ci, "variables:\n",
+                    "variables:\n  PANDOC_VERSION:\n    value: \"3.10\"\n    description: the fleet's pandoc\n"),
+               fixture_state())
+    expect_gap("pin in the expanded form, flow, global", "pins pandoc {value: \"3.10\"}, not the fleet's 3.10",
+               "punycoder", edit(no_shell_pin, ci, "variables:\n", "variables:\n  PANDOC_VERSION: {value: \"3.10\"}\n"),
+               fixture_state())
+    expect_gap("pin in the expanded form, block, in the R template", "which .gitlab-ci.yml never assigns", "punycoder",
+               edit(no_shell_pin, ci, ".r:\n", ".r:\n  variables:\n    PANDOC_VERSION:\n      value: \"3.10\"\n"),
+               fixture_state())
+    expect_gap("pin in the expanded form, flow, beside a shell pin", two_pins, "punycoder",
+               edit(cran, ci, ".r:\n", ".r:\n  variables:\n    PANDOC_VERSION: {value: \"3.10\", description: pin}\n"),
+               fixture_state())
 
     # The install reader through its interface: shell items in, state out.
     if collect is None:
@@ -3369,6 +3382,13 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                  edit(cran, ci, "  before_script:\n" + pin_lines,
                       f"  variables:\n    PANDOC_VERSION: \"3.10\"\n  before_script: ['{PANDOC_CASE_DL}', '{PANDOC_CASE_CHECK}',\n"
                       "    'dpkg -i /tmp/pandoc.deb']\n"), fixture_state())
+    # So is the pin as a flow sequence's item, first or after another
+    # (SEOR-ltseyxpe): the job sees it, and check-toolchain.R reads it.
+    for form, head in (("first", "["), ("after another item", "[echo setup, ")):
+        expect_clean(f"the pin in a flow sequence, {form}", "punycoder",
+                     edit(cran, ci, "  before_script:\n" + pin_lines,
+                          f"  before_script: {head}PANDOC_VERSION=3.10, '{PANDOC_CASE_DL}', '{PANDOC_CASE_CHECK}',\n"
+                          "    'dpkg -i /tmp/pandoc.deb']\n"), fixture_state())
 
     # The CI reader's case table (SEOR-oznwzhem). Every expected value is what
     # GitLab makes of the YAML, written down from the YAML 1.1 spec and GitLab's
@@ -3762,6 +3782,19 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     expect_gap("CI file named only in a trailing comment", no_local_pandoc, "punycoder",
                dict(cran, **{"scripts/check-toolchain.R": "pin <- PANDOC_VERSION  # see .gitlab-ci.yml\n" + compare}),
                fixture_state())
+    # check-toolchain.R is vendored: every member carries seor's copy, byte
+    # for byte. The fixture carries it.
+    toolchain = "scripts/check-toolchain.R"
+    if cran[toolchain] != TOOLCHAIN_R.read_text(encoding="utf-8", errors="replace"):
+        failures.append("the fixture's check-toolchain.R is not seor's copy")
+    expect_clean("a member's check-toolchain.R identical to seor's", "punycoder", cran, fixture_state())
+    # WRONG TODAY (SEOR-eodwtiqv): a copy that drifted from seor's passes.
+    expect_clean("a member's check-toolchain.R drifted from seor's", "punycoder",
+                 dict(cran, **{toolchain: cran[toolchain] + "# a local edit\n"}), fixture_state())
+    # A missing copy is the local gate's pandoc gap, and only that.
+    report = run("punycoder", {k: v for k, v in cran.items() if k != toolchain}, fixture_state())
+    if collect is None and [t for _, t in report.gaps] != [no_local_pandoc]:
+        failures.append(f"no check-toolchain.R: expected the local pandoc gap alone, got {report.gaps}")
     no_deep = fixture_state()
     no_deep.schedules = no_deep.schedules[1:]
     expect_gap("deep-check schedule missing", "no deep-check schedule", "punycoder", cran, no_deep)
