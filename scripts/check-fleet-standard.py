@@ -102,8 +102,8 @@ WHAT IT CHECKS, by section of the standard.
   curl or wget, the check reads a pinned digest line naming FILE (from
   echo or printf on stdin, or a here-string), paths compared as whole
   words, and the download has a time limit: curl `--max-time` or `-m`,
-  with `--retry-max-time` and `--retry-delay` if it retries, or `timeout`
-  around either. The install counts in the `before_script` or `script` the job
+  with `--retry-max-time` (and no `--retry-delay` over 600) if it retries,
+  or `timeout` around either. The install counts in the `before_script` or `script` the job
   ends up with (its own, else the template's that GitLab merges last), not in
   `default:`, which also reaches jobs on images without dpkg or curl; a pin
   found only there is reported, to move into the template.
@@ -1178,18 +1178,22 @@ DIGEST_WRITER_RE = re.compile(r"(?:echo|printf)(?:\s|$)")
 # A download with no time limit hangs on a stalled CDN instead of failing into
 # the warn fallback (download_bounded()). A limit of 0 means none to curl and
 # timeout(1) alike. curl `--max-time`/`-m` (bundled too, `-fsSLm 300`) bounds
-# one attempt; a `--retry` count above 0 adds attempts and waits between
-# them, a server's Retry-After included, so it needs both `--retry-max-time`
-# and `--retry-delay` above 0. No count bounds a Retry-After wait, so none is
-# capped. A `--retry` not literally 0 (`$N`) counts as above 0. wget has no
-# such limit: `--timeout`/`--read-timeout`/`-T` bound idle time, not the
-# download, so only timeout(1) bounds it.
-DOWNLOAD_BOUND_RE = {
-    "curl": re.compile(r"(?:^|\s)(?:--max-time(?:\s+|=)|-[A-Za-z]*m\s*)0*[1-9]"),
-    "retry": re.compile(r"(?:^|\s)--retry(?:\s+|=)(?!0*(?:[\s;&|)]|$))"),
-    "retry limits": (re.compile(r"(?:^|\s)--retry-max-time(?:\s+|=)0*[1-9]"),
-                     re.compile(r"(?:^|\s)--retry-delay(?:\s+|=)0*[1-9]")),
-}
+# one attempt. A `--retry` count above 0 adds attempts and waits between them;
+# `--retry-max-time` above 0 ends the retries once it has passed, and curl
+# skips a retry whose Retry-After wait would pass it. The wait is otherwise
+# curl's backoff, which stops growing at 600 s, or `--retry-delay`, which
+# replaces it: one above 600 s (or not a number) breaks that ceiling, while
+# 0 keeps the backoff. No retry count is capped: none bounds a Retry-After
+# wait. A `--retry` not literally 0 (`$N`) counts as above 0. Values may be
+# quoted or decimal (`"300"`, `0.5`). wget has no such limit: `--timeout`,
+# `--read-timeout` and `-T` bound idle time, not the download, so only
+# timeout(1) bounds it.
+POSITIVE_SECONDS = r"[\"']?(?:0*[1-9]\d*(?:\.\d*)?|0*\.\d*[1-9]\d*)[\"']?(?![\w.])"
+CURL_MAX_TIME_RE = re.compile(rf"(?:^|\s)(?:--max-time(?:\s+|=)|-[A-Za-z]*m\s*){POSITIVE_SECONDS}")
+CURL_RETRY_RE = re.compile(r"(?:^|\s)--retry(?:\s+|=)(?![\"']?0*(?:\.0*)?[\"']?(?:[\s;&|)<>]|$))")
+CURL_RETRY_MAX_TIME_RE = re.compile(rf"(?:^|\s)--retry-max-time(?:\s+|=){POSITIVE_SECONDS}")
+CURL_RETRY_DELAY_RE = re.compile(r"(?:^|\s)--retry-delay(?:\s+|=)([^\s;&|<>()]+)")
+CURL_BACKOFF_MAX = 600.0
 # `timeout 300 curl …` bounds the whole download, retries included.
 TIMEOUT_WRAPPER_RE = re.compile(
     r"(?:^|\s)timeout\s+(?:(?:-[ks]|--kill-after|--signal)\s+\S+\s+|-\S+\s+)*"
@@ -1359,13 +1363,24 @@ def check_reads(step: Shell, path: str) -> bool:
 
 def download_bounded(tool: str, command: str) -> bool:
     """Whether the download has a time limit: under timeout(1), or curl with
-    `--max-time` and, when it retries, `--retry-max-time` and `--retry-delay`."""
+    `--max-time` and, when it retries, `--retry-max-time`, with no
+    `--retry-delay` (the last one curl reads) above curl's 600 s backoff."""
     if TIMEOUT_WRAPPER_RE.search(command):
         return True
-    if tool != "curl" or not DOWNLOAD_BOUND_RE["curl"].search(command):
+    if tool != "curl" or not CURL_MAX_TIME_RE.search(command):
         return False
-    return (not DOWNLOAD_BOUND_RE["retry"].search(command)
-            or all(p.search(command) for p in DOWNLOAD_BOUND_RE["retry limits"]))
+    if not CURL_RETRY_RE.search(command):
+        return True
+    delays = CURL_RETRY_DELAY_RE.findall(command)
+    return bool(CURL_RETRY_MAX_TIME_RE.search(command)) and (not delays or seconds(delays[-1]) <= CURL_BACKOFF_MAX)
+
+
+def seconds(word: str) -> float:
+    """A curl seconds value, quotes removed; infinity when it is no number (`$D`)."""
+    try:
+        return float(word.strip("\"'"))
+    except ValueError:
+        return float("inf")
 
 
 INSTALL_STATES = ("noncanonical", "unbounded", "installed")
@@ -1594,21 +1609,30 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
     # A block in a function's body runs only if the function is called.
     ("the block in a function's body", [f"install_pandoc() {{ {PANDOC_CASE_ONE_LINE}; }}"], "noncanonical"),
     # SEOR-ltseyxpe. curl's --max-time bounds one attempt: a --retry above 0
-    # needs --retry-max-time and --retry-delay above 0 too, whatever its
-    # count. wget's --timeout and --tries bound no download: only timeout(1).
-    ("curl with --max-time and an uncapped --retry",
+    # needs --retry-max-time above 0 too, whatever its count, and no
+    # --retry-delay above 600 s. wget's --timeout and --tries bound no
+    # download: only timeout(1).
+    ("curl that retries with no retry budget",
      [f"curl -fsSL --retry 100 --max-time 300 -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK,
       PANDOC_CASE_DPKG], "unbounded"),
     *((f"download time limit: {flags!r}",
        [f"curl -fsSL {flags} -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], want)
       for flags, want in (("--retry 3 --retry-delay 5 --max-time 120", "unbounded"),
-                          ("--retry 3 --retry-max-time 300 --max-time 120", "unbounded"),
+                          ("--retry 3 --retry-max-time 300 --max-time 120", "installed"),
                           ("--retry 3 --retry-delay 5 --retry-max-time 300 --max-time 120", "installed"),
                           ("--retry 0 --max-time 120", "installed"),
+                          ("--retry \"0\" --max-time 120", "installed"),
                           ("--retry=3 --retry-delay=5 --retry-max-time=300 --max-time=120", "installed"),
-                          ("--retry=3 --retry-max-time=300 --max-time=120", "unbounded"),
+                          ("--retry=3 --max-time=120", "unbounded"),
                           ("--retry 3 --retry-delay 5 --retry-max-time 0 --max-time 120", "unbounded"),
-                          ("--retry 3 --retry-delay 0 --retry-max-time 300 --max-time 120", "unbounded"),
+                          ("--retry 3 --retry-delay 0 --retry-max-time 300 --max-time 120", "installed"),
+                          ("--retry 3 --retry-delay 600 --retry-max-time 300 --max-time 120", "installed"),
+                          ("--retry 3 --retry-delay 601 --retry-max-time 300 --max-time 120", "unbounded"),
+                          ("--retry 3 --retry-delay 5 --retry-delay 900 --retry-max-time 300 --max-time 120",
+                           "unbounded"),
+                          ("--retry 3 --retry-delay $DELAY --retry-max-time 300 --max-time 120", "unbounded"),
+                          ("--retry 3 --retry-delay 0.5 --retry-max-time \"300\" --max-time 0.5", "installed"),
+                          ("--retry 3 --retry-max-time 300 --max-time 0", "unbounded"),
                           ("--retry $RETRIES --max-time 120", "unbounded"),
                           ("--retry 100 --retry-delay 5 --retry-max-time 300 --max-time 120", "installed"))),
     ("wget with --timeout and a few --tries",
@@ -1955,7 +1979,7 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
                         "script item, or the download, the `sha256sum -c` and the `dpkg -i` as three script items in "
                         "that order, each one command or pipeline (design/fleet-standard.md)",
         "unbounded": f"downloads pandoc {PANDOC_PIN} with no time limit (curl --max-time, with --retry-max-time "
-                     "and --retry-delay when it retries, or timeout(1) around curl or wget), so a stalled "
+                     "and no --retry-delay over 600 when it retries, or timeout(1) around curl or wget), so a stalled "
                      "download hangs the job instead of reaching the warn fallback",
     }
     for state, names in unverified.items():
