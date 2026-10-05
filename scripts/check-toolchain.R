@@ -382,8 +382,9 @@ pandoc_assignments <- function(lines) {
     shell <- regmatches(code, gregexpr(pandoc_shell_re, code, perl = TRUE))[[
       1L
     ]]
+    # An alias (`*pv`) names a node elsewhere; it is no version this reads.
     values <- c(
-      if (length(yaml)) {
+      if (length(yaml) && !startsWith(trimws(yaml[[2L]]), "*")) {
         yaml_scalar(sub(yaml_props_re, "", yaml[[2L]], perl = TRUE))
       },
       sub(pandoc_shell_re, "\\1", shell, perl = TRUE)
@@ -448,11 +449,22 @@ expanded_pandoc_lines <- function(lines) {
   expanded_lines(drop_comments(lines))
 }
 
-# The line numbers where `lines`, comments dropped, use `$PANDOC_VERSION` or
-# `${PANDOC_VERSION}`.
+# The line numbers where `lines`, comments dropped, use `$PANDOC_VERSION`,
+# `${PANDOC_VERSION}` or `Sys.getenv("PANDOC_VERSION")`.
 pandoc_use_lines <- function(lines) {
-  grep("\\$[{]?PANDOC_VERSION\\b", drop_comments(lines), perl = TRUE)
+  grep(
+    "\\$[{]?PANDOC_VERSION\\b|Sys\\.getenv\\(\\s*[\"']PANDOC_VERSION[\"']",
+    drop_comments(lines),
+    perl = TRUE
+  )
 }
+
+# The fix both refusals in pinned_pandoc() name.
+pin_fix <- paste0(
+  "Write the pin in .gitlab-ci.yml as a plain scalar, ",
+  "`PANDOC_VERSION: \"<version>\"`, or as a shell assignment, ",
+  "`PANDOC_VERSION=<version>`."
+)
 
 # Every distinct PANDOC_VERSION value .gitlab-ci.yml assigns. Empty when it
 # assigns none; more than one is reported by check_pandoc(). The expanded form
@@ -467,9 +479,8 @@ pinned_pandoc <- function(lines) {
       if (length(expanded) > 1L) "s",
       " ",
       toString(expanded),
-      ", which check-toolchain.R does not read. Write the pin as a plain ",
-      "scalar, `PANDOC_VERSION: \"<version>\"`, or as a shell assignment, ",
-      "`PANDOC_VERSION=<version>`.",
+      ", which check-toolchain.R does not read. ",
+      pin_fix,
       call. = FALSE
     )
   }
@@ -481,11 +492,11 @@ pinned_pandoc <- function(lines) {
       if (length(used) > 1L) "s",
       " ",
       toString(used),
-      ", but check-toolchain.R reads no pin from it: a pin under a merge ",
-      "key, in a flow mapping, behind a quoted key or in an included file is ",
-      "not one it reads. Write the pin in .gitlab-ci.yml as a plain scalar, ",
-      "`PANDOC_VERSION: \"<version>\"`, or as a shell assignment, ",
-      "`PANDOC_VERSION=<version>`.",
+      ", but check-toolchain.R reads no pin from it. It reads only a literal ",
+      "version in .gitlab-ci.yml itself: not one under a merge key or an ",
+      "alias, in a flow mapping, behind a quoted key, in an included file ",
+      "or in the CI/CD settings, nor a computed, defaulted or empty value. ",
+      pin_fix,
       call. = FALSE
     )
   }
@@ -762,7 +773,15 @@ self_test <- function() {
     `merge key` = c("variables:", "  PANDOC_VERSION:", "    <<: *pv", use),
     `flow variables` = c("variables: {PANDOC_VERSION: \"3.10\"}", use),
     `quoted key` = c("variables:", "  \"PANDOC_VERSION\": \"3.10\"", use),
-    `included file` = c("include:", "  - local: ci/pandoc.yml", use)
+    `included file` = c("include:", "  - local: ci/pandoc.yml", use),
+    alias = c("variables:", "  PANDOC_VERSION: *pv", use),
+    computed = c("    - PANDOC_VERSION=$(cat .pandoc-version)", use),
+    empty = c("variables:", "  PANDOC_VERSION: \"\"", use),
+    `Sys.getenv` = c(
+      "include:",
+      "  - local: ci/pandoc.yml",
+      "    - Rscript -e 'Sys.getenv(\"PANDOC_VERSION\")'"
+    )
   )
   for (case in names(unread)) {
     lines <- unread[[case]]
@@ -773,6 +792,10 @@ self_test <- function() {
     expect(tag, grepl("PANDOC_VERSION: \"<version>\"", why, fixed = TRUE))
     expect(tag, !nzchar(refusal(lines[-length(lines)])))
   }
+  expect(
+    "pandoc-expanded-report: alias",
+    !length(pandoc_assignment_report("  PANDOC_VERSION: *pin"))
+  )
   expect(
     "pandoc-unread: bare $PANDOC_VERSION",
     grepl("reads no pin", refusal("    - echo $PANDOC_VERSION"), fixed = TRUE)
@@ -869,7 +892,7 @@ self_test <- function() {
 
   paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 47 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, 52 pandoc cases)\n"
   )
 }
 
