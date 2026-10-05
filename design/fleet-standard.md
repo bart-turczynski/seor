@@ -366,7 +366,7 @@ removes the export on every exit, signals included. robotstxtr's
 pagerankr, seor and ssrfr carry it as `scripts/check-docs-drift.R`. sitemapr's
 `tools/check-docs.R` still regenerates in the working tree (SEOR-zxyztpbr).
 CI runs it too where its image has the pinned roxygen2 (rurl, punycoder,
-raddr, pagerankr; SEOR-fhrisfpt, SEOR-yufxgcre).
+raddr, pagerankr, seor; SEOR-fhrisfpt, SEOR-yufxgcre).
 
 ## Files every package carries
 

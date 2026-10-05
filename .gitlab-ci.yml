@@ -502,6 +502,31 @@ coverage:
         coverage_format: cobertura
         path: cobertura.xml
 
+# Generated-docs drift (SEOR-fhrisfpt): man/, NAMESPACE and DESCRIPTION must
+# match what the roxygen2 pinned in DESCRIPTION's Config/roxygen2/version
+# regenerates from R/. The pre-push `docs-drift` hook runs the same check, but a
+# server-side merge commit, a web-IDE edit or a --no-verify push never passes
+# through it, so without this job a stale .Rd reaches main with every job
+# green. scripts/check-docs-drift.R refuses any other roxygen2, because its
+# output changes between releases, and its header says why the check exists.
+#
+# Its own job, because `gates` gets roxygen2 unpinned through devtools (the
+# current release) and the pin is usually an older one; pak fetches the pinned
+# version from the CRAN archive into this job's own cached library (`.r` keys
+# the cache per job). The hook runs the check on a `git archive` export of the
+# pushed commit because roxygenise() rewrites the tree it is given; here the
+# clone IS the pushed commit and is thrown away, so it runs in place. git, for
+# the diff it prints on drift, and the pinned pandoc both come from `.r`.
+docs-drift:
+  extends:
+    - .r
+    - .on-main
+  stage: check
+  needs: []
+  script:
+    - Rscript -e 'pak::pkg_install(c("deps::.", paste0("roxygen2@", read.dcf("DESCRIPTION", "Config/roxygen2/version")[[1]])))'
+    - Rscript scripts/check-docs-drift.R
+
 # The cross-platform matrix, reduced to what this fleet's runners can run.
 # GitHub ran macOS, Windows and Ubuntu on R devel/release/oldrel-1; CI here
 # runs only on self-hosted Linux Docker runners (ADR 0003; GitLab.com's own
