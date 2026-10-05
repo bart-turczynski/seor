@@ -386,7 +386,8 @@ raddr, pagerankr; SEOR-fhrisfpt, SEOR-yufxgcre).
 - `inst/CITATION`, `CITATION.cff`, `.zenodo.json` and `codemeta.json`.
 - A root `ARCHITECTURE.md`. It may point into `docs/`.
 - `.gitlab/issue_templates/` and `.gitlab/merge_request_templates/`.
-- `NEWS.md`.
+- `NEWS.md`, its bullets per the NEWS rule in seor's `AGENTS_LANG.md`: only
+  changes a package user notices, one terse line each, no housekeeping.
 
 ## `DESCRIPTION`
 
