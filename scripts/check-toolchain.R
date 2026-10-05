@@ -66,7 +66,10 @@
 #    Unlike check 1's field, it is not the only place the version lives: a
 #    bump also moves the two sha256 digests beside it, a re-knit of
 #    README.md, and the fleet's PANDOC_PIN in check-fleet-standard.py. A
-#    repository whose CI records no pin is not checked here.
+#    repository whose CI neither records a pin nor uses `$PANDOC_VERSION` is
+#    not checked here. One that uses it with no pin this reads fails: a pin
+#    under a merge key, in a flow mapping, behind a quoted key or in an
+#    included file would otherwise pass as no pin at all (SEOR-mbiwrxql).
 #
 # WHAT IT DELIBERATELY DOES NOT DO.
 #
@@ -379,8 +382,9 @@ pandoc_assignments <- function(lines) {
     shell <- regmatches(code, gregexpr(pandoc_shell_re, code, perl = TRUE))[[
       1L
     ]]
+    # An alias (`*pv`) names a node elsewhere; it is no version this reads.
     values <- c(
-      if (length(yaml)) {
+      if (length(yaml) && !startsWith(trimws(yaml[[2L]]), "*")) {
         yaml_scalar(sub(yaml_props_re, "", yaml[[2L]], perl = TRUE))
       },
       sub(pandoc_shell_re, "\\1", shell, perl = TRUE)
@@ -445,9 +449,27 @@ expanded_pandoc_lines <- function(lines) {
   expanded_lines(drop_comments(lines))
 }
 
+# The line numbers where `lines`, comments dropped, use `$PANDOC_VERSION`,
+# `${PANDOC_VERSION}` or `Sys.getenv("PANDOC_VERSION")`.
+pandoc_use_lines <- function(lines) {
+  grep(
+    "\\$[{]?PANDOC_VERSION\\b|Sys\\.getenv\\(\\s*[\"']PANDOC_VERSION[\"']",
+    drop_comments(lines),
+    perl = TRUE
+  )
+}
+
+# The fix both refusals in pinned_pandoc() name.
+pin_fix <- paste0(
+  "Write the pin in .gitlab-ci.yml as a plain scalar, ",
+  "`PANDOC_VERSION: \"<version>\"`, or as a shell assignment, ",
+  "`PANDOC_VERSION=<version>`."
+)
+
 # Every distinct PANDOC_VERSION value .gitlab-ci.yml assigns. Empty when it
 # assigns none; more than one is reported by check_pandoc(). The expanded form
-# stops here with the fix: read as a pin, it is none or the wrong one.
+# stops here with the fix: read as a pin, it is none or the wrong one. So does
+# a `$PANDOC_VERSION` with no pin read: CI installs a version this cannot see.
 pinned_pandoc <- function(lines) {
   expanded <- expanded_pandoc_lines(lines)
   if (length(expanded)) {
@@ -457,13 +479,28 @@ pinned_pandoc <- function(lines) {
       if (length(expanded) > 1L) "s",
       " ",
       toString(expanded),
-      ", which check-toolchain.R does not read. Write the pin as a plain ",
-      "scalar, `PANDOC_VERSION: \"<version>\"`, or as a shell assignment, ",
-      "`PANDOC_VERSION=<version>`.",
+      ", which check-toolchain.R does not read. ",
+      pin_fix,
       call. = FALSE
     )
   }
-  unique(pandoc_assignments(lines)$value)
+  pins <- unique(pandoc_assignments(lines)$value)
+  used <- pandoc_use_lines(lines)
+  if (!length(pins) && length(used)) {
+    stop(
+      ".gitlab-ci.yml uses $PANDOC_VERSION on line",
+      if (length(used) > 1L) "s",
+      " ",
+      toString(used),
+      ", but check-toolchain.R reads no pin from it. It reads only a literal ",
+      "version in .gitlab-ci.yml itself: not one under a merge key or an ",
+      "alias, in a flow mapping, behind a quoted key, in an included file ",
+      "or in the CI/CD settings, nor a computed, defaulted or empty value. ",
+      pin_fix,
+      call. = FALSE
+    )
+  }
+  pins
 }
 
 read_pandoc_pin <- function(root) {
@@ -664,7 +701,7 @@ self_test <- function() {
     "    #   - PANDOC_VERSION=9.9 neither"
   )
   expect("pandoc-pin-yaml", identical(pinned_pandoc(ci), "3.10"))
-  expect("pandoc-pin-none", !length(pinned_pandoc(ci[3:5])))
+  expect("pandoc-pin-none", !length(pinned_pandoc(ci[4:5])))
   # The spellings check-fleet-standard.py's self-test passes, one by one.
   spellings <- c(
     "    - PANDOC_VERSION=3.10",
@@ -728,6 +765,41 @@ self_test <- function() {
     expect(tag, grepl("on line 2,", why, fixed = TRUE))
     expect(tag, grepl("PANDOC_VERSION: \"<version>\"", why, fixed = TRUE))
   }
+  # `$PANDOC_VERSION` with no pin read stops, naming the line and the plain
+  # scalar: CI would install a pin this cannot see (SEOR-mbiwrxql).
+  use <- "    - curl \"https://example.org/${PANDOC_VERSION}/pandoc.deb\""
+  unread <- list(
+    `no pin` = c("variables:", use),
+    `merge key` = c("variables:", "  PANDOC_VERSION:", "    <<: *pv", use),
+    `flow variables` = c("variables: {PANDOC_VERSION: \"3.10\"}", use),
+    `quoted key` = c("variables:", "  \"PANDOC_VERSION\": \"3.10\"", use),
+    `included file` = c("include:", "  - local: ci/pandoc.yml", use),
+    alias = c("variables:", "  PANDOC_VERSION: *pv", use),
+    computed = c("    - PANDOC_VERSION=$(cat .pandoc-version)", use),
+    empty = c("variables:", "  PANDOC_VERSION: \"\"", use),
+    `Sys.getenv` = c(
+      "include:",
+      "  - local: ci/pandoc.yml",
+      "    - Rscript -e 'Sys.getenv(\"PANDOC_VERSION\")'"
+    )
+  )
+  for (case in names(unread)) {
+    lines <- unread[[case]]
+    why <- refusal(lines)
+    tag <- paste("pandoc-unread:", case)
+    expect(tag, grepl("reads no pin", why, fixed = TRUE))
+    expect(tag, grepl(sprintf("on line %d,", length(lines)), why, fixed = TRUE))
+    expect(tag, grepl("PANDOC_VERSION: \"<version>\"", why, fixed = TRUE))
+    expect(tag, !nzchar(refusal(lines[-length(lines)])))
+  }
+  expect(
+    "pandoc-expanded-report: alias",
+    !length(pandoc_assignment_report("  PANDOC_VERSION: *pin"))
+  )
+  expect(
+    "pandoc-unread: bare $PANDOC_VERSION",
+    grepl("reads no pin", refusal("    - echo $PANDOC_VERSION"), fixed = TRUE)
+  )
   # A bare key whose next line is no mapping of its own is not the expanded
   # form: a sibling key, even one named `value`, a scalar, or nothing.
   for (lines in list(
@@ -820,7 +892,7 @@ self_test <- function() {
 
   paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 41 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, 52 pandoc cases)\n"
   )
 }
 
