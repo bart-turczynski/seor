@@ -3866,6 +3866,16 @@ def self_test() -> list[str]:
                     ci, "fossa:\n", "fossa:\n  variables:\n    PANDOC_VERSION: {value: \"3.10\"}\n"),
                fixture_state(), then=fossa_named)
 
+    # A job's value set in a spelling check-toolchain.R does not read, beside
+    # a global pin it does read: check-toolchain.R stops on it (SEOR-usrdxvbj),
+    # since the job installs 3.9 while the pin reads as 3.10 (SEOR-mcstkogt).
+    global_pin = edit(no_shell_pin, ci, "variables:\n", "variables:\n  PANDOC_VERSION: \"3.10\"\n")
+    for case, variables in (("a flow mapping", "  variables: {PANDOC_VERSION: \"3.9\"}\n"),
+                            ("a quoted key", "  variables:\n    \"PANDOC_VERSION\": \"3.9\"\n")):
+        expect_clean(f"a job's pin in {case} beside a global pin", "punycoder",
+                     edit(global_pin, ci, "check:\n  extends: [.r, .on-main]\n",
+                          "check:\n  extends: [.r, .on-main]\n" + variables), fixture_state())
+
     # The install reader through its interface: shell items in, state out.
     for name, entries, want in PANDOC_INSTALL_CASES:
         got = pandoc_install_state(entries)
