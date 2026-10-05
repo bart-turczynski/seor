@@ -64,6 +64,7 @@ import sys
 import tempfile
 import uuid
 import zlib
+from functools import lru_cache
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from pathlib import Path
@@ -581,6 +582,80 @@ def finalize(f: Facts, path: Path) -> bytes:
     return render(f, path)
 
 
+# The files this script handles, in the order it finalizes them: logo.svg
+# first, so the renditions can name it.
+LOGO_NAMES = ("logo.svg", "logo.png", "logo-print.svg", "logo-480.png")
+
+
+def finalized(f: Facts, targets: list[Path]):
+    """Each target (in LOGO_NAMES order) with what this script writes for it
+    and whether that differs from the file: the --check verdict."""
+    for t in targets:
+        new = finalize(f, t)
+        yield t, new, new != t.read_bytes()
+
+
+def check_logos(pkg: str, description: bytes | str,
+                logos: dict[str, bytes]) -> tuple[dict[str, bytes | None], dict[str, str]]:
+    """--check on files held in memory (the fleet checker reads them from
+    GitLab or a checkout). First, for each name in `logos` it judges, what
+    this script would write, or None when the file is current; second, for
+    each file it cannot judge, why. The files are written to a temporary
+    man/figures under a DESCRIPTION holding `description` (as read: bytes,
+    so a DESCRIPTION that is not UTF-8 is refused as --check refuses it),
+    and finalized as --check does, so the verdict is its verdict. Exits as
+    --check does on a DESCRIPTION it refuses, naming paths from the
+    repository root. A file it refuses or cannot parse, where --check
+    would stop, goes in the second dict; the others keep their verdicts,
+    except that the renditions are not judged without logo.svg's, since
+    they name it. Results are cached by input."""
+    unknown = sorted(set(logos) - set(LOGO_NAMES))
+    if unknown:
+        raise ValueError(f"not a logo file name: {', '.join(unknown)}")
+    if isinstance(description, str):
+        description = description.encode("utf-8")
+    verdicts, broken = _check_logos(pkg, description, tuple(logos.items()))
+    return dict(verdicts), dict(broken)
+
+
+@lru_cache(maxsize=64)
+def _check_logos(pkg: str, description: bytes, logos: tuple[tuple[str, bytes], ...]):
+    files = dict(logos)
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()  # as default_description() resolves it
+        figures = root / "man" / "figures"
+        figures.mkdir(parents=True)
+        (root / "DESCRIPTION").write_bytes(description)
+        targets = []
+        for name in LOGO_NAMES:
+            if name in files:
+                (figures / name).write_bytes(files[name])
+                targets.append(figures / name)
+        try:
+            f = Facts(pkg, default_description(figures))
+        except SystemExit as refusal:
+            raise SystemExit(str(refusal.code).replace(f"{root}/", "")) from None
+        verdicts: dict[str, bytes | None] = {}
+        broken: dict[str, str] = {}
+        for t in targets:
+            if MASTER in broken:
+                broken[t.name] = f"not judged without {MASTER}'s verdict"
+                continue
+            try:
+                new = finalize(f, t)
+            except SystemExit as refusal:
+                broken[t.name] = str(refusal.code).replace(f"{root}/", "")
+                continue
+            # A truncated PNG or a non-UTF-8 SVG, named by type and reason:
+            # a UnicodeDecodeError's repr would carry the whole file.
+            except (ValueError, LookupError, StopIteration, struct.error) as error:
+                broken[t.name] = (f"logo-metadata: man/figures/{t.name} cannot be parsed "
+                                  f"({type(error).__name__}: {str(error)[:200]})")
+                continue
+            verdicts[t.name] = None if new == t.read_bytes() else new
+        return tuple(verdicts.items()), tuple(broken.items())
+
+
 # --- self-test ---------------------------------------------------------------
 
 def read_svg_subjects(svg: str) -> list[list[str]]:
@@ -714,15 +789,13 @@ def main() -> int:
         return self_test()
     if args.pkg is None or args.figures is None:
         ap.error("pkg and figures are required")
-    names = ["logo.svg", "logo.png", "logo-print.svg", "logo-480.png"]
-    targets = [args.figures / n for n in names if (args.figures / n).exists()]
+    targets = [args.figures / n for n in LOGO_NAMES if (args.figures / n).exists()]
     if not any(t.name in ("logo.svg", "logo.png") for t in targets):
         sys.exit(f"logo-metadata: no logo.svg or logo.png in {args.figures}")
     f = Facts(args.pkg, args.description or default_description(args.figures))
     drift = 0
-    for t in targets:
-        new = finalize(f, t)  # logo.svg comes first, so the renditions can name it
-        if new == t.read_bytes():
+    for t, new, drifted in finalized(f, targets):
+        if not drifted:
             print(f"current  {t}")
             continue
         drift += 1
