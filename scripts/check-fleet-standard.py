@@ -56,10 +56,13 @@ WHAT IT CHECKS, by section of the standard.
   `src` is `man/figures/logo.png` and whose `alt` is "hex logo, white on black"
   (LOGO_ALT), without the package name the heading already says, and no
   aria-label, aria-labelledby, aria-hidden or role replaces or hides it. The
-  link-wrapped form usethis::use_logo() writes is accepted. Each dc:subject
-  bag in logo.svg holds exactly the keywords scripts/logo-metadata.py writes
-  from DESCRIPTION's X-schema.org-keywords, in its order. The artwork itself
-  is not judged.
+  link-wrapped form usethis::use_logo() writes is accepted. logo.svg and
+  logo.png pass scripts/logo-metadata.py's own `--check`: each is byte for
+  byte what it writes from DESCRIPTION's X-schema.org-keywords and its table
+  (check_logos(), on the files read as exact bytes), so a logo.png left
+  behind, or a field edited by hand, is a gap; when the keywords are what
+  differs (the dc:subject bags, PNG Keywords or EXIF XPKeywords), the gap
+  names the tags. The artwork itself is not judged.
 * Files. The list in "Files every package carries", plus: LICENSE names Bart
   Turczynski as holder, LICENSE.md is the full MIT text, SECURITY.md and
   CODE_OF_CONDUCT.md name the public contact, and SECURITY.md is more than a
@@ -2337,7 +2340,8 @@ def tag_attrs(tag: str) -> dict[str, str | None]:
 @cache
 def logo_metadata():
     """scripts/logo-metadata.py as a module (its name has a hyphen), loaded
-    once: its keyword rule and its dc:subject reader are the only copies."""
+    once: its --check (check_logos), its keyword rule and its keyword readers
+    are the only copies."""
     import importlib.util
 
     spec = importlib.util.spec_from_file_location("logo_metadata", Path(__file__).with_name("logo-metadata.py"))
@@ -2351,19 +2355,62 @@ def logo_metadata():
 LOGO_SUBJECT_BAGS = 2
 
 
-def check_logo_keywords(pkg: str, source, report: Report) -> None:
-    """logo.svg's dc:subject bags hold exactly the keywords logo-metadata.py
-    would write from DESCRIPTION's X-schema.org-keywords (SEOR-uwpnkqnb). A
-    missing logo.svg or DESCRIPTION, or a DESCRIPTION with no keywords, is
-    reported elsewhere."""
-    svg_path = LOGO_FILES[0]
+def keyword_drift(want: list[str], found_lists: list[list[str]]) -> list[str]:
+    """How each list of tags read back from a logo differs from `want`, once per
+    distinct difference: missing and extra tags, or the order."""
+    drift: list[str] = []
+    for found in found_lists:
+        if found == want:
+            continue
+        missing = [k for k in want if k not in found]
+        extra = [k for k in found if k not in want]
+        parts = ([f"missing {', '.join(missing)}"] if missing else []) + ([f"extra {', '.join(extra)}"] if extra else [])
+        text = "; ".join(parts) or "the same tags in another order or repeated"
+        if text not in drift:
+            drift.append(text)
+    return drift
+
+
+def logo_keyword_gap(path: str, raw: bytes, want: list[str]) -> str | None:
+    """The part of a drifted logo file's gap that names its keywords: None
+    when they are what logo-metadata.py writes, so something else drifted."""
+    lm = logo_metadata()
+    if path.endswith(".svg"):
+        bags = lm.read_svg_subjects(raw.decode("utf-8", errors="replace"))
+        if not bags:
+            return f"{path} has no keywords (no dc:subject bag as logo-metadata.py writes it)"
+        drift = keyword_drift(want, bags)
+        if len(bags) != LOGO_SUBJECT_BAGS:
+            drift.insert(0, f"{len(bags)} dc:subject bag(s) as logo-metadata.py writes them, not {LOGO_SUBJECT_BAGS}")
+    else:
+        try:
+            text, xp = lm.read_png_keywords(raw)
+        except (SystemExit, ValueError, LookupError, StopIteration, OverflowError, lm.struct.error):
+            return f"{path} has no keywords (no tEXt Keywords and EXIF XPKeywords as logo-metadata.py writes them)"
+        drift = keyword_drift(want, [text.split(", "), xp.split("; ")])
+    if not drift:
+        return None
+    return f"{path} keywords differ from DESCRIPTION's X-schema.org-keywords ({' | '.join(drift)})"
+
+
+def check_logo_metadata(pkg: str, source, report: Report) -> None:
+    """logo.svg and logo.png are byte for byte what logo-metadata.py writes
+    from DESCRIPTION: its own --check (check_logos(): finalize, then compare),
+    so a logo.png left behind or a field edited by hand is a gap
+    (SEOR-seobtecv). A drifted file's gap names its keywords when they differ
+    from DESCRIPTION's X-schema.org-keywords (SEOR-uwpnkqnb). A missing
+    logo.svg or DESCRIPTION, or a DESCRIPTION with no keywords, is reported
+    elsewhere; a missing logo.png leaves logo.svg judged alone, as --check
+    does."""
     try:
-        svg, description = source.read(svg_path), source.read("DESCRIPTION")
+        description = source.read("DESCRIPTION")
+        logos = {path: source.read_bytes(path) for path in LOGO_FILES}
     except ProbeError as error:
-        report.skip("logo", f"could not read {svg_path} or DESCRIPTION ({error}), so the logo keywords are not judged",
-                    incomplete=True)
+        report.skip("logo", f"could not read {' or '.join(LOGO_FILES)} or DESCRIPTION ({error}), "
+                            "so the logo metadata is not judged", incomplete=True)
         return
-    if svg is None or description is None:
+    logos = {path: raw for path, raw in logos.items() if raw is not None}
+    if LOGO_FILES[0] not in logos or description is None:
         return
     # logo-metadata.py reads DESCRIPTION as utf-8-sig.
     description = description.removeprefix("\ufeff")
@@ -2375,28 +2422,19 @@ def check_logo_keywords(pkg: str, source, report: Report) -> None:
     try:
         want = lm.logo_keywords(pkg, description, "DESCRIPTION")
     except SystemExit as refusal:  # logo-metadata.py refuses this DESCRIPTION
-        report.gap("logo", f"{svg_path}: keywords cannot be built from DESCRIPTION ({refusal.code})")
+        report.gap("logo", f"{LOGO_FILES[0]}: keywords cannot be built from DESCRIPTION ({refusal.code})")
         return
-    bags = lm.read_svg_subjects(svg)
-    if not bags:
-        report.gap("logo", f"{svg_path} has no keywords (no dc:subject bag as logo-metadata.py writes it); "
-                           + regenerate)
+    try:
+        verdicts = lm.check_logos(pkg, description, {Path(path).name: raw for path, raw in logos.items()})
+    except SystemExit as refusal:  # a file it cannot rewrite, such as a logo.png that is no PNG
+        report.gap("logo", f"logo-metadata.py --check cannot judge the logo files ({refusal.code})")
         return
-    drift = []
-    if len(bags) != LOGO_SUBJECT_BAGS:
-        drift.append(f"{len(bags)} dc:subject bag(s) as logo-metadata.py writes them, not {LOGO_SUBJECT_BAGS}")
-    for found in bags:
-        if found == want:
+    for path, raw in logos.items():
+        if verdicts[Path(path).name] is None:
             continue
-        missing = [k for k in want if k not in found]
-        extra = [k for k in found if k not in want]
-        parts = ([f"missing {', '.join(missing)}"] if missing else []) + ([f"extra {', '.join(extra)}"] if extra else [])
-        text = "; ".join(parts) or "the same tags in another order or repeated"
-        if text not in drift:
-            drift.append(text)
-    if drift:
-        report.gap("logo", f"{svg_path} keywords differ from DESCRIPTION's X-schema.org-keywords "
-                           f"({' | '.join(drift)}); {regenerate}")
+        keywords = logo_keyword_gap(path, raw, want)
+        what = keywords or f"{path} differs from what logo-metadata.py writes (its --check reports drift)"
+        report.gap("logo", f"{what}; {regenerate}")
 
 
 def check_logo(pkg: str, source, report: Report) -> None:
@@ -2404,7 +2442,7 @@ def check_logo(pkg: str, source, report: Report) -> None:
     for path in LOGO_FILES:
         if path not in tree:
             report.gap("logo", f"missing {path}")
-    check_logo_keywords(pkg, source, report)
+    check_logo_metadata(pkg, source, report)
     text = source.read("README.Rmd")
     if text is None:
         return
@@ -3266,19 +3304,41 @@ def self_test() -> list[str]:
     drifted_description = edit(cran, "DESCRIPTION", "domain-names\n", "domains\n")["DESCRIPTION"]
     old_svg, old_png = fixture_logos("punycoder", drifted_description)
     expect_clean("logo.svg and logo.png as logo-metadata.py writes them", "punycoder", cran, fixture_state())
-    # TODAY (pinned before SEOR-seobtecv): logo.png is not read, so this passes.
-    expect_clean("a logo.png whose Keywords drifted from DESCRIPTION", "punycoder",
-                 dict(cran, **{png: old_png}), fixture_state())
+    # The fixtures above come from check_logos() itself, so they cannot catch
+    # a fault in it; seor's own committed logos, which logo-metadata.py
+    # --check passes, are the independent anchor.
+    seor_root = Path(__file__).resolve().parent.parent
+    own = Report("seor")
+    check_logo_metadata("seor", LocalSource(seor_root), own)
+    if own.gaps or own.unjudged:
+        failures.append(f"seor's own man/figures logos: expected no logo verdict, got {own.gaps} / {own.unjudged} "
+                        "(does `python3 scripts/logo-metadata.py --check seor man/figures` pass?)")
+
+    def only_logo_gap(path: str) -> Judge:
+        def judge(report: Report) -> None:
+            logo = [t for area, t in report.gaps if area == "logo"]
+            if len(logo) != 1 or not logo[0].startswith(path):
+                failures.append(f"expected one logo gap, on {path}, got {logo}")
+        return judge
+
+    expect_gap("a logo.png whose Keywords drifted from DESCRIPTION",
+               "logo.png keywords differ from DESCRIPTION's X-schema.org-keywords (missing domain-names; extra domains)",
+               "punycoder", dict(cran, **{png: old_png}), fixture_state(), then=only_logo_gap(png))
     expect_gap("a logo.png that matches, beside a logo.svg whose keywords drifted",
                "logo.svg keywords differ from DESCRIPTION's X-schema.org-keywords (missing domain-names; extra domains)",
-               "punycoder", dict(cran, **{"man/figures/logo.svg": old_svg}), fixture_state())
-    # TODAY (pinned before SEOR-seobtecv): only the keywords are read, so these pass.
-    expect_clean("a logo.svg whose dc:title drifted", "punycoder",
-                 edit(cran, "man/figures/logo.svg", "<dc:title>punycoder</dc:title>", "<dc:title>punycode</dc:title>"),
-                 fixture_state())
-    expect_clean("a logo.png whose tEXt Author was edited", "punycoder",
-                 edit(cran, png, b"Author\0Bart Turczynski", b"Author\0B. Turczynski"), fixture_state())
-    expect_clean("a logo.png that is not a PNG", "punycoder", dict(cran, **{png: "x\n"}), fixture_state())
+               "punycoder", dict(cran, **{"man/figures/logo.svg": old_svg}), fixture_state(),
+               then=only_logo_gap("man/figures/logo.svg"))
+    # Metadata besides the keywords.
+    expect_gap("a logo.svg whose dc:title drifted", "logo.svg differs from what logo-metadata.py writes", "punycoder",
+               edit(cran, "man/figures/logo.svg", "<dc:title>punycoder</dc:title>", "<dc:title>punycode</dc:title>"),
+               fixture_state(), then=only_logo_gap("man/figures/logo.svg"))
+    expect_gap("a logo.png whose tEXt Author was edited", "logo.png differs from what logo-metadata.py writes",
+               "punycoder", edit(cran, png, b"Author\0Bart Turczynski", b"Author\0Bart Turczynsky"), fixture_state(),
+               then=only_logo_gap(png))
+    expect_gap("a logo.png that is not a PNG", "cannot judge the logo files (logo-metadata: man/figures/logo.png is "
+               "not a PNG)", "punycoder", dict(cran, **{png: "x\n"}), fixture_state())
+    expect_gap("a truncated logo.png", "man/figures/logo.png cannot be parsed", "punycoder",
+               dict(cran, **{png: cran[png][:10]}), fixture_state())
 
     class UnreadablePng(DictSource):
         def read_bytes(self, path: str) -> bytes | None:
@@ -3286,12 +3346,13 @@ def self_test() -> list[str]:
                 raise ProbeError(f"reading {png}: 503")
             return super().read_bytes(path)
 
-    def png_today(report: Report) -> None:
-        # TODAY (pinned before SEOR-seobtecv): logo.png is never read.
-        if report.gaps or any(area == "logo" for area, _ in report.unjudged):
-            failures.append(f"an unreadable logo.png: expected no logo verdict today, got {report.gaps} / {report.unjudged}")
+    def png_unjudged(report: Report) -> None:
+        if (report.gaps or exit_status([report]) != 2
+                or not any(area == "logo" and "not judged" in t for area, t in report.unjudged)):
+            failures.append(f"an unreadable logo.png: expected the logo metadata not judged and exit 2, got "
+                            f"{report.gaps} / {report.unjudged}")
 
-    run("punycoder", UnreadablePng(cran), fixture_state(), judge=png_today)
+    run("punycoder", UnreadablePng(cran), fixture_state(), judge=png_unjudged)
     expect_clean("a case-only duplicate tag in DESCRIPTION is not drift", "punycoder",
                  edit(cran, "DESCRIPTION", "domain-names\n", "domain-names, IDNA\n"), fixture_state())
     svg = "man/figures/logo.svg"

@@ -447,7 +447,8 @@ under the owner `gitlab-bart-turczynski`. Researched 2026-10-04
   the <pkg> library for R, white text on a black background", and the
   Dublin Core, XMP, IPTC, PLUS and EXIF fields) is written by seor's
   `scripts/logo-metadata.py` from one table, never by hand; `--check`
-  reports drift (SEOR-eyfiidrv).
+  reports drift (SEOR-eyfiidrv), and the fleet checker runs that same check
+  on each package's `logo.svg` and `logo.png` (SEOR-seobtecv).
   The keywords (XMP and RDF `dc:subject`, PNG Keywords, EXIF XPKeywords)
   come from the package's `DESCRIPTION`, not from that table: the
   `X-schema.org-keywords` tags r-universe indexes, written verbatim after
@@ -539,10 +540,12 @@ What it checks, section by section:
   `src` is `man/figures/logo.png` (bare, or inside a link as
   `usethis::use_logo()` writes it) and whose `alt` is `hex logo, white on
   black`, with no `aria-label`, `aria-labelledby`, `aria-hidden` or `role`
-  that replaces or hides it. Each `dc:subject` bag in `logo.svg` holds
-  exactly the keywords `scripts/logo-metadata.py` writes from
-  `X-schema.org-keywords`, in its order (SEOR-uwpnkqnb). The artwork is not
-  judged.
+  that replaces or hides it. `logo.svg` and `logo.png` pass
+  `scripts/logo-metadata.py --check`, run on the files as read: each is
+  byte for byte what the script writes, so a `logo.png` left behind when
+  `logo.svg` was regenerated, or any field edited by hand, is a gap
+  (SEOR-seobtecv). When the keywords are what differs, the gap names the
+  missing and extra tags (SEOR-uwpnkqnb). The artwork is not judged.
 - **Files.** The list above. `LICENSE` names Bart Turczynski, `LICENSE.md` is
   the MIT text, `SECURITY.md` and `CODE_OF_CONDUCT.md` name the public email,
   and a `SECURITY.md` under ten non-blank lines counts as a stub.

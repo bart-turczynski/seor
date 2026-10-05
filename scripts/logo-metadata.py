@@ -600,12 +600,14 @@ def check_logos(pkg: str, description: str, logos: dict[str, bytes]) -> dict[str
     write, or None when the file is current. They are written to a temporary
     man/figures under a DESCRIPTION holding `description`, and judged by the
     same loop as --check, so the verdict is its verdict. Exits as --check
-    does on a DESCRIPTION or a file it refuses."""
+    does on a DESCRIPTION or a file it refuses, naming paths from the
+    repository root, and also on a file too broken to parse, where --check
+    would stop with a traceback."""
     unknown = sorted(set(logos) - set(LOGO_NAMES))
     if unknown:
         raise ValueError(f"not a logo file name: {', '.join(unknown)}")
     with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
+        root = Path(tmp).resolve()  # as default_description() resolves it
         figures = root / "man" / "figures"
         figures.mkdir(parents=True)
         (root / "DESCRIPTION").write_bytes(description.encode("utf-8"))
@@ -614,8 +616,19 @@ def check_logos(pkg: str, description: str, logos: dict[str, bytes]) -> dict[str
             if name in logos:
                 (figures / name).write_bytes(logos[name])
                 targets.append(figures / name)
-        f = Facts(pkg, default_description(figures))
-        return {t.name: new if drift else None for t, new, drift in finalized(f, targets)}
+        verdicts: dict[str, bytes | None] = {}
+        try:
+            f = Facts(pkg, default_description(figures))
+            for t, new, drift in finalized(f, targets):
+                verdicts[t.name] = new if drift else None
+        except SystemExit as refusal:
+            raise SystemExit(str(refusal.code).replace(f"{root}/", "")) from None
+        # A truncated PNG or a non-UTF-8 SVG; a StopIteration inside
+        # finalized() arrives as a RuntimeError (PEP 479).
+        except (ValueError, LookupError, RuntimeError, struct.error) as error:
+            name = targets[len(verdicts)].name
+            raise SystemExit(f"logo-metadata: man/figures/{name} cannot be parsed ({error!r})") from None
+        return verdicts
 
 
 # --- self-test ---------------------------------------------------------------
