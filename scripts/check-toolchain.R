@@ -305,13 +305,16 @@ run_stale_check <- function(root) {
 # GitLab's expanded form is not a pin this reads: the key with a mapping, flow,
 # `PANDOC_VERSION: {value: "3.10"}`, or block, `PANDOC_VERSION:` with
 # `value:` (and `description:`, `expand:` or `options:`, in any order)
-# indented below it. pinned_pandoc() stops on it and names the fix, a plain
-# scalar (SEOR-zvnrwaku); --pandoc-assignments prints no pin for it.
-pandoc_yaml_re <- "^\\s*(?:-\\s+)?PANDOC_VERSION:\\s*([^\\s{].*)$"
+# indented below it, either one after an anchor or a tag (`&pv`, `!!map`).
+# pinned_pandoc() stops on it and names the fix, a plain scalar
+# (SEOR-zvnrwaku); --pandoc-assignments prints no pin for it.
+pandoc_yaml_re <- "^\\s*(?:-\\s+)?PANDOC_VERSION:\\s*(\\S.*)$"
 pandoc_key_re <- "^(\\s*(?:-\\s+)?)PANDOC_VERSION:\\s*(.*)$"
 expanded_key_re <- paste0(
   "^(\\s*)[\"']?(?:value|description|expand|options)[\"']?:(?:\\s|$)"
 )
+# YAML node properties before a value: anchors (`&pv`) and tags (`!!str`).
+yaml_props_re <- "^(?:[&!]\\S*\\s*)*"
 pandoc_shell_re <- paste0(
   "(?:^\\s*(?:-\\s+)?|[;&|({\\[,]\\s*|\\b(?:then|do|else|export)\\s+)",
   "(?:\\w+=\\S*\\s+)*[\"']?PANDOC_VERSION=[\"']?([\\w.-]+)"
@@ -364,14 +367,22 @@ drop_comments <- function(lines) {
 # frame of the line number and the value, in file order.
 pandoc_assignments <- function(lines) {
   lines <- drop_comments(lines)
-  per_line <- lapply(lines, function(line) {
-    yaml <- regmatches(line, regexec(pandoc_yaml_re, line, perl = TRUE))[[1L]]
+  expanded <- expanded_lines(lines)
+  per_line <- lapply(seq_along(lines), function(i) {
+    line <- lines[[i]]
+    yaml <- if (i %in% expanded) {
+      character()
+    } else {
+      regmatches(line, regexec(pandoc_yaml_re, line, perl = TRUE))[[1L]]
+    }
     code <- mask_quoted_args(line)
     shell <- regmatches(code, gregexpr(pandoc_shell_re, code, perl = TRUE))[[
       1L
     ]]
     values <- c(
-      if (length(yaml)) yaml_scalar(yaml[[2L]]),
+      if (length(yaml)) {
+        yaml_scalar(sub(yaml_props_re, "", yaml[[2L]], perl = TRUE))
+      },
       sub(pandoc_shell_re, "\\1", shell, perl = TRUE)
     )
     values[nzchar(values)]
@@ -396,14 +407,15 @@ pandoc_assignment_report <- function(lines) {
   }))
 }
 
-# The line numbers where `lines` write PANDOC_VERSION in GitLab's expanded
-# form. Flow: a mapping in braces after the key. Block: the key alone, and the
-# first line below it with text is a `value:`, `description:`, `expand:` or
-# `options:` key indented deeper than it. A key at the same indent or less,
-# as in a following variable, is not the mapping's.
-expanded_pandoc_lines <- function(lines) {
-  lines <- drop_comments(lines)
+# The line numbers where `lines`, comments dropped, write PANDOC_VERSION in
+# GitLab's expanded form. Flow: a mapping in braces after the key. Block: the
+# key alone, and the first line below it with text is a `value:`,
+# `description:`, `expand:` or `options:` key indented deeper than it. A key
+# at the same indent or less, as in a following variable, is not the
+# mapping's. An anchor or a tag after the key changes neither.
+expanded_lines <- function(lines) {
   keys <- grep(pandoc_key_re, lines, perl = TRUE)
+  filled <- which(nzchar(trimws(lines)))
   keys[vapply(
     keys,
     function(i) {
@@ -411,23 +423,26 @@ expanded_pandoc_lines <- function(lines) {
         lines[[i]],
         regexec(pandoc_key_re, lines[[i]], perl = TRUE)
       )[[1L]]
-      rest <- trimws(key[[3L]])
+      rest <- sub(yaml_props_re, "", trimws(key[[3L]]), perl = TRUE)
       if (nzchar(rest)) {
         return(startsWith(rest, "{"))
       }
-      below <- lines[-seq_len(i)]
-      below <- below[nzchar(trimws(below))]
-      if (!length(below)) {
+      below <- filled[filled > i][1L]
+      if (is.na(below)) {
         return(FALSE)
       }
       child <- regmatches(
-        below[[1L]],
-        regexec(expanded_key_re, below[[1L]], perl = TRUE)
+        lines[[below]],
+        regexec(expanded_key_re, lines[[below]], perl = TRUE)
       )[[1L]]
       length(child) > 0L && nchar(child[[2L]]) > nchar(key[[2L]])
     },
     logical(1)
   )]
+}
+
+expanded_pandoc_lines <- function(lines) {
+  expanded_lines(drop_comments(lines))
 }
 
 # Every distinct PANDOC_VERSION value .gitlab-ci.yml assigns. Empty when it
@@ -698,6 +713,12 @@ self_test <- function() {
     `flow, description first` = c(
       "variables:",
       "  PANDOC_VERSION: {description: pin, value: \"3.10\"}"
+    ),
+    `flow, anchored` = c("variables:", "  PANDOC_VERSION: &pv {value: 3.10}"),
+    `block, anchored and tagged` = c(
+      "variables:",
+      "  PANDOC_VERSION: &pv !!map",
+      "    value: \"3.10\""
     )
   )
   for (case in names(expanded)) {
@@ -728,6 +749,15 @@ self_test <- function() {
       pandoc_assignment_report(c(block, "\f", flow, "  - PANDOC_VERSION=3.9")),
       "2\t2\t3.9"
     )
+  )
+  expect(
+    "pandoc-expanded-report: anchored",
+    !length(pandoc_assignment_report("  PANDOC_VERSION: &pv {value: 3.10}"))
+  )
+  # An anchored or tagged plain scalar is a pin: the property is not its text.
+  expect(
+    "pandoc-pin: anchored",
+    identical(pinned_pandoc("  PANDOC_VERSION: &pv !!str \"3.10\""), "3.10")
   )
   expect("pandoc-match", !length(check_pandoc("3.10", "3.10")))
   expect("pandoc-unpinned", !length(check_pandoc(character(), "3.11")))
@@ -790,7 +820,7 @@ self_test <- function() {
 
   paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 37 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, 41 pandoc cases)\n"
   )
 }
 
