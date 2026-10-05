@@ -95,8 +95,7 @@ PACKAGES = {
                  ["R", "rstats", "R package", "SEO", "XML sitemap", "sitemaps", "crawling"],
                  None),
     "ssrfr": ("SSRF protection library for R",
-              ["R", "rstats", "R package", "SEO", "SSRF", "server-side request forgery",
-               "security"],
+              ["R", "rstats", "R package", "SSRF", "server-side request forgery", "security"],
               None),
 }
 HUB = "seor"
@@ -104,6 +103,10 @@ REPO_FILES = ("logo.svg", "logo.png")
 # seor's members: DESCRIPTION Imports plus robotstxtr in Suggests (ARCHITECTURE.md).
 # ssrfr is a fleet package but not a seor member.
 MEMBERS = ("rurl", "punycoder", "pslr", "raddr", "pagerankr", "sitemapr", "robotstxtr")
+# "SEO" marks seor and its members only (owner, 2026-10-05: ssrfr is not an SEO tool).
+for _pkg, (_what, _keywords, _doi) in PACKAGES.items():
+    if ("SEO" in _keywords) != (_pkg == HUB or _pkg in MEMBERS):
+        sys.exit(f"logo-metadata: 'SEO' belongs in the keywords of seor and its members only ({_pkg})")
 
 
 class Facts:
