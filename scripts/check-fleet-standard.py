@@ -120,7 +120,9 @@ WHAT IT CHECKS, by section of the standard.
   script runs `git archive`, the export it regenerates into, since a stale
   `.Rd` is still valid `.Rd` and nothing else in the gate sees it
   (SEOR-nwfmerhu). That the two belong together, and that it diffs, is a
-  review item.
+  review item. scripts/check-docs-drift.R is there and matches seor's copy,
+  line endings aside: one canonical copy, vendored byte for byte
+  (check_docs_drift_copy(), SEOR-lyciowif).
 * Schedules. A `deep-check` and a `dependency-audit` schedule, each active,
   on `main`, with `SCHEDULE_KIND` set on the schedule itself; no schedule
   without a `SCHEDULE_KIND` or off `main`.
@@ -2687,6 +2689,44 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report, 
         report.gap("ci", "no fossa analyze job")
 
 
+@cache
+def seor_docs_drift() -> str:
+    """seor's scripts/check-docs-drift.R, the copy beside this script, read once."""
+    return Path(__file__).resolve().with_name("check-docs-drift.R").read_text(encoding="utf-8", errors="replace")
+
+
+def check_docs_drift_copy(source, report: Report) -> None:
+    """A package's scripts/check-docs-drift.R is seor's: one canonical copy,
+    vendored byte for byte (SEOR-lyciowif). It takes the package directory
+    as its one argument and nothing repository-specific. A missing copy is a
+    gap of its own, whatever else in the local gate runs roxygen2 on an
+    export."""
+    check_vendored_copy(source, report, "scripts/check-docs-drift.R", seor_docs_drift, "the canonical copy")
+
+
+def check_vendored_copy(source, report: Report, path: str, seor_copy: Callable[[], str], role: str) -> None:
+    """A package's `path` is seor's copy of it (`seor_copy()`), vendored byte
+    for byte; `role` says what seor's copy is, in the gap. Compared as text
+    with line endings made LF, so a local and a GitLab read agree. A missing
+    copy is a gap of its own."""
+    try:
+        member = source.read(path)
+    except ProbeError as error:
+        report.skip("local gate", f"could not read {path} ({error})", incomplete=True)
+        return
+    if member is None:
+        report.gap("local gate", f"no {path}; copy seor's, which every package vendors byte for byte")
+        return
+    try:
+        seor = seor_copy()
+    except OSError as error:
+        report.skip("local gate", f"{path} not compared with seor's copy ({error})", incomplete=True)
+        return
+    if member.replace("\r\n", "\n") != seor.replace("\r\n", "\n"):
+        report.gap("local gate", f"{path} differs from seor's, {role} (it is vendored byte for byte); "
+                                 f"copy seor's {path} over it")
+
+
 def check_local_gate(source, report: Report) -> None:
     text = source.read(".pre-commit-config.yaml")
     if text is None:
@@ -2734,25 +2774,9 @@ def check_toolchain_copy(source, report: Report) -> None:
     """A package's scripts/check-toolchain.R is seor's, the copy beside this
     script (TOOLCHAIN_R): it is vendored byte for byte, and this script runs
     seor's copy to read the pin the package's own copy reads before a push.
-    Compared as text with line endings made LF, so a local and a GitLab read
-    agree. A missing copy is a gap of its own: the file is vendored, whatever
-    else in the local gate compares pandoc with the CI pin."""
-    try:
-        member = source.read("scripts/check-toolchain.R")
-    except ProbeError as error:
-        report.skip("local gate", f"could not read scripts/check-toolchain.R ({error})", incomplete=True)
-        return
-    if member is None:
-        report.gap("local gate", "no scripts/check-toolchain.R; copy seor's, which every package vendors byte for byte")
-        return
-    try:
-        seor = seor_toolchain()
-    except OSError as error:
-        report.skip("local gate", f"scripts/check-toolchain.R not compared with seor's copy ({error})", incomplete=True)
-        return
-    if member.replace("\r\n", "\n") != seor.replace("\r\n", "\n"):
-        report.gap("local gate", "scripts/check-toolchain.R differs from seor's, the copy this checker runs (it is "
-                                 "vendored byte for byte); copy seor's scripts/check-toolchain.R over it")
+    A missing copy is a gap of its own: the file is vendored, whatever else
+    in the local gate compares pandoc with the CI pin."""
+    check_vendored_copy(source, report, "scripts/check-toolchain.R", seor_toolchain, "the copy this checker runs")
 
 
 def check_schedules(state: State, report: Report) -> None:
@@ -2796,6 +2820,7 @@ def check_repo(pkg: str, source, state: State,
     floor = check_description(pkg, source, state, report)
     check_ci(pkg, source, state, floor, report, pins)
     check_local_gate(source, report)
+    check_docs_drift_copy(source, report)
     check_toolchain_copy(source, report)
     check_schedules(state, report)
     return report
@@ -3005,6 +3030,8 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
         "scripts/check-citation.py": "print('ok')\n",
         ".gitlab/issue_templates/Bug.md": "x\n",
         ".gitlab/merge_request_templates/Default.md": "x\n",
+        # The docs-drift check every member vendors: seor's, byte for byte.
+        "scripts/check-docs-drift.R": seor_docs_drift(),
     })
     # logo.svg and logo.png as logo-metadata.py writes them from the
     # DESCRIPTION above. A package it does not know gets placeholders.
@@ -4093,15 +4120,40 @@ def self_test() -> list[str]:
                edit(cran, "tools/verify.R", "system2(\"git\", c(\"archive\", \"-o\", tarball, ref))\n", ""),
                fixture_state())
     # The shape the members use: a hook runs a shell wrapper that exports the
-    # commit and runs the R check on it.
+    # commit and runs the R check, the vendored copy, on it.
     expect_clean("docs-drift check through a shell wrapper", "punycoder",
                  dict(edit(edit(cran, "tools/verify.R", "roxygen2::roxygenise(export)\n", ""),
                            "tools/verify.R", "system2(\"git\", c(\"archive\", \"-o\", tarball, ref))\n", ""),
                       **{".pre-commit-config.yaml": cran[".pre-commit-config.yaml"]
                          + "      - id: docs-drift\n        entry: sh scripts/docs-drift.sh\n        language: system\n",
-                         "scripts/docs-drift.sh": "git archive -o \"$d/e.tar\" \"$ref\"\nRscript scripts/check-docs-drift.R \"$d\"\n",
-                         "scripts/check-docs-drift.R": "roxygen2::roxygenize(pkg)\n"}),
+                         "scripts/docs-drift.sh": "git archive -o \"$d/e.tar\" \"$ref\"\nRscript scripts/check-docs-drift.R \"$d\"\n"}),
                  fixture_state())
+    expect_clean("docs-drift check spelled roxygenize", "punycoder",
+                 edit(cran, "tools/verify.R", "roxygen2::roxygenise(export)\n", "roxygen2::roxygenize(export)\n"),
+                 fixture_state())
+    # check-docs-drift.R is vendored (SEOR-lyciowif): every member carries
+    # seor's copy, byte for byte. The fixture carries it.
+    docs_drift = "scripts/check-docs-drift.R"
+    expect_clean("a member's check-docs-drift.R identical to seor's", "punycoder", cran, fixture_state())
+    docs_drift_drifted = "scripts/check-docs-drift.R differs from seor's, the canonical copy"
+    docs_drift_missing = "no scripts/check-docs-drift.R; copy seor's, which every package vendors byte for byte"
+
+    def one_gap(needle: str) -> Judge:
+        def judge(report: Report) -> None:
+            if len(report.gaps) != 1:
+                failures.append(f"{needle}: expected its one gap, got {report.gaps}")
+        return judge
+
+    expect_gap("a member's check-docs-drift.R drifted from seor's", docs_drift_drifted, "punycoder",
+               dict(cran, **{docs_drift: cran[docs_drift] + "# a local edit\n"}), fixture_state(),
+               then=one_gap(docs_drift_drifted))
+    expect_clean("a member's check-docs-drift.R identical to seor's but for CRLF line endings", "punycoder",
+                 dict(cran, **{docs_drift: cran[docs_drift].replace("\n", "\r\n")}), fixture_state())
+    # Missing: the other docs-drift rule still passes (tools/verify.R runs
+    # roxygen2 on an export), so the missing copy is the one gap.
+    expect_gap("no scripts/check-docs-drift.R", docs_drift_missing, "punycoder",
+               {k: v for k, v in cran.items() if k != docs_drift}, fixture_state(),
+               then=one_gap(docs_drift_missing))
     no_local_pandoc = "no check that compares the local rmarkdown::pandoc_version() with the CI pin (PANDOC_VERSION, 3.10)"
     expect_gap("local pandoc check missing", no_local_pandoc, "punycoder",
                dict(cran, **{"scripts/check-toolchain.R": "# pandoc_version() is only mentioned here\nx <- 1\n"}),
@@ -4130,8 +4182,6 @@ def self_test() -> list[str]:
     # check-toolchain.R is vendored: every member carries seor's copy, byte
     # for byte. The fixture carries it.
     toolchain = "scripts/check-toolchain.R"
-    if cran[toolchain] != seor_toolchain():
-        failures.append("the fixture's check-toolchain.R is not seor's copy")
     expect_clean("a member's check-toolchain.R identical to seor's", "punycoder", cran, fixture_state())
     drifted = "scripts/check-toolchain.R differs from seor's, the copy this checker runs"
 

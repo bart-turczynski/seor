@@ -374,12 +374,23 @@ green. The check exports the commit being pushed (`PRE_COMMIT_TO_REF`, else
 tree. There it runs roxygen2 at exactly the version `Config/roxygen2/version`
 pins and fails, printing the diff, when `man/`, `NAMESPACE` or `DESCRIPTION`
 differ from what is committed. It runs the checkout's copy of the check, and
-removes the export on every exit, signals included. robotstxtr's
-`dev/check-docs-drift.R` is the reference; rurl, pslr, punycoder, raddr,
-pagerankr, seor and ssrfr carry it as `scripts/check-docs-drift.R`. sitemapr's
-`tools/check-docs.R` still regenerates in the working tree (SEOR-zxyztpbr).
-CI runs it too where the job installs the pinned roxygen2 (rurl, punycoder,
-raddr, pagerankr, seor; SEOR-fhrisfpt, SEOR-yufxgcre).
+removes the export on every exit, signals included. CI runs it too where the
+job installs the pinned roxygen2 (rurl, punycoder, raddr, pagerankr, seor;
+SEOR-fhrisfpt, SEOR-yufxgcre).
+
+The check is one script: seor's `scripts/check-docs-drift.R`, which every
+package vendors byte for byte at that path (SEOR-lyciowif). A fix goes into
+seor's copy and is copied out, never into a fork. Its one argument is the
+package directory (default `.`), and it reads no environment variable of its
+own; where it runs, an export or a CI checkout used in place, is the caller's
+choice. It exits 0 in sync and 1 on drift, and refuses with an R error when
+roxygen2 is missing or not the pinned version, naming the install. git only
+prints the diff: without git the report still lists the changed, missing and
+stale files and says the diff is omitted. `--self-test` runs it on fixture
+packages, with git and without. rurl, pslr, punycoder, raddr, pagerankr and
+ssrfr carry hand-forked copies until they vendor seor's; robotstxtr has
+`dev/check-docs-drift.R`, and sitemapr's `tools/check-docs.R` still
+regenerates in the working tree (SEOR-zxyztpbr).
 
 ## Files every package carries
 
@@ -601,7 +612,8 @@ What it checks, section by section:
   there and matches seor's copy (line endings aside). The docs-drift check: some script in
   that chain runs roxygen2 (`roxygenise` or `roxygenize`) and some script
   runs `git archive`. That the two belong together, and that it diffs, is a
-  review item.
+  review item. `scripts/check-docs-drift.R` is there and matches seor's
+  copy (line endings aside); a missing copy is a gap too.
 - **Schedules.** One active `deep-check` and one `dependency-audit` schedule,
   on `main`, with `SCHEDULE_KIND` set on each schedule.
 
