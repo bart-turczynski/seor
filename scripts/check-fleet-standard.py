@@ -1866,10 +1866,15 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
             continue
         candidates.append((job, setup, bodies))
     values: list[str] | None = None
-    if candidates and not expanded:
+    if candidates:
         try:
-            found = (pins if pins is not None else read_pandoc_assignments([ci.text]))[ci.text]
-            values = list(dict.fromkeys(value for _, value in found))
+            found = (pins or {}).get(ci.text)
+            if found is None:
+                found = read_pandoc_assignments([ci.text])[ci.text]
+            # check-toolchain.R reads the flow form `{value: "3.10"}` as that
+            # text, and the block form as nothing; the expanded-form gap above
+            # covers both, and every other pin is still judged.
+            values = list(dict.fromkeys(value for _, value in found if not (expanded and value.startswith("{"))))
         except ProbeError as error:
             report.skip("ci", f"the pandoc pin was not read, only the install steps (probe failed: {error})", incomplete=True)
     if values and len(values) > 1:
@@ -1877,9 +1882,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
                          f"({', '.join(values)}); keep one pin, as check-toolchain.R requires")
     never, unseen, opaque, other, unverified = [], [], [], [], {}
     for job, setup, bodies in candidates:
-        if values is not None or expanded:
+        if values is not None:
             visible = setup + (ci.default_before() if job.inherits_default_before else [])
-            if values == []:
+            if not values and not expanded:
                 never.append(job.name)
                 continue
             supplied = {pin_assignment(item) for item in visible}
@@ -1888,9 +1893,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
                     unseen.append(job.name)
                     continue
                 opaque.append(job.name)
-            if values is not None and len(values) > 1:
+            if len(values) > 1:
                 continue
-            if values is not None and values[0] != PANDOC_PIN:
+            if values and values[0] != PANDOC_PIN:
                 other.append(job.name)
                 continue
         state = max([pandoc_install_state(setup)] + [pandoc_install_state([body]) for body in bodies],
@@ -2611,26 +2616,33 @@ def check_local_gate(source, report: Report) -> None:
                                  f"(PANDOC_VERSION, {PANDOC_PIN})")
 
 
+@cache
+def seor_toolchain() -> str:
+    """seor's scripts/check-toolchain.R, the copy beside this script, read once."""
+    return TOOLCHAIN_R.read_text(encoding="utf-8", errors="replace")
+
+
 def check_toolchain_copy(source, report: Report) -> None:
     """A package's scripts/check-toolchain.R is seor's, the copy beside this
     script (TOOLCHAIN_R): it is vendored byte for byte, and this script runs
     seor's copy to read the pin the package's own copy reads before a push.
-    Compared as the source reads text. A missing copy is not reported here:
-    the local gate's pandoc check (check_local_gate()) then finds no
-    comparison with the CI pin."""
+    Compared as text with line endings made LF, so a local and a GitLab read
+    agree. A missing copy is a gap of its own: the file is vendored, whatever
+    else in the local gate compares pandoc with the CI pin."""
     try:
         member = source.read("scripts/check-toolchain.R")
     except ProbeError as error:
         report.skip("local gate", f"could not read scripts/check-toolchain.R ({error})", incomplete=True)
         return
     if member is None:
+        report.gap("local gate", "no scripts/check-toolchain.R; copy seor's, which every package vendors byte for byte")
         return
     try:
-        seor = TOOLCHAIN_R.read_text(encoding="utf-8", errors="replace")
+        seor = seor_toolchain()
     except OSError as error:
         report.skip("local gate", f"scripts/check-toolchain.R not compared with seor's copy ({error})", incomplete=True)
         return
-    if member != seor:
+    if member.replace("\r\n", "\n") != seor.replace("\r\n", "\n"):
         report.gap("local gate", "scripts/check-toolchain.R differs from seor's, the copy this checker runs (it is "
                                  "vendored byte for byte); copy seor's scripts/check-toolchain.R over it")
 
@@ -2881,7 +2893,7 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
         "tools/verify.R": "db <- tools:::url_db_from_package_sources('.')\nbad <- tools:::check_url_db(db)\n"
                           "system2(\"git\", c(\"archive\", \"-o\", tarball, ref))\nroxygen2::roxygenise(export)\n",
         # The vendored copy every member carries: seor's own, byte for byte.
-        "scripts/check-toolchain.R": TOOLCHAIN_R.read_text(encoding="utf-8", errors="replace"),
+        "scripts/check-toolchain.R": seor_toolchain(),
         "scripts/check-citation.py": "print('ok')\n",
         ".gitlab/issue_templates/Bug.md": "x\n",
         ".gitlab/merge_request_templates/Default.md": "x\n",
@@ -3475,6 +3487,13 @@ def self_test() -> list[str]:
                "at $PANDOC_VERSION, which neither its variables nor its setup assign", "punycoder",
                edit(no_shell_pin, ci, "fossa:\n", "fossa:\n  variables:\n    PANDOC_VERSION: {value: \"3.10\"}\n"),
                fixture_state(), then=fossa_named)
+    # An expanded pin anywhere leaves every pin check-toolchain.R can read
+    # judged: a wrong shell pin in the R template is still reported.
+    expect_gap("pin in the expanded form in fossa, a wrong shell pin in the R template",
+               "pins pandoc 3.9, not the fleet's 3.10", "punycoder",
+               edit(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "    - PANDOC_VERSION=3.9\n"),
+                    ci, "fossa:\n", "fossa:\n  variables:\n    PANDOC_VERSION: {value: \"3.10\"}\n"),
+               fixture_state(), then=fossa_named)
 
     # The install reader through its interface: shell items in, state out.
     for name, entries, want in PANDOC_INSTALL_CASES:
@@ -3895,7 +3914,7 @@ def self_test() -> list[str]:
     # check-toolchain.R is vendored: every member carries seor's copy, byte
     # for byte. The fixture carries it.
     toolchain = "scripts/check-toolchain.R"
-    if cran[toolchain] != TOOLCHAIN_R.read_text(encoding="utf-8", errors="replace"):
+    if cran[toolchain] != seor_toolchain():
         failures.append("the fixture's check-toolchain.R is not seor's copy")
     expect_clean("a member's check-toolchain.R identical to seor's", "punycoder", cran, fixture_state())
     drifted = "scripts/check-toolchain.R differs from seor's, the copy this checker runs"
@@ -3907,12 +3926,17 @@ def self_test() -> list[str]:
     expect_gap("a member's check-toolchain.R drifted from seor's", drifted, "punycoder",
                dict(cran, **{toolchain: cran[toolchain] + "# a local edit\n"}), fixture_state(), then=drift_alone)
 
-    # A missing copy is the local gate's pandoc gap, and only that.
-    def local_pandoc_alone(report: Report) -> None:
-        if [t for _, t in report.gaps] != [no_local_pandoc]:
-            failures.append(f"no check-toolchain.R: expected the local pandoc gap alone, got {report.gaps}")
+    expect_clean("a member's check-toolchain.R identical to seor's but for CRLF line endings", "punycoder",
+                 dict(cran, **{toolchain: cran[toolchain].replace("\n", "\r\n")}), fixture_state())
 
-    run("punycoder", {k: v for k, v in cran.items() if k != toolchain}, fixture_state(), judge=local_pandoc_alone)
+    # A missing copy: the vendored file is gone, and nothing compares the
+    # local pandoc with the pin.
+    def missing_and_local_pandoc(report: Report) -> None:
+        if sorted(t for _, t in report.gaps) != sorted([no_local_pandoc, "no scripts/check-toolchain.R; copy seor's, "
+                                                        "which every package vendors byte for byte"]):
+            failures.append(f"no check-toolchain.R: expected the missing-copy and local pandoc gaps, got {report.gaps}")
+
+    run("punycoder", {k: v for k, v in cran.items() if k != toolchain}, fixture_state(), judge=missing_and_local_pandoc)
     no_deep = fixture_state()
     no_deep.schedules = no_deep.schedules[1:]
     expect_gap("deep-check schedule missing", "no deep-check schedule", "punycoder", cran, no_deep)

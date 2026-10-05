@@ -227,7 +227,7 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   would win: a shell assignment overrides `variables:` at run time, so which
   value a job installs would depend on where each sits. It is written as a
   plain scalar, `PANDOC_VERSION: "3.10"`, or a shell assignment, never in
-  GitLab's expanded form (`value:` with a `description:`), which
+  GitLab's expanded form (a mapping with `value:`, block or flow), which
   `check-toolchain.R` does not read.
 - The `.deb` comes from the pandoc GitHub release
   (`https://github.com/jgm/pandoc/releases/download/<version>/pandoc-<version>-1-<arch>.deb`),
@@ -568,11 +568,11 @@ What it checks, section by section:
   or under `eval`, `sh -c` or `$(...)`, is not judged. The pin is read by
   running `check-toolchain.R`'s own reader
   (`--pandoc-assignments`), so the two scripts cannot disagree on it; that
-  needs `Rscript`. A package's `scripts/check-toolchain.R` that differs from
-  seor's copy is reported. The install has one of the two shapes above, read from the
+  needs `Rscript`. The install has one of the two shapes above, read from the
   job's script items (a `- |` block, a folded or plain item, or a flow
   sequence `[a, b]`): curl or wget saves the `.deb` to a file, a `sha256sum
-  -c` (or `shasum -a 256 -c`) names that file, and `dpkg -i` installs that
+  -c` (or `shasum -a 256 -c`) reads a pinned digest line naming that file
+  (from `echo` or `printf`, or a here-string), and `dpkg -i` installs that
   same file, paths compared as whole words; a checksum of some other
   download, a checked `.deb` never installed, a step that goes on when the
   one before it failed, and a download with no time
@@ -589,7 +589,8 @@ What it checks, section by section:
   `rmarkdown::pandoc_version()` and reads `PANDOC_VERSION` from
   `.gitlab-ci.yml`: the comparison with the CI pin. A `pandoc_version()` call
   alone, such as a minimum-version check, is not it, and neither is
-  `Sys.getenv("PANDOC_VERSION", …)`. The docs-drift check: some script in
+  `Sys.getenv("PANDOC_VERSION", …)`. `scripts/check-toolchain.R` is
+  there and matches seor's copy (line endings aside). The docs-drift check: some script in
   that chain runs roxygen2 (`roxygenise` or `roxygenize`) and some script
   runs `git archive`. That the two belong together, and that it diffs, is a
   review item.
