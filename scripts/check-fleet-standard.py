@@ -97,7 +97,8 @@ WHAT IT CHECKS, by section of the standard.
   of its own, found in the parsed YAML, and the pin's value is then not
   judged. A value set in a spelling the reader does not read, which
   check-toolchain.R stops on whatever pin it reads, is a gap naming its
-  lines, which that script prints (`--pandoc-unread`). The reader is the copy beside this script, which every package
+  lines, which that script prints (`--pandoc-unread`). The reader is the
+  copy beside this script, which every package
   vendors byte for byte: a scripts/check-toolchain.R that differs from it is
   a local-gate gap (check_toolchain_copy()). The install has
   the standard's shape (pandoc_install_state): `if <download> && <sha256sum
@@ -2022,7 +2023,7 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
     value in all of .gitlab-ci.yml, written as a plain scalar or a shell
     assignment. `pins` holds that read when the caller made it already, for
     many texts in one Rscript run (the self-test); None reads this text now,
-    and only when a job installs pandoc. A shell assignment overrides
+    when a job installs pandoc or the text names PANDOC_VERSION. A shell assignment overrides
     `variables:` at run time, so with two values the one a job installs
     depends on where each sits; two are a gap, as they are an error to
     check-toolchain.R. GitLab's expanded form (`PANDOC_VERSION: {value:
@@ -2032,7 +2033,10 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
     it installs pandoc still are. So is a value set in a spelling
     check-toolchain.R does not read (its `--pandoc-unread`, SEOR-mcstkogt),
     a quoted key or a job's flow `variables:` beside a global pin: its check
-    stops on that whatever pin it reads, so a gap names the lines. A job
+    stops on that whatever pin it reads, so a gap names the lines, unless
+    the file has the expanded form, whose gap stays the one it gets (the R
+    reader takes an expanded pin in a flow mapping or behind a quoted key
+    for an unread one). A job
     must also see the pin: a variable it gets (its own or a global one), or an
     assignment in an item of its setup that the commands after it see
     (pin_assignment()): not the name in a comment, an echoed string or a
@@ -2086,10 +2090,12 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
                 values = list(dict.fromkeys(value for _, value in found.assignments))
         except ProbeError as error:
             report.skip("ci", f"the pandoc pin was not read, only the install steps (probe failed: {error})", incomplete=True)
-    if unread:
+    if unread and not expanded:
         report.gap("ci", f".gitlab-ci.yml line{'s' if len(unread) > 1 else ''} {', '.join(map(str, unread))}: sets "
-                         "PANDOC_VERSION in a spelling check-toolchain.R does not read (a quoted key or a flow "
-                         "mapping, say), which its check stops on whatever pin it reads elsewhere; write the pin as "
+                         "PANDOC_VERSION in a spelling check-toolchain.R does not read (a quoted key, a flow mapping, "
+                         "an alias, a merge key, a value below the key, an empty, computed or defaulted value, or an "
+                         "`env` or declared assignment), which its check stops on whatever pin it reads elsewhere; "
+                         "write the pin as "
                          f"a plain scalar, `PANDOC_VERSION: \"{PANDOC_PIN}\"` (until then its value is not judged)")
     if values and len(values) > 1:
         report.gap("ci", f".gitlab-ci.yml assigns PANDOC_VERSION more than once, with different values "
@@ -3875,6 +3881,14 @@ def self_test() -> list[str]:
     expect_gap("pin in the expanded form, flow, beside a shell pin", expanded, "punycoder",
                edit(cran, ci, ".r:\n", ".r:\n  variables:\n    PANDOC_VERSION: {value: \"3.10\", description: pin}\n"),
                fixture_state(), then=expanded_alone(".r"))
+    # check-toolchain.R takes these for unread settings (its expanded-form
+    # reader wants a block key); the expanded gap is still the one they get.
+    expect_gap("pin in the expanded form behind a quoted key", expanded, "punycoder",
+               edit(no_shell_pin, ci, "variables:\n", "variables:\n  \"PANDOC_VERSION\": {value: \"3.10\"}\n"),
+               fixture_state(), then=expanded_alone(global_scope))
+    expect_gap("pin in the expanded form in a job's flow variables", expanded, "punycoder",
+               edit(no_shell_pin, ci, ".r:\n", ".r:\n  variables: {PANDOC_VERSION: {value: \"3.10\"}}\n"),
+               fixture_state(), then=expanded_alone(".r"))
 
     # Whether each job sees the pin is still judged: here none of the R jobs does.
     def fossa_named(report: Report) -> None:
@@ -3903,9 +3917,10 @@ def self_test() -> list[str]:
         def judge(report: Report) -> None:
             pandoc = [t for _, t in report.gaps if "pandoc" in t.lower()]
             if pandoc != [f".gitlab-ci.yml line {line}: sets PANDOC_VERSION in a spelling check-toolchain.R does "
-                          "not read (a quoted key or a flow mapping, say), which its check stops on whatever pin it "
-                          "reads elsewhere; write the pin as a plain scalar, `PANDOC_VERSION: \"3.10\"` (until then "
-                          "its value is not judged)"]:
+                          "not read (a quoted key, a flow mapping, an alias, a merge key, a value below the key, an "
+                          "empty, computed or defaulted value, or an `env` or declared assignment), which its check "
+                          "stops on whatever pin it reads elsewhere; write the pin as a plain scalar, "
+                          "`PANDOC_VERSION: \"3.10\"` (until then its value is not judged)"]:
                 failures.append(f"{tag}: expected the unread setting's one gap alone, got {report.gaps}")
         return judge
 

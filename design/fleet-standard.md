@@ -617,8 +617,9 @@ What it checks, section by section:
   `variables:` entry or a shell assignment, quoted or not, with or without a
   trailing comment (GitLab's expanded `value:` form is reported, and so is
   any value set in a spelling `check-toolchain.R` does not read and stops on,
-  a quoted key, a job's flow `variables:` or a `readonly`, `declare` or
-  `local` assignment, as its `--pandoc-unread` names the lines, each to be
+  such as a quoted key, a job's flow `variables:`, an alias, a value below
+  the key, an `env` prefix or a `readonly`, `declare`, `typeset` or `local`
+  assignment, as its `--pandoc-unread` names the lines, each to be
   rewritten as a plain scalar), one value wherever it is assigned, in a line
   the job sees, and never in a `parallel: matrix` entry, which pins per leg. An
   assignment is one sh would run and keep for the commands after it, plain
