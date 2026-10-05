@@ -1442,12 +1442,14 @@ PANDOC_CASE_DIGEST = "d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad
 PANDOC_CASE_DL = f"curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --max-time 120 -o /tmp/pandoc.deb {PANDOC_CASE_URL}"
 PANDOC_CASE_CHECK = f"echo \"{PANDOC_CASE_DIGEST}  /tmp/pandoc.deb\" | sha256sum -c -"
 PANDOC_CASE_DPKG = "dpkg -i /tmp/pandoc.deb"
+PANDOC_CASE_HOLD = "apt-mark hold pandoc"
 
 
-def pandoc_case_if(cond: str, orelse: bool = True) -> str:
-    """A `- |` item holding `if <cond>; then …; else <warn>; fi`, as YAML reads it."""
+def pandoc_case_if(cond: str, orelse: bool = True, then: str = PANDOC_CASE_HOLD) -> str:
+    """A `- |` item holding `if <cond>; then <then>; …; else <warn>; fi`, as YAML reads it."""
     warn = "else\n  echo \"WARNING: pandoc not installed\"\n" if orelse else ""
-    return f"if {cond}; then\n  echo installed\n{warn}fi\n"
+    body = f"  {then}\n" if then else ""
+    return f"if {cond}; then\n{body}  echo installed\n{warn}fi\n"
 
 
 PANDOC_CASE_SEOR = (
@@ -1456,14 +1458,19 @@ PANDOC_CASE_SEOR = (
     "\"https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-${ARCH}.deb\" \\\n"
     "  && echo \"${PANDOC_SHA256}  /tmp/pandoc.deb\" | sha256sum -c - \\\n"
     "  && dpkg -i /tmp/pandoc.deb; then\n"
+    "  apt-mark hold pandoc\n"
     "  echo \"pandoc ${PANDOC_VERSION} installed\"\n"
     "else\n"
     "  echo \"WARNING: pandoc ${PANDOC_VERSION} not installed\"\n"
     "fi\n")
-PANDOC_CASE_ONE_LINE = f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then echo ok; else echo WARN; fi"
+PANDOC_CASE_ONE_LINE = (f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then {PANDOC_CASE_HOLD}; "
+                        "echo ok; else echo WARN; fi")
+# The install with no hold anywhere, in each shape (SEOR-vzupmeqj).
+PANDOC_CASE_UNHELD_IF = pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}", then="")
+PANDOC_CASE_UNHELD_ITEMS = [PANDOC_CASE_DL, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG]
 PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
     # The standard's two shapes: three items in order, or one `if … else … fi`.
-    ("three items", [PANDOC_CASE_DL, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed"),
+    ("three items", [PANDOC_CASE_DL, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "installed"),
     ("seor's shape", [PANDOC_CASE_SEOR], "installed"),
     ("one-line if in a plain item", [PANDOC_CASE_ONE_LINE], "installed"),
     ("if over lines joined at the &&",
@@ -1479,61 +1486,62 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
         "pandoc-${PANDOC_VERSION}-1-${ARCH}.deb\" \\\n"
         "  && echo \"${PANDOC_SHA256}  /tmp/pandoc.deb\" | sha256sum -c - \\\n"
         "  && dpkg -i /tmp/pandoc.deb; then\n"
+        "  apt-mark hold pandoc\n"
         "  echo \"pandoc ${PANDOC_VERSION} installed\"\n"
         "else\n"
         "  echo \"WARNING: pandoc ${PANDOC_VERSION} not installed\"\n"
         "fi\n"
         "pandoc --version | sed -n 1p\n"], "installed"),
     # The sha256 check and the install are tied to the downloaded .deb.
-    ("no sha256 check", [PANDOC_CASE_DL, PANDOC_CASE_DPKG], "noncanonical"),
+    ("no sha256 check", [PANDOC_CASE_DL, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("sha256 check of another download",
      [PANDOC_CASE_DL, "curl -fsSL -o /tmp/other.tgz https://example.org/o.tgz",
-      f"echo \"{PANDOC_CASE_DIGEST}  /tmp/other.tgz\" | sha256sum -c -", PANDOC_CASE_DPKG], "noncanonical"),
+      f"echo \"{PANDOC_CASE_DIGEST}  /tmp/other.tgz\" | sha256sum -c -", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("checked .deb never installed", [PANDOC_CASE_DL, PANDOC_CASE_CHECK], "noncanonical"),
     ("another .deb installed", [PANDOC_CASE_DL, PANDOC_CASE_CHECK, "dpkg -i /tmp/other.deb"], "noncanonical"),
     ("installed before the check", [PANDOC_CASE_DL, PANDOC_CASE_DPKG, PANDOC_CASE_CHECK], "noncanonical"),
     ("release named but never downloaded",
-     [f"echo -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "noncanonical"),
+     [f"echo -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     # Nothing installs the .deb outside the canonical shape, and the three items
     # are consecutive: a second download between them replaces the checked file.
     ("an unchecked install beside seor's shape", [PANDOC_CASE_SEOR, "dpkg -i --force-all /tmp/pandoc.deb"],
      "noncanonical"),
     ("an unchecked install beside the three items",
-     [PANDOC_CASE_DL, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_DPKG], "noncanonical"),
+     [PANDOC_CASE_DL, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("a second download between the check and the install",
-     [PANDOC_CASE_DL, PANDOC_CASE_CHECK, "curl -m 60 -o /tmp/pandoc.deb https://example.org/x.deb", PANDOC_CASE_DPKG],
+     [PANDOC_CASE_DL, PANDOC_CASE_CHECK, "curl -m 60 -o /tmp/pandoc.deb https://example.org/x.deb", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD],
      "noncanonical"),
     # The saved file: curl -O's release name, wget, a URL held in a variable.
     ("saved under its release name",
      [f"curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --max-time 120 -O {PANDOC_CASE_URL}",
       f"echo \"{PANDOC_CASE_DIGEST}  pandoc-${{PANDOC_VERSION}}-1-amd64.deb\" | sha256sum --check",
-      "dpkg -i ./pandoc-${PANDOC_VERSION}-1-amd64.deb"], "installed"),
+      "dpkg -i ./pandoc-${PANDOC_VERSION}-1-amd64.deb", PANDOC_CASE_HOLD], "installed"),
     ("fetched with wget",
      [f"timeout 300 wget -q --timeout=60 --tries=3 -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK,
-      PANDOC_CASE_DPKG], "installed"),
+      PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "installed"),
     ("URL in a variable",
      [f"PANDOC_URL={PANDOC_CASE_URL}", "curl -m 300 -fsSL -o /tmp/pandoc.deb \"$PANDOC_URL\"",
-      PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed"),
+      PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "installed"),
     # Each step is one command or pipeline, judged by its last command; control
     # flow beyond that, `set -e` included, is not read (SEOR-xhyrogfm).
     ("sha256 failure ignored with || true",
-     [PANDOC_CASE_DL, f"{PANDOC_CASE_CHECK} || true", PANDOC_CASE_DPKG], "noncanonical"),
+     [PANDOC_CASE_DL, f"{PANDOC_CASE_CHECK} || true", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("install after ; on the check's line",
      [PANDOC_CASE_DL, f"{PANDOC_CASE_CHECK}; {PANDOC_CASE_DPKG}"], "noncanonical"),
-    ("sha256 failure exits", [PANDOC_CASE_DL, f"{PANDOC_CASE_CHECK} || exit 1", PANDOC_CASE_DPKG], "noncanonical"),
+    ("sha256 failure exits", [PANDOC_CASE_DL, f"{PANDOC_CASE_CHECK} || exit 1", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("three steps in one block", [f"{PANDOC_CASE_DL}\n{PANDOC_CASE_CHECK}\n{PANDOC_CASE_DPKG}\n"], "noncanonical"),
     ("three steps chained with ;", [f"{PANDOC_CASE_DL}; {PANDOC_CASE_CHECK}; {PANDOC_CASE_DPKG}"], "noncanonical"),
     ("three steps after set -Eeuo pipefail",
      [f"set -Eeuo pipefail\n{PANDOC_CASE_DL}\n{PANDOC_CASE_CHECK}\n{PANDOC_CASE_DPKG}\n"], "noncanonical"),
     ("install after the if that checks",
-     [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK}"), PANDOC_CASE_DPKG], "noncanonical"),
+     [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK}"), PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("if without an else",
      [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}", orelse=False)], "noncanonical"),
     ("|| inside the if",
      [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} || true && {PANDOC_CASE_DPKG}")], "noncanonical"),
-    ("negated check", [PANDOC_CASE_DL, f"! {PANDOC_CASE_CHECK}", PANDOC_CASE_DPKG], "noncanonical"),
+    ("negated check", [PANDOC_CASE_DL, f"! {PANDOC_CASE_CHECK}", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     # A pipeline's status is its last command's: `| tee` hides the check.
-    ("check piped into tee", [PANDOC_CASE_DL, f"{PANDOC_CASE_CHECK} | tee /tmp/sha.log", PANDOC_CASE_DPKG],
+    ("check piped into tee", [PANDOC_CASE_DL, f"{PANDOC_CASE_CHECK} | tee /tmp/sha.log", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD],
      "noncanonical"),
     ("check piped into tee inside the if",
      [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} | tee /tmp/sha.log && {PANDOC_CASE_DPKG}")],
@@ -1541,32 +1549,32 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
     # Paths compare as whole tokens; `-` is stdout, not a file; a comment is no path.
     ("download to stdout, another file checked",
      [f"wget -q -T 60 -t 3 -O- {PANDOC_CASE_URL} > /tmp/pandoc.deb",
-      f"echo \"{PANDOC_CASE_DIGEST}  /tmp/other.deb\" | sha256sum -c -", PANDOC_CASE_DPKG], "noncanonical"),
+      f"echo \"{PANDOC_CASE_DIGEST}  /tmp/other.deb\" | sha256sum -c -", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("output path inside an unrelated checksum file's name",
      [f"curl -fsSL --max-time 300 -o p {PANDOC_CASE_URL}", "sha256sum -c /tmp/unrelated.sha256", "dpkg -i p"],
      "noncanonical"),
     ("installs a .deb whose name extends the download's",
      [PANDOC_CASE_DL, PANDOC_CASE_CHECK, "dpkg -i /tmp/pandoc.deb.bak"], "noncanonical"),
     ("checked file named only in a comment",
-     [PANDOC_CASE_DL, "sha256sum -c /tmp/x.sha256  # checks /tmp/pandoc.deb", PANDOC_CASE_DPKG], "noncanonical"),
+     [PANDOC_CASE_DL, "sha256sum -c /tmp/x.sha256  # checks /tmp/pandoc.deb", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     # The download's file: stdout's redirect, not stderr's, `>|` included.
     *((f"download saved with {redirect!r}",
-       [f"curl -fsSL --max-time 300 {PANDOC_CASE_URL} {redirect}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed")
+       [f"curl -fsSL --max-time 300 {PANDOC_CASE_URL} {redirect}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "installed")
       for redirect in ("> /tmp/pandoc.deb", "2>/dev/null > /tmp/pandoc.deb", "&>/dev/null >/tmp/pandoc.deb",
                        "2>&1 >/tmp/pandoc.deb", ">| /tmp/pandoc.deb")),
     # Time limits: timeout(1) and a bundled -m bound the download; wget's
     # --timeout and --tries do not (only timeout(1) bounds wget).
-    ("no time limit", [PANDOC_CASE_DL.replace("--max-time 120 ", ""), PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
+    ("no time limit", [PANDOC_CASE_DL.replace("--max-time 120 ", ""), PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD],
      "unbounded"),
     ("a zero time limit", [PANDOC_CASE_DL.replace("--max-time 120", "--max-time 0"), PANDOC_CASE_CHECK,
-                           PANDOC_CASE_DPKG], "unbounded"),
-    ("wget with no time limit", [f"wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
+                           PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "unbounded"),
+    ("wget with no time limit", [f"wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD],
      "unbounded"),
-    *((f"download bounded: {bounded[:30]!r}", [bounded, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed")
+    *((f"download bounded: {bounded[:30]!r}", [bounded, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "installed")
       for bounded in (f"timeout 300 curl -fsSL --retry 3 -o /tmp/pandoc.deb {PANDOC_CASE_URL}",
                       f"curl -fsSLm 300 -o /tmp/pandoc.deb {PANDOC_CASE_URL}",
                       f"timeout -k 10 5m wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}")),
-    *((f"download unbounded: {unbounded[:40]!r}", [unbounded, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "unbounded")
+    *((f"download unbounded: {unbounded[:40]!r}", [unbounded, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "unbounded")
       for unbounded in (f"timeout 0 curl -fsSL -o /tmp/pandoc.deb {PANDOC_CASE_URL}",
                         f"wget -q --timeout=60 -O /tmp/pandoc.deb {PANDOC_CASE_URL}",
                         f"wget -q --timeout=60 --tries=0 -O /tmp/pandoc.deb {PANDOC_CASE_URL}",
@@ -1575,27 +1583,27 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
     # SEOR-ltseyxpe. A digest computed from the file itself checks nothing: the
     # check names FILE, or reads it from the digest line fed to it.
     ("self-referential digest",
-     [PANDOC_CASE_DL, "sha256sum /tmp/pandoc.deb | sha256sum -c -", PANDOC_CASE_DPKG], "noncanonical"),
+     [PANDOC_CASE_DL, "sha256sum /tmp/pandoc.deb | sha256sum -c -", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("self-referential digest echoed through $(…)",
-     [PANDOC_CASE_DL, "echo \"$(sha256sum /tmp/pandoc.deb)\" | sha256sum -c -", PANDOC_CASE_DPKG], "noncanonical"),
+     [PANDOC_CASE_DL, "echo \"$(sha256sum /tmp/pandoc.deb)\" | sha256sum -c -", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("self-referential digest inside the if",
      [pandoc_case_if(f"{PANDOC_CASE_DL} && sha256sum /tmp/pandoc.deb | sha256sum -c - && {PANDOC_CASE_DPKG}")],
      "noncanonical"),
     ("digest line written by printf",
-     [PANDOC_CASE_DL, "printf '%s  %s\\n' \"$PANDOC_SHA256\" /tmp/pandoc.deb | sha256sum -c -", PANDOC_CASE_DPKG],
+     [PANDOC_CASE_DL, "printf '%s  %s\\n' \"$PANDOC_SHA256\" /tmp/pandoc.deb | sha256sum -c -", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD],
      "installed"),
     ("digest line in a here-string",
-     [PANDOC_CASE_DL, "sha256sum -c <<< \"${PANDOC_SHA256}  /tmp/pandoc.deb\"", PANDOC_CASE_DPKG], "installed"),
+     [PANDOC_CASE_DL, "sha256sum -c <<< \"${PANDOC_SHA256}  /tmp/pandoc.deb\"", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "installed"),
     ("self-referential digest in a here-string",
-     [PANDOC_CASE_DL, "sha256sum -c <<< \"$(sha256sum /tmp/pandoc.deb)\"", PANDOC_CASE_DPKG], "noncanonical"),
+     [PANDOC_CASE_DL, "sha256sum -c <<< \"$(sha256sum /tmp/pandoc.deb)\"", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("self-referential digest through <(…)",
-     [PANDOC_CASE_DL, "sha256sum -c <(sha256sum /tmp/pandoc.deb)", PANDOC_CASE_DPKG], "noncanonical"),
+     [PANDOC_CASE_DL, "sha256sum -c <(sha256sum /tmp/pandoc.deb)", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     ("self-referential digest beside a variable",
-     [PANDOC_CASE_DL, "sha256sum $X /tmp/pandoc.deb | sha256sum -c -", PANDOC_CASE_DPKG], "noncanonical"),
+     [PANDOC_CASE_DL, "sha256sum $X /tmp/pandoc.deb | sha256sum -c -", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical"),
     # Only a pinned digest line counts: not one selected or fetched at run
     # time, not the file itself read as a list of sums, not a line with
     # another path before FILE, and no tool that hashes the file.
-    *((f"check not of a pinned digest line: {check[:40]!r}", [PANDOC_CASE_DL, check, PANDOC_CASE_DPKG], "noncanonical")
+    *((f"check not of a pinned digest line: {check[:40]!r}", [PANDOC_CASE_DL, check, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "noncanonical")
       for check in ("grep /tmp/pandoc.deb /tmp/SHA256SUMS | sha256sum -c -",
                     "curl -fsSL https://example.org/x.sha256 | sed 's|$|  /tmp/pandoc.deb|' | sha256sum -c -",
                     "cat /tmp/pandoc.deb | sha256sum -c -", "echo /tmp/pandoc.deb | sha256sum -c -",
@@ -1603,7 +1611,7 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
                     "sha256sum -c /tmp/pandoc.deb", "sha256 -r /tmp/pandoc.deb | sha256sum -c -",
                     "rhash --sha256 /tmp/pandoc.deb | sha256sum -c -")),
     ("a pinned digest in a variable named like a tool",
-     [PANDOC_CASE_DL, "echo \"${sha256sum}  /tmp/pandoc.deb\" | sha256sum -c -", PANDOC_CASE_DPKG], "installed"),
+     [PANDOC_CASE_DL, "echo \"${sha256sum}  /tmp/pandoc.deb\" | sha256sum -c -", PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "installed"),
     # SEOR-ltseyxpe. `if` pairs with its own `fi`: an earlier if…fi does not
     # swallow the install block, a block nested in a branch, a case arm or a
     # group is found, and an `else` belongs to its own `if`.
@@ -1620,7 +1628,7 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
     ("an if never closed, its else ending in a nested if…fi",
      [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then echo ok; else if true; then echo w; fi"],
      "noncanonical"),
-    *((f"else after {sep!r}", [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then {body} else echo w; fi"],
+    *((f"else after {sep!r}", [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then {PANDOC_CASE_HOLD}; {body} else echo w; fi"],
        "installed") for sep, body in ((")", "(echo ok)"), ("}", "{ echo ok; }"), ("&", "echo ok &"))),
     ("an if never closed, its last word ending in fi",
      [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then echo ok; else echo notfi"],
@@ -1636,9 +1644,9 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
     # download: only timeout(1).
     ("curl that retries with no retry budget",
      [f"curl -fsSL --retry 100 --max-time 300 -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK,
-      PANDOC_CASE_DPKG], "unbounded"),
+      PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "unbounded"),
     *((f"download time limit: {flags!r}",
-       [f"curl -fsSL {flags} -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], want)
+       [f"curl -fsSL {flags} -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], want)
       for flags, want in (("--retry 3 --retry-delay 5 --max-time 120", "unbounded"),
                           ("--retry 3 --retry-max-time 300 --max-time 120", "installed"),
                           ("--retry 3 --retry-delay 5 --retry-max-time 300 --max-time 120", "installed"),
@@ -1658,10 +1666,42 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
                           ("--retry $RETRIES --max-time 120", "unbounded"),
                           ("--retry 100 --retry-delay 5 --retry-max-time 300 --max-time 120", "installed"))),
     ("wget with --timeout and a few --tries",
-     [f"wget -q --timeout 30 --tries 3 -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
+     [f"wget -q --timeout 30 --tries 3 -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD],
      "unbounded"),
     ("wget under timeout(1)",
-     [f"timeout 300 wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed"),
+     [f"timeout 300 wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG, PANDOC_CASE_HOLD], "installed"),
+    # SEOR-vzupmeqj. `apt-mark hold pandoc` after a successful `dpkg -i`, in
+    # the same success path: the `then` branch, or a script item after the
+    # three. TODAY'S VERDICT: the reader does not look for the hold yet, so
+    # every row below is `installed`.
+    ("no hold, one if", [PANDOC_CASE_UNHELD_IF], "installed"),
+    ("no hold, three items", PANDOC_CASE_UNHELD_ITEMS, "installed"),
+    ("hold in an item after the three", PANDOC_CASE_UNHELD_ITEMS + ["echo next", PANDOC_CASE_HOLD], "installed"),
+    ("hold on a line of a `- |` item after the three",
+     PANDOC_CASE_UNHELD_ITEMS + [f"echo next\n{PANDOC_CASE_HOLD}\npandoc --version\n"], "installed"),
+    ("hold before the dpkg -i, three items", [PANDOC_CASE_HOLD] + PANDOC_CASE_UNHELD_ITEMS, "installed"),
+    ("hold before the if, in its item", [f"{PANDOC_CASE_HOLD}\n{PANDOC_CASE_UNHELD_IF}"], "installed"),
+    ("hold in an item before the if", [PANDOC_CASE_HOLD, PANDOC_CASE_UNHELD_IF], "installed"),
+    ("hold only in the else branch",
+     [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then\n  echo ok\nelse\n"
+      f"  {PANDOC_CASE_HOLD}\nfi\n"], "installed"),
+    ("hold after fi, on the warn path too", [f"{PANDOC_CASE_UNHELD_IF}{PANDOC_CASE_HOLD}\n"], "installed"),
+    ("hold in an item after the if, on the warn path too", [PANDOC_CASE_UNHELD_IF, PANDOC_CASE_HOLD], "installed"),
+    ("hold in an if nested in the then branch",
+     [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}",
+                     then=f"if true; then {PANDOC_CASE_HOLD}; fi")], "installed"),
+    ("hold in an elif branch",
+     [f"if {PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}; then\n  echo ok\nelif true; then\n"
+      f"  {PANDOC_CASE_HOLD}\nelse\n  echo WARN\nfi\n"], "installed"),
+    *((f"hold spelled {hold!r}", [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}",
+                                                 then=hold)], "installed")
+      for hold in ("apt-mark hold pandoc r-base-core", "apt-mark hold r-base-core pandoc", "apt-mark -qq hold pandoc",
+                   "apt-mark hold pandoc || true", "apt-mark hold 'pandoc'", "echo ok; apt-mark hold pandoc")),
+    *((f"no hold, only {other!r}", [pandoc_case_if(f"{PANDOC_CASE_DL} && {PANDOC_CASE_CHECK} && {PANDOC_CASE_DPKG}",
+                                                   then=other)], "installed")
+      for other in ("apt-mark hold pandoc-data", "apt-mark unhold pandoc", "apt-mark showhold pandoc",
+                    "echo apt-mark hold pandoc", "# apt-mark hold pandoc", "echo pandoc hold | dpkg --set-selections",
+                    "hold() { apt-mark hold pandoc; }")),
 )
 # --- end of the pandoc install reader ---------------------------------------------
 
@@ -2891,6 +2931,7 @@ workflow:
     - curl -fsSL --retry 3 --retry-delay 5 --retry-max-time 300 --max-time 120 -o /tmp/pandoc.deb "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
     - echo "d502599878eb29af3ae5f0cb5d559134df96534125d452c7a0674a5bad2c5ecf  /tmp/pandoc.deb" | sha256sum -c -
     - dpkg -i /tmp/pandoc.deb
+    - apt-mark hold pandoc
 .on-main:
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
@@ -3590,11 +3631,18 @@ def self_test() -> list[str]:
         "pandoc-${PANDOC_VERSION}-1-${ARCH}.deb\" \\\n"
         "        && echo \"${PANDOC_SHA256}  /tmp/pandoc.deb\" | sha256sum -c - \\\n"
         "        && dpkg -i /tmp/pandoc.deb; then\n"
+        "        apt-mark hold pandoc\n"
         "        echo \"pandoc ${PANDOC_VERSION} installed\"\n"
         "      else\n"
         "        echo \"WARNING: pandoc ${PANDOC_VERSION} not installed\"\n"
         "      fi\n")
     expect_clean("pandoc installed in seor's shape", "punycoder", edit(cran, ci, pin_lines, seor_shape), fixture_state())
+    # SEOR-vzupmeqj. TODAY'S VERDICT: an install with no `apt-mark hold
+    # pandoc` passes, in either shape.
+    expect_clean("pandoc in seor's shape without the hold", "punycoder",
+                 edit(cran, ci, pin_lines, seor_shape.replace("        apt-mark hold pandoc\n", "")), fixture_state())
+    expect_clean("pandoc in three items without the hold", "punycoder",
+                 edit(cran, ci, "    - apt-mark hold pandoc\n", ""), fixture_state())
     unbounded = "downloads pandoc 3.10 with no time limit"
     expect_gap("pandoc download with no time limit", unbounded, "punycoder",
                edit(cran, ci, "--max-time 120 ", ""), fixture_state())
@@ -3749,14 +3797,14 @@ def self_test() -> list[str]:
     expect_clean("the three items as a flow sequence", "punycoder",
                  edit(cran, ci, "  before_script:\n" + pin_lines,
                       f"  variables:\n    PANDOC_VERSION: \"3.10\"\n  before_script: ['{PANDOC_CASE_DL}', '{PANDOC_CASE_CHECK}',\n"
-                      "    'dpkg -i /tmp/pandoc.deb']\n"), fixture_state())
+                      "    'dpkg -i /tmp/pandoc.deb', 'apt-mark hold pandoc']\n"), fixture_state())
     # So is the pin as a flow sequence's item, first or after another
     # (SEOR-ltseyxpe): the job sees it, and check-toolchain.R reads it.
     for form, head in (("first", "["), ("after another item", "[echo setup, ")):
         expect_clean(f"the pin in a flow sequence, {form}", "punycoder",
                      edit(cran, ci, "  before_script:\n" + pin_lines,
                           f"  before_script: {head}PANDOC_VERSION=3.10, '{PANDOC_CASE_DL}', '{PANDOC_CASE_CHECK}',\n"
-                          "    'dpkg -i /tmp/pandoc.deb']\n"), fixture_state())
+                          "    'dpkg -i /tmp/pandoc.deb', 'apt-mark hold pandoc']\n"), fixture_state())
 
     # The CI reader's case table (SEOR-oznwzhem). Every expected value is what
     # GitLab makes of the YAML, written down from the YAML 1.1 spec and GitLab's
