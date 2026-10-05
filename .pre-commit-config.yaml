@@ -94,11 +94,14 @@ repos:
       # design/fleet-standard.md and reads GitLab and the web, so the hook runs
       # only its offline self-test (fixtures inline), and only when the script
       # changes (SEOR-myokihrl), or check-toolchain.R, whose reader of the
-      # pandoc pin it runs (SEOR-xhyrogfm).
+      # pandoc pin it runs (SEOR-xhyrogfm). It reads .gitlab-ci.yml with
+      # PyYAML (ADR 0008), so the hook runs in its own environment with the
+      # pinned PyYAML, and `python` is that environment's interpreter.
       - id: check-fleet-standard-self-test
         name: check-fleet-standard self-test
-        entry: python3 scripts/check-fleet-standard.py --self-test
-        language: system
+        entry: python scripts/check-fleet-standard.py --self-test
+        language: python
+        additional_dependencies: [pyyaml==6.0.3]
         pass_filenames: false
         files: ^scripts/check-(fleet-standard\.py|toolchain\.R)$
         stages: [pre-push]

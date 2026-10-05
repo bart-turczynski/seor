@@ -1,4 +1,4 @@
-# check-fleet-standard v4
+# check-fleet-standard v5
 """Test fleet packages against design/fleet-standard.md and list each gap.
 
 WHY THIS EXISTS. The nine per-package "meets the fleet standard" issues run
@@ -104,17 +104,22 @@ WHAT IT CHECKS, by section of the standard.
   on `main`, with `SCHEDULE_KIND` set on the schedule itself; no schedule
   without a `SCHEDULE_KIND` or off `main`.
 
-HOW IT READS CI, AND WHERE THAT STOPS. seor's scripts are stdlib-only and read
-YAML with small fixed-shape readers rather than a YAML library (check-citation,
-bestpractices-url), so this does too. `.gitlab-ci.yml` is split into its
-top-level blocks; `extends:` is followed, a job's own `rules:` replace the
-template's, `variables:` merge, and YAML anchors (`*name`) pull in the block
-that defines them. `default: before_script` (or the top-level one) joins every
-job that sets no `before_script` of its own and does not turn it off with
-`inherit: default:`. A job's text joins every block it extends; the pandoc
-rule alone reads the one `before_script` and `script` a job ends up with,
-since GitLab replaces arrays along `extends`. `rules:if` and `workflow:rules`
-are evaluated for real (a
+HOW IT READS CI, AND WHERE THAT STOPS. `.gitlab-ci.yml` is read with PyYAML
+(`yaml.safe_load`, YAML 1.1 as GitLab reads it: an unquoted `3.10` is 3.1,
+`yes` is true), so quoting, trailing comments, flow and block lists, anchors,
+aliases and `<<` merge keys come from YAML itself (ADR 0008, SEOR-oznwzhem).
+A file that does not load, an unknown tag such as `!reference` included, or
+whose `extends:` names a block it does not define, leaves every CI rule of
+that package not judged and the run incomplete; the other areas are still
+judged. `include:` is not followed. On top of the YAML sits only GitLab's own
+semantics: `extends:` deep-merges mappings and replaces arrays, later parents
+over earlier ones and the job over all; `default:` (or a deprecated top-level
+`image:`, `before_script:`, ...) fills each key a job leaves unset, never
+merging into one it sets, unless `inherit: default:` turns it off; global
+`variables:` reach a job unless `inherit: variables:` turns them off.
+`before_script` and `script` are the items GitLab runs: a string is one item,
+nested lists (an alias to a list of commands) flatten. `rules:if` and
+`workflow:rules` are evaluated for real (a
 small evaluator for `==`, `!=`, `=~`, `!~`, `&&`, `||`, presence and
 parentheses) in four pipelines: a push to main, a `deep-check` schedule, a
 `dependency-audit` schedule and a tag. A job "runs" in a pipeline when the
@@ -124,11 +129,16 @@ in neither a push to main nor the dependency-audit schedule (design/fleet.md:
 every scheduled job requires its kind). Its R version comes from its image tag,
 expanded through `parallel:matrix` and variables, and is compared by minor
 version with the current release and oldrel (api.r-hub.io) and the DESCRIPTION
-floor. What a job does is read textually, from the job and from every
-repository R, shell or YAML script it names (two levels deep, comment lines
-dropped, and R stage tables' `default = FALSE` entries dropped, since those
-stages are opt-in). Python scripts are not followed: the citation scripts a job
-names quote `R CMD check --as-cran` in their prose.
+floor. Settings GitLab holds as keys are read as keys: `allow_failure`,
+`coverage`, the cobertura report, `pages`, and variables such as
+`_R_CHECK_CRAN_INCOMING_` as typed values. What a job's commands do is read
+textually, from the `before_script` and `script` items it ends up with (a
+parent's script it replaces does not count, nor an anchor it never uses) and
+from every repository R, shell or YAML script those items name, each a
+separate text (two levels deep, comment lines dropped, and R stage tables'
+`default = FALSE` entries dropped, since those stages are opt-in). Python
+scripts are not followed: the citation scripts a job names quote
+`R CMD check --as-cran` in their prose.
 So a gate is "present" when its call appears in that text; a script that takes
 the call but skips it at run time reads as present. Not checked: whether a tag
 pipeline fails on "already on CRAN", whether the URL check fails on zero URLs
@@ -136,8 +146,10 @@ and exempts only the BugReports 404, how security-audit treats missing OSS
 Index credentials, the GitLab project badges, and that no employer is named as
 copyright holder or funder. Those stay review items.
 
-Stdlib only. `glab` must be on PATH and authenticated unless `--offline`, and
-`Rscript` for the pandoc pin (the self-test included).
+Needs PyYAML (pinned at 6.0.3 in the pre-commit hook, which installs it); a run
+without it exits 2 with an install hint. `glab` must be on PATH and
+authenticated unless `--offline`, and `Rscript` for the pandoc pin (the
+self-test included).
 """
 
 from __future__ import annotations
@@ -156,6 +168,11 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable
+
+try:
+    import yaml
+except ImportError:  # main() says how to install it
+    yaml = None
 
 OWNER = "bart-turczynski"
 FLEET = ("rurl", "pslr", "punycoder", "raddr", "ssrfr", "pagerankr", "sitemapr", "seor", "robotstxtr")
@@ -556,84 +573,66 @@ def inline_scripts(text: str, source, depth: int = 2, seen: set[str] | None = No
     return out
 
 
-# --- CI: blocks, extends, rules ---------------------------------------------------
+# --- CI: the YAML, extends, default, rules -----------------------------------------
 
-TOP_KEY = re.compile(r"^([^\s#-][^\n]*?):(?=\s|$)")
+# Top-level keys that are not jobs.
 RESERVED = {"stages", "default", "variables", "workflow", "include", "image", "services",
             "cache", "before_script", "after_script"}
+# The deprecated top-level spellings of `default:` keys.
+LEGACY_DEFAULTS = ("image", "services", "cache", "before_script", "after_script")
+# GitLab refuses `extends` nested deeper than this.
+EXTENDS_DEPTH = 11
 
 
-def split_blocks(text: str) -> dict[str, list[str]]:
-    """Top-level key -> its lines (key line first), comment lines dropped."""
-    blocks: dict[str, list[str]] = {}
-    current = None
-    for line in text.splitlines():
-        if line.lstrip().startswith("#"):
-            continue
-        m = TOP_KEY.match(line)
-        if m:
-            current = m.group(1).strip().strip("\"'")
-            blocks[current] = [line]
-        elif current is not None:
-            blocks[current].append(line)
-    return blocks
+class CIError(Exception):
+    """A .gitlab-ci.yml GitLab itself would refuse: its CI rules are not judged."""
 
 
-def children(lines: list[str]) -> dict[str, tuple[str, list[str]]]:
-    """Immediate child keys of a block: key -> (inline value, deeper lines)."""
-    out: dict[str, tuple[str, list[str]]] = {}
-    body = [line for line in lines[1:] if line.strip()]
-    if not body:
-        return out
-    indent = len(body[0]) - len(body[0].lstrip())
-    key = None
-    for line in body:
-        level = len(line) - len(line.lstrip())
-        if level == indent and not line.lstrip().startswith("- "):
-            m = re.match(r"\s*([\w.-]+):\s*(.*)$", line)
-            if m:
-                key = m.group(1)
-                out[key] = (m.group(2).strip(), [])
-                continue
-        if key is not None and level >= indent:
-            out[key][1].append(line)
-    return out
+def gitlab_str(value: object) -> str:
+    """A YAML scalar as GitLab hands it to a job or a rule: `true`/`false`, 3.1 for an unquoted 3.10."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "" if value is None else str(value)
 
 
-def unquote(value: str) -> str:
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        inner = value[1:-1]
-        return inner.replace("''", "'") if value[0] == "'" else inner
-    return value
+def variables_of(block: object) -> dict[str, object]:
+    """A `variables:` mapping as typed values; the `{value: ..., description: ...}` form gives its value."""
+    if not isinstance(block, dict):
+        return {}
+    return {str(name): value.get("value") if isinstance(value, dict) else value for name, value in block.items()}
 
 
-def list_values(inline: str, lines: list[str]) -> list[str]:
-    if inline.startswith("["):
-        return [unquote(v) for v in inline.strip("[]").split(",") if v.strip()]
-    if inline:
-        return [unquote(inline)]
-    return [unquote(line.strip()[2:]) for line in lines if line.strip().startswith("- ")]
+def script_items(value: object) -> list[str]:
+    """A `before_script`/`script` value as the items GitLab runs, in order.
+
+    A string is one item. Nested lists flatten, as GitLab flattens them: an
+    alias to an anchored list of commands is its commands. A mapping is no
+    command (GitLab refuses it) and gives none.
+    """
+    if value is None or isinstance(value, dict):
+        return []
+    if isinstance(value, list):
+        return [item for entry in value for item in script_items(entry)]
+    return [gitlab_str(value)]
 
 
-def parse_rules(lines: list[str]) -> list[dict[str, str]]:
-    rules: list[dict[str, str]] = []
-    body = [line for line in lines if line.strip()]
-    if not body:
-        return rules
-    item_indent = min(len(line) - len(line.lstrip()) for line in body if line.lstrip().startswith("- "))
-    for line in body:
-        level = len(line) - len(line.lstrip())
-        stripped = line.strip()
-        if level == item_indent and stripped.startswith("- "):
-            rules.append({})
-            stripped = stripped[2:]
-        if not rules:
-            continue
-        m = re.match(r"([\w-]+):\s*(.*)$", stripped)
-        if m and level <= item_indent + 2:
-            rules[-1][m.group(1)] = unquote(m.group(2))
-    return rules
+def deep_merge(base: object, over: object) -> object:
+    """GitLab's `extends` merge: mappings merge key by key, anything else (arrays included) is replaced."""
+    if not (isinstance(base, dict) and isinstance(over, dict)):
+        return over
+    merged = dict(base)
+    for key, value in over.items():
+        merged[key] = deep_merge(base[key], value) if key in base else value
+    return merged
+
+
+def inherited(setting: object, key: str) -> bool:
+    """Whether an `inherit:` setting (true, false or a list of keys) lets `key` through."""
+    if setting is False:
+        return False
+    if isinstance(setting, list):
+        return key in setting
+    return True
 
 
 EXPR_TOKEN = re.compile(r"\s*(?:(\$\{?\w+\}?)|(\"[^\"]*\"|'[^']*')|(==|!=|=~|!~|&&|\|\||\(|\))|(null)\b)")
@@ -721,11 +720,13 @@ def evaluate(expr: str, env: dict[str, str]) -> bool:
     return disjunction()
 
 
-def first_match(rules: list[dict[str, str]], env: dict[str, str]) -> str | None:
+def first_match(rules: list, env: dict[str, str]) -> str | None:
     """The `when` of the first rule that matches, or None when none matches."""
     for rule in rules:
-        if "if" not in rule or evaluate(rule["if"], env):
-            return rule.get("when", "on_success")
+        if not isinstance(rule, dict):
+            continue
+        if "if" not in rule or evaluate(gitlab_str(rule["if"]), env):
+            return gitlab_str(rule.get("when", "on_success"))
     return None
 
 
@@ -741,75 +742,104 @@ PIPELINES = {
 
 @dataclass
 class Job:
+    """A job as GitLab runs it.
+
+    `config` is its mapping with `extends` merged and `default:` filled in;
+    `defaulted` names the keys `default:` supplied. `scripts` are the
+    repository scripts its items run, as (path, text).
+    """
+
     name: str
-    attrs: dict[str, tuple[str, list[str]]]
-    text: str
-    variables: dict[str, str]
+    config: dict
+    defaulted: frozenset[str]
+    global_variables: dict[str, object]
     runs: dict[str, bool] = field(default_factory=dict)
     scripts: list[tuple[str, str]] = field(default_factory=list)
-    inherits_default_before: bool = False
 
-    def full_text(self) -> str:
-        return "\n".join([self.text] + [body for _, body in self.scripts])
+    @property
+    def variables(self) -> dict[str, object]:
+        """The job's own variables, typed, merged along `extends`."""
+        return variables_of(self.config.get("variables"))
+
+    def all_variables(self) -> dict[str, object]:
+        """What the job sees: the global variables it inherits, then its own over them."""
+        return {**self.global_variables, **self.variables}
+
+    @property
+    def inherits_default_before(self) -> bool:
+        return "before_script" in self.defaulted
+
+    def script(self, with_default: bool = True) -> list[str]:
+        """The `before_script` then `script` items the job runs, decoded and flattened.
+
+        `with_default=False` leaves out a `before_script` that `default:` supplied.
+        """
+        before = [] if self.inherits_default_before and not with_default else script_items(self.config.get("before_script"))
+        return before + script_items(self.config.get("script"))
+
+    def matrix(self) -> list[dict]:
+        """The `parallel: matrix` entries."""
+        parallel = self.config.get("parallel")
+        entries = parallel.get("matrix") if isinstance(parallel, dict) else None
+        return [entry for entry in entries if isinstance(entry, dict)] if isinstance(entries, list) else []
+
+    def command_text(self) -> str:
+        """The job's own script items as one text, comment lines dropped."""
+        return "\n".join(strip_comment_lines(item) for item in self.script())
 
     def chunks(self) -> list[str]:
-        return [self.text] + [body for _, body in self.scripts]
+        """What the text rules search: the job's script items, then each repository script they run, kept apart."""
+        return [self.command_text()] + [body for _, body in self.scripts]
 
-
-def yaml_scalar(raw: str) -> str:
-    """A one-line YAML scalar's value: quotes removed, a trailing `# comment` dropped.
-
-    An unquoted decimal is read as YAML reads it, a float: `3.10` is 3.1 to
-    GitLab's parser as to PyYAML (SEOR-egfbijyi). PANDOC_VERSION is not read
-    here but by check-toolchain.R, whose `yaml_scalar()` does the same
-    (pandoc_assignments(); SEOR-xhyrogfm).
-    """
-    raw = raw.strip()
-    quoted = re.match(r"\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'", raw)
-    if quoted:
-        return unquote(quoted.group(0))
-    value = re.sub(r"\s+#.*$", "", raw)
-    if re.fullmatch(r"[-+]?\d+\.\d+", value):
-        return str(float(value))
-    return value
-
-
-def scalar_map(lines: list[str]) -> dict[str, str]:
-    out = {}
-    for line in lines:
-        m = re.match(r"\s*([\w.-]+):\s*(\S.*)$", line)
-        if m:
-            out[m.group(1)] = yaml_scalar(m.group(2))
-    return out
+    def full_text(self) -> str:
+        return "\n".join(self.chunks())
 
 
 class CI:
+    """A .gitlab-ci.yml, loaded with yaml.safe_load and resolved as GitLab resolves it.
+
+    `error` is set, and `jobs` left empty, when GitLab would refuse the file:
+    it does not load (an unknown tag such as `!reference` included), is not a
+    mapping, or an `extends` names no block, loops or nests too deep.
+    """
+
     def __init__(self, text: str, source):
         self.text = text
-        self.blocks = split_blocks(text)
         self.source = source
-        self.global_vars = scalar_map(self.blocks.get("variables", [])[1:])
-        default = children(self.blocks.get("default", ["default:"]))
-        self.default_image = default.get("image", ("", []))[0]
-        # `default: before_script` runs in every job that sets none of its own.
-        # The top-level `before_script:` is the deprecated spelling of the same.
-        self.default_before = default.get("before_script")
-        if self.default_before is None and "before_script" in self.blocks:
-            self.default_before = ("", self.blocks["before_script"][1:])
-        if "image" in self.blocks:
-            self.default_image = self.blocks["image"][0].partition(":")[2].strip()
-        workflow = children(self.blocks.get("workflow", ["workflow:"]))
-        self.workflow_rules = parse_rules(workflow["rules"][1]) if "rules" in workflow else None
-        self.anchors = {}
-        for name, lines in self.blocks.items():
-            for line in lines:
-                for anchor in re.findall(r"&([\w-]+)", line.split("#")[0]):
-                    self.anchors.setdefault(anchor, name)
-        self.jobs = {name: self.job(name) for name in self.blocks
-                     if name not in RESERVED and not name.startswith(".")}
+        self.error: str | None = None
+        self.data: dict = {}
+        self.global_vars: dict[str, object] = {}
+        self.default: dict = {}
+        self.workflow_rules: list | None = None
+        self.jobs: dict[str, Job] = {}
+        try:
+            data = yaml.safe_load(text)
+        except yaml.YAMLError as error:
+            self.error = " ".join(str(error).split())[:300]
+            return
+        if not isinstance(data, dict):
+            self.error = "its top level is not a mapping"
+            return
+        self.data = data
+        self.global_vars = variables_of(data.get("variables"))
+        default = data.get("default")
+        self.default = dict(default) if isinstance(default, dict) else {}
+        for key in LEGACY_DEFAULTS:
+            if key in data and key not in self.default:
+                self.default[key] = data[key]
+        workflow = data.get("workflow")
+        rules = workflow.get("rules") if isinstance(workflow, dict) else None
+        self.workflow_rules = rules if isinstance(rules, list) else None
+        try:
+            self.jobs = {name: self.job(name) for name, block in data.items()
+                         if isinstance(name, str) and name not in RESERVED and not name.startswith(".")
+                         and isinstance(block, dict)}
+        except CIError as error:
+            self.error = str(error)
+            self.jobs = {}
 
     def env(self, pipeline: str) -> dict[str, str]:
-        env = dict(self.global_vars)
+        env = {name: gitlab_str(value) for name, value in self.global_vars.items()}
         env.update({"CI_DEFAULT_BRANCH": "main"})
         env.update(PIPELINES[pipeline])
         return env
@@ -819,108 +849,62 @@ class CI:
             return True
         return first_match(self.workflow_rules, self.env(pipeline)) not in (None, "never")
 
-    def resolve(self, name: str, seen: set[str]) -> tuple[dict, list[str], dict[str, str]]:
-        """(attributes, text blocks, variables) of a block with its extends applied."""
-        lines = self.blocks.get(name)
-        if lines is None or name in seen:
-            return {}, [], {}
-        seen = seen | {name}
-        own = children(lines)
-        attrs: dict = {}
-        texts: list[str] = []
-        variables: dict[str, str] = {}
-        parents = list_values(*own["extends"]) if "extends" in own else []
+    def resolve(self, name: str, chain: tuple[str, ...] = ()) -> dict:
+        """A block with its `extends` merged in: parents in order, later over earlier, the block over all."""
+        if name in chain:
+            raise CIError(f"extends loops: {' -> '.join(chain + (name,))}")
+        if len(chain) > EXTENDS_DEPTH:
+            raise CIError(f"{chain[0]}: extends nests deeper than {EXTENDS_DEPTH} levels")
+        block = self.data.get(name)
+        if not isinstance(block, dict):
+            raise CIError(f"{chain[-1]} extends {name}, which .gitlab-ci.yml does not define")
+        parents = block.get("extends", [])
+        parents = [parents] if isinstance(parents, str) else parents
+        if not isinstance(parents, list) or not all(isinstance(parent, str) for parent in parents):
+            raise CIError(f"{name}: extends is neither a name nor a list of names")
+        merged: object = {}
         for parent in parents:
-            p_attrs, p_texts, p_vars = self.resolve(parent, seen)
-            attrs.update(p_attrs)
-            texts += p_texts
-            variables.update(p_vars)
-        attrs.update(own)
-        variables.update(scalar_map(own.get("variables", ("", []))[1]))
-        texts.append("\n".join(lines))
-        for anchor in re.findall(r"\*([\w-]+)", "\n".join(lines)):
-            holder = self.anchors.get(anchor)
-            if holder and holder != name:
-                texts.append("\n".join(self.blocks[holder]))
-        return attrs, texts, variables
+            merged = deep_merge(merged, self.resolve(parent, chain + (name,)))
+        return deep_merge(merged, {key: value for key, value in block.items() if key != "extends"})
 
     def job(self, name: str) -> Job:
-        attrs, texts, variables = self.resolve(name, set())
-        inherits = bool(self.default_before) and "before_script" not in attrs and self.inherits_default_before(attrs)
-        if inherits:
-            inline, lines = self.default_before
-            texts.insert(0, "\n".join(["before_script: " + inline] + lines))
-        text = "\n".join(dict.fromkeys(texts))
-        job = Job(name, attrs, text, variables, inherits_default_before=inherits)
-        rules = parse_rules(attrs["rules"][1]) if "rules" in attrs else None
-        job_when = attrs.get("when", ("on_success", []))[0] or "on_success"
+        config = self.resolve(name)
+        inherit = config.get("inherit") if isinstance(config.get("inherit"), dict) else {}
+        defaulted = set()
+        for key, value in self.default.items():
+            if key not in config and inherited(inherit.get("default", True), key):
+                config[key] = value
+                defaulted.add(key)
+        global_variables = {key: value for key, value in self.global_vars.items()
+                            if inherited(inherit.get("variables", True), key)}
+        job = Job(name, config, frozenset(defaulted), global_variables)
+        rules = config.get("rules")
+        job_when = gitlab_str(config.get("when") or "on_success")
         for pipeline in PIPELINES:
             if not self.admitted(pipeline):
                 job.runs[pipeline] = False
                 continue
-            when = first_match(rules, self.env(pipeline)) if rules is not None else job_when
+            when = first_match(rules, self.env(pipeline)) if isinstance(rules, list) else job_when
             job.runs[pipeline] = when in ("on_success", "always", "delayed")
-        job.scripts = inline_scripts(text, self.source)
+        job.scripts = inline_scripts(job.command_text(), self.source)
         return job
 
-    @staticmethod
-    def inherits_default_before(attrs: dict) -> bool:
-        """False when `inherit: default:` is false or a list without before_script."""
-        if "inherit" not in attrs:
-            return True
-        inherit = children(["inherit:"] + attrs["inherit"][1])
-        if "default" not in inherit:
-            return True
-        value = inherit["default"][0]
-        if value in ("true", "false"):
-            return value == "true"
-        return "before_script" in list_values(*inherit["default"])
-
-    def setup_text(self, job: Job) -> str:
-        """The job's effective `before_script` and `script`, `default:` left out.
-
-        Unlike `job.text`, which joins every block the job extends, this takes
-        the one `before_script` and `script` the job ends up with: its own, or
-        else the template's merged last, as GitLab replaces arrays along
-        `extends`. The anchor blocks they pull in are added.
-        """
-        parts = []
-        for key in ("before_script", "script"):
-            if key in job.attrs:
-                inline, lines = job.attrs[key]
-                parts.append("\n".join([f"{key}: {inline}"] + lines))
-        text = "\n".join(parts)
-        for anchor in dict.fromkeys(re.findall(r"\*([\w-]+)", text)):
-            holder = self.anchors.get(anchor)
-            if holder:
-                text += "\n" + "\n".join(self.blocks[holder])
-        return text
-
-    def default_before_text(self) -> str:
-        if not self.default_before:
-            return ""
-        inline, lines = self.default_before
-        return "\n".join(["before_script: " + inline] + lines)
+    def default_before(self) -> list[str]:
+        """The items of `default: before_script` (or the top-level one)."""
+        return script_items(self.default.get("before_script"))
 
     def images(self, job: Job) -> list[str]:
         """The job's image(s), expanded through parallel:matrix and variables."""
-        inline, lines = job.attrs.get("image", ("", []))
-        image = unquote(inline) if inline else ""
-        if not image:
-            name = scalar_map(lines).get("name", "")
-            image = name or self.default_image
-        image = unquote(image)
+        image = job.config.get("image")
+        if isinstance(image, dict):
+            image = image.get("name")
+        image = "" if isinstance(image, (dict, list)) else gitlab_str(image)
         matrix: dict[str, list[str]] = {}
-        if "parallel" in job.attrs:
-            plines = job.attrs["parallel"][1]
-            current = None
-            for line in plines:
-                m = re.match(r"\s*(?:- )?([A-Z_][A-Z0-9_]*):\s*(.*)$", line)
-                if m:
-                    current = m.group(1)
-                    matrix.setdefault(current, []).extend(list_values(m.group(2), []) if m.group(2) else [])
-                elif current and line.strip().startswith("- "):
-                    matrix[current].append(unquote(line.strip()[2:]))
+        for entry in job.matrix():
+            for var, values in entry.items():
+                values = values if isinstance(values, list) else [values]
+                matrix.setdefault(str(var), []).extend(gitlab_str(value) for value in values)
+        variables = {name: gitlab_str(value) for name, value in job.all_variables().items()}
         out = [image]
         for _ in range(3):
             expanded = []
@@ -929,8 +913,7 @@ class CI:
                 if not m:
                     expanded.append(img)
                     continue
-                var = m.group(1)
-                values = matrix.get(var) or [job.variables.get(var) or self.global_vars.get(var) or ""]
+                values = matrix.get(m.group(1)) or [variables.get(m.group(1), "")]
                 expanded += [img[:m.start()] + v + img[m.end():] for v in values]
             out = expanded
         return [img for img in out if img]
@@ -1040,46 +1023,6 @@ def pandoc_assignments(text: str) -> tuple[tuple[int, str], ...]:
     """(line number, value) of each PANDOC_VERSION assignment in a .gitlab-ci.yml."""
     read_pandoc_assignments([text])
     return PIN_READS[text]
-
-
-def script_entries(text: str) -> list[str]:
-    """The shell text of each list item in a YAML `before_script`/`script` text.
-
-    GitLab fails the job when an item exits non-zero. A `- |` block is one
-    item, its lines joined by newlines; a `- >` block or a plain scalar over
-    several lines is one line; a flow sequence, `script: [a, "b"]`, is an item
-    per element.
-    """
-    lines = text.splitlines()
-    entries: list[str] = []
-    i = 0
-    while i < len(lines):
-        flow = re.match(r"\s*(?:before_script|script):\s*(\[.*)$", lines[i])
-        m = re.match(r"(\s*)- (.*)$", lines[i])
-        i += 1
-        if flow:
-            seq = flow.group(1).strip()
-            while not seq.endswith("]") and i < len(lines):
-                seq += " " + lines[i].strip()
-                i += 1
-            for item in re.findall(r"\s*(\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'|[^,]+?)\s*(?:,|$)", seq[1:-1]):
-                entries.append(re.sub(r"\\(.)", r"\1", item[1:-1]) if item.startswith('"') else unquote(item))
-            continue
-        if not m:
-            continue
-        indent, head = len(m.group(1)), m.group(2).strip()
-        body = []
-        while i < len(lines) and (not lines[i].strip() or len(lines[i]) - len(lines[i].lstrip()) > indent):
-            body.append(lines[i])
-            i += 1
-        block = re.fullmatch(r"([|>])[-+]?\d*", head)
-        if block:
-            margin = min((len(line) - len(line.lstrip()) for line in body if line.strip()), default=0)
-            body = [line[margin:] for line in body]
-            entries.append("\n".join(body) if block.group(1) == "|" else " ".join(line for line in body if line))
-        else:
-            entries.append(unquote(" ".join([head] + [line.strip() for line in body if line.strip()])))
-    return entries
 
 
 class Shell:
@@ -1225,6 +1168,27 @@ def pandoc_install_state(entries: list[str]) -> str:
     return best
 
 
+# A PANDOC_VERSION assignment where sh reads one, as a command, on the Shell
+# mask: at the start of a line, after `;`, `&&`, `||`, `(`, `{`, `then`,
+# `do`, `else` or `export`, or after other assignments.
+PIN_ASSIGN_RE = re.compile(r"(?:^\s*|[;&|({]\s*|\b(?:then|do|else|export)\s+)(?:\w+=\S*\s+)*PANDOC_VERSION=", re.M)
+# Where an assignment would run out of this reader's sight.
+OPAQUE_SHELL_RE = re.compile(r"\$\(|`|\beval\b|\b(?:ba|da|k|z)?sh\s+(?:-\w+\s+)*-\w*c\b")
+
+
+def pin_assignment(item: str) -> str | None:
+    """How a script item supplies PANDOC_VERSION: "assigns" when sh runs an
+    assignment of it, "opaque" when one may run where this reader cannot see
+    (under eval, sh -c, `$(...)` or backticks), else None: the name in a
+    comment, an echoed string or a word assigns nothing."""
+    shell = Shell(item)
+    if PIN_ASSIGN_RE.search(shell.mask):
+        return "assigns"
+    if "PANDOC_VERSION=" in shell.text and OPAQUE_SHELL_RE.search(shell.text):
+        return "opaque"
+    return None
+
+
 def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     """Every R job on push installs PANDOC_PIN from the release, sha256-checked.
 
@@ -1238,12 +1202,13 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     in all of .gitlab-ci.yml. A shell assignment overrides `variables:` at run
     time, so with two values the one a job installs depends on where each
     sits; two are a gap, as they are an error to check-toolchain.R. A job
-    must also see an assignment: in its variables, the global ones, or a line
-    of its setup. A `parallel: matrix` entry is a gap of its own: a pin per
-    leg is not one pin.
+    must also see the pin: a variable it gets (its own or a global one), or an
+    assignment sh runs in an item of its setup (pin_assignment()), not the name
+    in a comment or an echoed string. An assignment where this reader cannot
+    see (under `eval`, `sh -c`, `$(...)`) is not judged. A `parallel: matrix`
+    entry is a gap of its own: a pin per leg is not one pin.
     """
-    matrix = [job.name for job in ci.jobs.values()
-              if "PANDOC_VERSION" in "\n".join(job.attrs.get("parallel", ("", []))[1])]
+    matrix = [job.name for job in ci.jobs.values() if any("PANDOC_VERSION" in entry for entry in job.matrix())]
     if matrix:
         report.gap("ci", f"{', '.join(matrix)}: sets PANDOC_VERSION in `parallel: matrix`; record the pin once, in "
                          "`variables:` or the shared setup, so every leg installs the same pandoc")
@@ -1251,11 +1216,12 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     for job in on_push:
         if not R_JOB_RE.search(job.full_text()):
             continue
-        setup = ci.setup_text(job)
-        bodies = [body for _, body in inline_scripts(setup, ci.source)]
-        tokens = {t for chunk in [setup] + bodies for t in PANDOC_URL_RE.findall(chunk)}
+        setup = job.script(with_default=False)
+        commands = "\n".join(strip_comment_lines(item) for item in setup)
+        bodies = [body for _, body in inline_scripts(commands, ci.source)]
+        tokens = {t for chunk in [commands] + bodies for t in PANDOC_URL_RE.findall(chunk)}
         if not tokens:
-            if job.inherits_default_before and PANDOC_URL_RE.search(ci.default_before_text()):
+            if job.inherits_default_before and any(PANDOC_URL_RE.search(item) for item in ci.default_before()):
                 in_default.append(job.name)
             else:
                 unpinned.append(job.name)
@@ -1266,37 +1232,33 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
             continue
         candidates.append((job, setup, bodies))
     values: list[str] | None = None
-    assigning: set[str] = set()
     if candidates:
         try:
-            found = pandoc_assignments(ci.text)
-            values = list(dict.fromkeys(value for _, value in found))
-            lines = re.split(r"\r\n|\r|\n", ci.text)
-            assigning = {lines[n - 1] for n, _ in found if 0 < n <= len(lines)}
+            values = list(dict.fromkeys(value for _, value in pandoc_assignments(ci.text)))
         except ProbeError as error:
             report.skip("ci", f"the pandoc pin was not read, only the install steps (probe failed: {error})")
     if values and len(values) > 1:
         report.gap("ci", f".gitlab-ci.yml assigns PANDOC_VERSION more than once, with different values "
                          f"({', '.join(values)}); keep one pin, as check-toolchain.R requires")
-    never, unseen, other, unverified = [], [], [], {}
+    never, unseen, opaque, other, unverified = [], [], [], [], {}
     for job, setup, bodies in candidates:
         if values is not None:
-            visible = setup.splitlines()
-            if job.inherits_default_before:
-                visible += ci.default_before_text().splitlines()
+            visible = setup + (ci.default_before() if job.inherits_default_before else [])
             if not values:
                 never.append(job.name)
                 continue
-            if not ("PANDOC_VERSION" in job.variables or "PANDOC_VERSION" in ci.global_vars
-                    or any(line in assigning for line in visible)):
-                unseen.append(job.name)
-                continue
+            supplied = {pin_assignment(item) for item in visible}
+            if "PANDOC_VERSION" not in job.all_variables() and "assigns" not in supplied:
+                if "opaque" not in supplied:
+                    unseen.append(job.name)
+                    continue
+                opaque.append(job.name)
             if len(values) > 1:
                 continue
             if values[0] != PANDOC_PIN:
                 other.append(job.name)
                 continue
-        state = max([pandoc_install_state(script_entries(setup))] + [pandoc_install_state([body]) for body in bodies],
+        state = max([pandoc_install_state(setup)] + [pandoc_install_state([body]) for body in bodies],
                     key=INSTALL_STATES.index)
         if state != "installed":
             unverified.setdefault(state, []).append(job.name)
@@ -1315,6 +1277,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     if unseen:
         report.gap("ci", f"{', '.join(unseen)}: downloads pandoc at $PANDOC_VERSION, which neither its variables "
                          "nor its setup assign")
+    if opaque:
+        report.skip("ci", f"{', '.join(opaque)}: whether the setup assigns PANDOC_VERSION is not judged (an "
+                          "assignment under eval, sh -c, `$(...)` or backticks)")
     if other:
         report.gap("ci", f"{', '.join(other)}: pins pandoc {values[0]}, not the fleet's {PANDOC_PIN}")
     reasons = {
@@ -1777,12 +1742,45 @@ def check_description(pkg: str, source, state: State, report: Report) -> str | N
     return minor(fm.group(1))
 
 
+def switched_off(variables: dict[str, object], name: str) -> bool:
+    """Whether a variable the job gets turns an R check setting off."""
+    return name in variables and gitlab_str(variables[name]) in ("false", "FALSE", "0")
+
+
+def coverage_format(job: Job) -> object:
+    """`artifacts: reports: coverage_report: coverage_format`, or None."""
+    node: object = job.config
+    for key in ("artifacts", "reports", "coverage_report", "coverage_format"):
+        node = node.get(key) if isinstance(node, dict) else None
+    return node
+
+
+def sanitizer_flags(job: Job) -> bool:
+    """ASAN and UBSAN switched on in the job's commands, the scripts they run or its variables."""
+    text = "\n".join([job.full_text()] + [f"{name}={gitlab_str(value)}" for name, value in job.all_variables().items()])
+    return bool(re.search(r"fsanitize=address|\bASAN\b", text)
+                and re.search(r"fsanitize=[\w,]*undefined|\bUBSAN\b", text))
+
+
+def check_audit_files(source, report: Report) -> None:
+    tree = source.tree()
+    missing = [p for p in AUDIT_TEST_FILES if p not in tree]
+    if missing:
+        report.gap("ci", f"audit jobs lack seor's disposition-row shape: missing {', '.join(missing)}")
+
+
 def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) -> None:
     text = source.read(".gitlab-ci.yml")
     if text is None:
         report.gap("ci", "no .gitlab-ci.yml")
         return
     ci = CI(text, source)
+    if ci.error:
+        report.skip("ci", f"could not read .gitlab-ci.yml ({ci.error}), so none of its CI rules is judged: R CMD "
+                          "check, CRAN incoming, coverage, pages, the pandoc pin, the gates, the deep-check and "
+                          "sanitizer legs, the audit jobs and FOSSA")
+        check_audit_files(source, report)
+        return
     if not ci.admitted("push"):
         report.gap("ci", "workflow: rules admit no push to main")
     on_push = [j for j in ci.jobs.values() if j.runs["push"]]
@@ -1797,21 +1795,23 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
             report.gap("ci", "R CMD check on push is not rcmdcheck with error_on = \"warning\"")
     for job in ci.jobs.values():
         body = job.full_text()
-        if pkg != "seor" and INCOMING_OFF_RE.search(body):
+        variables = job.all_variables()
+        if pkg != "seor" and (INCOMING_OFF_RE.search(body) or switched_off(variables, "_R_CHECK_CRAN_INCOMING_")):
             report.gap("ci", f"{job.name}: turns CRAN incoming off (only seor may, ADR 0004)")
-        if pkg not in ("seor", "pslr") and INCOMING_REMOTE_OFF_RE.search(body):
+        if pkg not in ("seor", "pslr") and (INCOMING_REMOTE_OFF_RE.search(body)
+                                            or switched_off(variables, "_R_CHECK_CRAN_INCOMING_REMOTE_")):
             report.gap("ci", f"{job.name}: turns remote CRAN incoming off (only pslr is grandfathered, ADR 0004)")
 
-    coverage = [j for j in on_push if j.attrs.get("coverage", ("", []))[0]]
+    coverage = [j for j in on_push if j.config.get("coverage")]
     if not coverage:
         report.gap("ci", "no coverage job with a coverage: regex runs on a push to main")
     for job in coverage:
-        body = job.full_text()
-        if not re.search(r"coverage_format:\s*cobertura", body):
+        if coverage_format(job) != "cobertura":
             report.gap("ci", f"{job.name}: no cobertura coverage_report artifact")
-        if job.attrs.get("allow_failure", ("", []))[0] == "true":
+        if job.config.get("allow_failure") is True:
             report.gap("ci", f"{job.name}: allow_failure: true, so coverage cannot fail the pipeline")
-        thresholds = coverage_thresholds(body)
+        thresholds = coverage_thresholds("\n".join([job.full_text()] + [
+            f"{name}={gitlab_str(value)}" for name, value in job.all_variables().items()]))
         if not thresholds:
             report.gap("ci", f"{job.name}: no {COVERAGE_MIN:g}% coverage threshold")
         elif min(thresholds) < COVERAGE_MIN:
@@ -1822,7 +1822,8 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
             if not any(j.runs[kind] for j in coverage):
                 report.gap("ci", f"coverage job does not run on the {kind} schedule")
 
-    if not any(j.name == "pages" or j.attrs.get("pages", ("", []))[0] == "true" for j in on_push):
+    if not any(j.name == "pages" or j.config.get("pages") is True or isinstance(j.config.get("pages"), dict)
+               for j in on_push):
         report.gap("ci", "pages does not deploy on a push to main")
 
     check_pandoc_pin(on_push, ci, report)
@@ -1848,10 +1849,7 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
     if floor and "floor" not in roles:
         report.gap("ci", f"no deep-check leg at the declared R floor ({floor})")
     if pkg in SANITIZER_PACKAGES:
-        sanitized = [j for j in legs
-                     if any(SANITIZER_IMAGE_RE.search(i) for i in ci.images(j))
-                     or (re.search(r"fsanitize=address|\bASAN\b", j.full_text())
-                         and re.search(r"fsanitize=[\w,]*undefined|\bUBSAN\b", j.full_text()))]
+        sanitized = [j for j in legs if any(SANITIZER_IMAGE_RE.search(i) for i in ci.images(j)) or sanitizer_flags(j)]
         if not sanitized:
             report.gap("ci", "no ASAN/UBSAN sanitizer leg on the deep-check schedule")
 
@@ -1861,10 +1859,7 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
             report.gap("ci", f"no {name} job")
         elif not job.runs["dependency-audit"] or job.runs["push"] or job.runs["deep-check"]:
             report.gap("ci", f"{name} does not run only on the dependency-audit schedule")
-    tree = source.tree()
-    missing = [p for p in AUDIT_TEST_FILES if p not in tree]
-    if missing:
-        report.gap("ci", f"audit jobs lack seor's disposition-row shape: missing {', '.join(missing)}")
+    check_audit_files(source, report)
 
     if pkg in FOSSA_PACKAGES and not any(re.search(r"\bfossa analyze\b", j.full_text()) for j in ci.jobs.values()):
         report.gap("ci", "no fossa analyze job")
@@ -2035,7 +2030,8 @@ check:
 coverage:
   extends: [.r, .on-main]
   script:
-    - Rscript -e 'cov <- covr::package_coverage(); covr::to_cobertura(cov); pct <- covr::percent_coverage(cov); cat(sprintf("Coverage: %.2f%%\\n", pct)); if (pct < 95) quit(status = 1)'
+    - |
+      Rscript -e 'cov <- covr::package_coverage(); covr::to_cobertura(cov); pct <- covr::percent_coverage(cov); cat(sprintf("Coverage: %.2f%%\\n", pct)); if (pct < 95) quit(status = 1)'
   coverage: '/Coverage: (\\d+\\.\\d+)%/'
   artifacts:
     reports:
@@ -2190,13 +2186,21 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
             return Report(pkg)
         return check_repo(pkg, DictSource(files), state, fetch)
 
+    def loads(tag: str, report: Report) -> None:
+        # A fixture GitLab would refuse leaves CI not judged, and a clean
+        # report would then prove nothing: only the load-error rows want that.
+        if any("could not read .gitlab-ci.yml" in text for _, text in report.unjudged):
+            failures.append(f"{tag}: the fixture's .gitlab-ci.yml did not load: {report.unjudged}")
+
     def expect_clean(tag: str, pkg: str, files: dict, state: State, fetch=None) -> None:
         report = run(pkg, files, state, fetch)
+        loads(tag, report)
         if report.gaps:
             failures.append(f"{tag}: expected no gaps, got {report.gaps}")
 
     def expect_gap(tag: str, needle: str, pkg: str, files: dict, state: State, fetch=None) -> Report:
         report = run(pkg, files, state, fetch)
+        loads(tag, report)
         if not any(needle in text for _, text in report.gaps):
             failures.append(f"{tag}: expected a gap containing {needle!r}, got {report.gaps}")
         return report
@@ -2710,7 +2714,8 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
          (if_block(f"{dl_cmd} && {check_cmd}"), install_line)),
         ("if without an else", (if_block(f"{dl_cmd} && {check_cmd} && dpkg -i /tmp/pandoc.deb", ""),)),
         ("|| inside the if", (if_block(f"{dl_cmd} && {check_cmd} || true && dpkg -i /tmp/pandoc.deb"),)),
-        ("negated check", (f"    - {dl_cmd}\n", f"    - ! {check_cmd}\n", install_line)),
+        # Quoted: unquoted, `- ! cmd` is YAML's non-specific tag and the item is `cmd`.
+        ("negated check", (f"    - {dl_cmd}\n", f"    - '! {check_cmd}'\n", install_line)),
         # A pipeline's status is its last command's: `| tee` hides the check.
         ("check piped into tee", (f"    - {dl_cmd}\n", f"    - {check_cmd} | tee /tmp/sha.log\n", install_line)),
         ("check piped into tee inside the if",
@@ -2805,6 +2810,8 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
           "quoted # not a comment"]),
         ("a script given as one string", "job:\n  script: Rscript -e 'x'  # one item\n",
          lambda c: c.jobs["job"].script(), ["Rscript -e 'x'"]),
+        ("`- ! cmd` is YAML's non-specific tag, not a negation", "job:\n  script:\n    - ! sha256sum -c x\n    - '! true'\n",
+         lambda c: c.jobs["job"].script(), ["sha256sum -c x", "! true"]),
         ("an anchored `- &name |` item reused in a job's own list",
          ".r:\n  before_script:\n    - &pandoc |\n      echo install\n    - echo other\n"
          "check:\n  extends: .r\n  before_script:\n    - echo own\n    - *pandoc\n  script: [echo run]\n",
@@ -2903,9 +2910,11 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     # The pin reaches a job through a variable or an assignment sh runs, not a
     # mention; an assignment this reader cannot see into is not judged.
     pin_elsewhere = edit(cran, ci, "    - fossa analyze\n", "    - PANDOC_VERSION=3.10\n    - fossa analyze\n")
-    expect_gap("reader e2e: the pin only in an echoed string", "which neither its variables nor its setup assign",
-               "punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl",
-                                 "    - echo \"PANDOC_VERSION=3.10 is set in fossa\"\n    - curl"), fixture_state())
+    for echoed in ('echo "PANDOC_VERSION=3.10 is set in fossa"', 'echo "set in fossa; PANDOC_VERSION=3.10"',
+                   "echo done  # PANDOC_VERSION=3.10"):
+        expect_gap(f"reader e2e: the pin only in {echoed!r}", "which neither its variables nor its setup assign",
+                   "punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl",
+                                     f"    - {echoed}\n    - curl"), fixture_state())
     report = run("punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl",
                                    "    - eval \"PANDOC_VERSION=3.10\"\n    - curl"), fixture_state())
     if collect is None and (any("neither its variables" in t for _, t in report.gaps)
@@ -2977,6 +2986,10 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--self-test", action="store_true", help="run the offline fixtures")
     args = parser.parse_args(argv)
 
+    if yaml is None:
+        print("check-fleet-standard: PyYAML is not installed, and .gitlab-ci.yml is read with it. Install it with "
+              "`python3 -m pip install pyyaml==6.0.3`, or run the pre-commit hook, which installs it.", file=sys.stderr)
+        return 2
     if args.self_test:
         failures = self_test()
         if failures:
@@ -2999,7 +3012,12 @@ def main(argv: list[str]) -> int:
     incomplete = sum(len(r.unjudged) for r in reports)
     print(f"{total} gap(s) in {sum(1 for r in reports if r.gaps)} of {len(reports)} package(s); "
           f"{incomplete} item(s) not judged.")
-    if total:
+    return exit_status(reports)
+
+
+def exit_status(reports: list[Report]) -> int:
+    """1 on any gap; else 2 when a probe failed or a file could not be read, so the run is incomplete; else 0."""
+    if any(r.gaps for r in reports):
         return 1
     return 2 if any("probe failed" in t or "could not read" in t or "network error" in t
                     for r in reports for _, t in r.unjudged) else 0
