@@ -142,8 +142,9 @@ floor. Settings GitLab holds as keys are read as keys: `allow_failure`,
 `_R_CHECK_CRAN_INCOMING_` as typed values. What a job's commands do is read
 textually, from the `before_script` and `script` items it ends up with (a
 parent's script it replaces does not count, nor an anchor it never uses),
-with a `NAME=value` line for each variable the job sees (so `--as-cran` in
-`$ARGS` counts), and from every repository R, shell or YAML script that text
+with a `NAME=value` line for each variable those items or the scripts read
+(so `--as-cran` in `$ARGS` counts, and a variable nothing reads does not),
+and from every repository R, shell or YAML script that text
 names, each a
 separate text (two levels deep, comment lines dropped, and R stage tables'
 `default = FALSE` entries dropped, since those stages are opt-in). Python
@@ -567,7 +568,11 @@ SCRIPT_SUFFIXES = {"", ".R", ".r", ".sh", ".yml", ".yaml"}
 
 
 def inline_scripts(text: str, source, depth: int = 2, seen: set[str] | None = None) -> list[tuple[str, str]]:
-    """(path, text) for each repository script `text` names, followed `depth` levels."""
+    """(path, text) for each repository script `text` names, followed `depth` levels.
+
+    ProbeError when a named script cannot be read: a view without it would
+    judge the rules it holds as missing.
+    """
     seen = set() if seen is None else seen
     out = []
     tree = source.tree()
@@ -577,10 +582,7 @@ def inline_scripts(text: str, source, depth: int = 2, seen: set[str] | None = No
         if token == ".gitlab-ci.yml":
             continue
         seen.add(token)
-        try:
-            body = source.read(token) or ""
-        except ProbeError:
-            continue
+        body = source.read(token) or ""
         if len(body) > 400_000:
             continue
         body = strip_comment_lines(body)
@@ -701,6 +703,8 @@ def inherited(setting: object, key: str) -> bool:
     return True
 
 
+# A variable a command or script reads: `$NAME`, `${NAME…}`, or R's `Sys.getenv("NAME")`.
+VAR_READ_RE = re.compile(r"\$\{?(\w+)|Sys\.getenv\(\s*[\"'](\w+)[\"']")
 EXPR_TOKEN = re.compile(r"\s*(?:(\$\{?\w+\}?)|(\"[^\"]*\"|'[^']*')|(==|!=|=~|!~|&&|\|\||\(|\))|(null)\b)")
 
 
@@ -889,33 +893,28 @@ class Job:
         return "\n".join(strip_comment_lines(item) for item in self.script())
 
     @cached_property
-    def own_text(self) -> str:
-        """The job's script items, then a `NAME=value` line per variable it
-        sees: a flag or a script path its commands take from a variable
-        (`R CMD check $ARGS`, `Rscript $GATES`) is in its text."""
-        return "\n".join([self.command_text()] + [f"{name}={value}" for name, value in self.strings.items()])
+    def view(self) -> tuple[str, ...]:
+        """The one view every text rule searches, as separate texts: the
+        job's script items with a `NAME=value` line for each variable they
+        read, then each repository script that text names, followed two
+        levels. A variable counts when the items, a script or another
+        counted variable's value reads it (VAR_READ_RE): `R CMD check $ARGS`
+        holds ARGS's flags and `Rscript $GATES` runs GATES's script, while a
+        variable nothing reads is no command. ProbeError when a named script
+        cannot be read."""
+        commands, strings, used = self.command_text(), self.strings, set()
+        while True:
+            own = "\n".join([commands] + [f"{name}={value}" for name, value in strings.items() if name in used])
+            scripts = [body for _, body in inline_scripts(own, self.source)] if self.source is not None else []
+            reads = {a or b for text in [own] + scripts for a, b in VAR_READ_RE.findall(text)}
+            if not (reads & set(strings)) - used:
+                return (own, *scripts)
+            used |= reads & set(strings)
 
     @cached_property
-    def scripts(self) -> tuple[tuple[str, str], ...]:
-        """The repository scripts own_text names, as (path, text), followed two levels."""
-        return tuple(inline_scripts(self.own_text, self.source)) if self.source is not None else ()
-
-    @cached_property
-    def _chunks(self) -> tuple[str, ...]:
-        return (self.own_text,) + tuple(body for _, body in self.scripts)
-
-    def chunks(self) -> list[str]:
-        """The one view every text rule searches, built once: own_text, then
-        each repository script it runs, kept apart."""
-        return list(self._chunks)
-
-    @cached_property
-    def _full_text(self) -> str:
-        return "\n".join(self._chunks)
-
     def full_text(self) -> str:
-        """chunks() as one text."""
-        return self._full_text
+        """view as one text."""
+        return "\n".join(self.view)
 
 
 class CI:
@@ -1046,8 +1045,8 @@ ERROR_ON_RE = re.compile(r"error_on\s*=\s*\\?[\"']warning\\?[\"']")
 # R reads a check setting with tools:::config_val_to_logical(): lower-cased,
 # "false", "no" and "0" are off.
 R_FALSE = ("false", "no", "0")
-INCOMING_OFF_RE = re.compile(r"_R_CHECK_CRAN_INCOMING_[\"']?\s*[=:]\s*[\"']?(?i:false|no|0)\b")
-INCOMING_REMOTE_OFF_RE = re.compile(r"_R_CHECK_CRAN_INCOMING_REMOTE_[\"']?\s*[=:]\s*[\"']?(?i:false|no|0)\b")
+INCOMING_OFF_RE = re.compile(rf"_R_CHECK_CRAN_INCOMING_[\"']?\s*[=:]\s*[\"']?(?i:{'|'.join(R_FALSE)})\b")
+INCOMING_REMOTE_OFF_RE = re.compile(rf"_R_CHECK_CRAN_INCOMING_REMOTE_[\"']?\s*[=:]\s*[\"']?(?i:{'|'.join(R_FALSE)})\b")
 URL_CHECK_RE = re.compile(r"check_url_db|url_db_from_package_sources|urlchecker::url_check|\burl_check\s*\(")
 SANITIZER_IMAGE_RE = re.compile(r"-san\b|clang-asan|gcc-asan|r-debug|asan|ubsan", re.I)
 R_JOB_RE = re.compile(r"\bRscript\b|\bR CMD\b")
@@ -1517,7 +1516,7 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
                          "`variables:` or the shared setup, so every leg installs the same pandoc")
     unpinned, in_default, unrecorded, candidates = [], [], {}, []
     for job in on_push:
-        if not R_JOB_RE.search(job.full_text()):
+        if not R_JOB_RE.search(job.full_text):
             continue
         setup = job.script(with_default=False)
         commands = "\n".join(strip_comment_lines(item) for item in setup)
@@ -2061,7 +2060,7 @@ def coverage_format(job: Job) -> object:
 
 def sanitizer_flags(job: Job) -> bool:
     """ASAN and UBSAN switched on in the job's commands, the scripts they run or its variables."""
-    text = job.full_text()
+    text = job.full_text
     return bool(re.search(r"fsanitize=address|\bASAN\b", text)
                 and re.search(r"fsanitize=[\w,]*undefined|\bUBSAN\b", text))
 
@@ -2085,20 +2084,28 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
                           "sanitizer legs, the audit jobs and FOSSA", incomplete=True)
         check_audit_files(source, report)
         return
+    try:
+        for job in ci.jobs.values():
+            job.view  # noqa: B018 - read every job's scripts now, where a failed read can be reported
+    except ProbeError as error:
+        report.skip("ci", f"could not read a script the CI jobs run ({error}), so none of the CI rules is judged",
+                    incomplete=True)
+        check_audit_files(source, report)
+        return
     if not ci.admitted("push"):
         report.gap("ci", "workflow: rules admit no push to main")
     on_push = [j for j in ci.jobs.values() if j.runs["push"]]
 
-    checks = [j for j in on_push if CHECK_RE.search(j.full_text())]
+    checks = [j for j in on_push if CHECK_RE.search(j.full_text)]
     if not checks:
         report.gap("ci", "no R CMD check runs on a push to main")
     else:
-        if not any(AS_CRAN_RE.search(j.full_text()) for j in checks):
+        if not any(AS_CRAN_RE.search(j.full_text) for j in checks):
             report.gap("ci", f"R CMD check on push ({', '.join(j.name for j in checks)}) does not use --as-cran")
-        if not any(ERROR_ON_RE.search(j.full_text()) for j in checks):
+        if not any(ERROR_ON_RE.search(j.full_text) for j in checks):
             report.gap("ci", "R CMD check on push is not rcmdcheck with error_on = \"warning\"")
     for job in ci.jobs.values():
-        body = job.full_text()
+        body = job.full_text
         variables = job.all_variables()
         if pkg != "seor" and (INCOMING_OFF_RE.search(body) or switched_off(variables, "_R_CHECK_CRAN_INCOMING_")):
             report.gap("ci", f"{job.name}: turns CRAN incoming off (only seor may, ADR 0004)")
@@ -2114,7 +2121,7 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
             report.gap("ci", f"{job.name}: no cobertura coverage_report artifact")
         if job.config.get("allow_failure") is True:
             report.gap("ci", f"{job.name}: allow_failure: true, so coverage cannot fail the pipeline")
-        thresholds = coverage_thresholds(job.full_text())
+        thresholds = coverage_thresholds(job.full_text)
         if not thresholds:
             report.gap("ci", f"{job.name}: no {COVERAGE_MIN:g}% coverage threshold")
         elif min(thresholds) < COVERAGE_MIN:
@@ -2131,7 +2138,7 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
 
     check_pandoc_pin(on_push, ci, report)
 
-    chunks = [chunk for j in on_push for chunk in j.chunks()]
+    chunks = [chunk for j in on_push for chunk in j.view]
     for gate, patterns in GATES.items():
         if not any(all(p.search(chunk) for p in patterns) for chunk in chunks):
             report.gap("ci", f"no {gate} gate runs on a push to main")
@@ -2140,7 +2147,7 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
             if j.runs["deep-check"] and not j.runs["push"] and not j.runs["dependency-audit"]]
     roles: set[str] = set()
     for job in legs:
-        if CHECK_RE.search(job.full_text()):
+        if CHECK_RE.search(job.full_text):
             for image in ci.images(job):
                 if not SANITIZER_IMAGE_RE.search(image):
                     roles |= leg_roles(image, state, floor)
@@ -2164,7 +2171,7 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report) 
             report.gap("ci", f"{name} does not run only on the dependency-audit schedule")
     check_audit_files(source, report)
 
-    if pkg in FOSSA_PACKAGES and not any(re.search(r"\bfossa analyze\b", j.full_text()) for j in ci.jobs.values()):
+    if pkg in FOSSA_PACKAGES and not any(re.search(r"\bfossa analyze\b", j.full_text) for j in ci.jobs.values()):
         report.gap("ci", "no fossa analyze job")
 
 
@@ -2176,7 +2183,12 @@ def check_local_gate(source, report: Report) -> None:
     body = strip_comment_lines(text)
     # R and shell only: a Python script that merely names check_url_db (this
     # one, check-bugreports.py's docstring) runs no URL check.
-    named = [(path, s) for path, s in inline_scripts(body, source, depth=3) if Path(path).suffix in ("", ".R", ".r", ".sh")]
+    try:
+        named = [(path, s) for path, s in inline_scripts(body, source, depth=3)
+                 if Path(path).suffix in ("", ".R", ".r", ".sh")]
+    except ProbeError as error:
+        report.skip("local gate", f"could not read a script the pre-push gate runs ({error})", incomplete=True)
+        return
     scripts = [s for _, s in named]
     if not any(URL_CHECK_RE.search(chunk) for chunk in [body] + scripts):
         report.gap("local gate", "no URL check in the pre-push gate")
@@ -3137,7 +3149,7 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
          lambda c: (c.jobs["job"].script(), c.jobs["job"].variables), (["b"], {"X": "a", "Y": "b"})),
         ("a job overrides its parent's script",
          ".tpl:\n  script:\n    - R CMD check --as-cran x.tar.gz\njob:\n  extends: .tpl\n  script:\n    - echo skipped\n",
-         lambda c: (c.jobs["job"].script(), [chunk for chunk in c.jobs["job"].chunks() if "R CMD check" in chunk]),
+         lambda c: (c.jobs["job"].script(), [chunk for chunk in c.jobs["job"].view if "R CMD check" in chunk]),
          (["echo skipped"], [])),
         ("default: fills only the keys a job leaves unset", default_ci,
          lambda c: [(config_of(c, n).get("image"), config_of(c, n).get("artifacts"), c.jobs[n].script())
@@ -3191,10 +3203,14 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
          lambda c: (bool(c.error), c.jobs), (True, {})),
         ("two documents after a `spec:` header are a load error", "spec: {}\n---\na: 1\n---\njob:\n  script: [x]\n",
          lambda c: (bool(c.error), c.jobs), (True, {})),
-        # The text rules' view holds the variables a job sees, once, beside its items.
-        ("the text view holds the job's script items, then its variables",
+        # The text rules' view holds the variables a job's commands read, once,
+        # beside its items: not one nothing reads, and one another one's value reads.
+        ("the text view holds the job's script items, then the variables they read",
          "variables: {G: \"1\"}\njob:\n  variables: {ARGS: --as-cran}\n  script: [R CMD check $ARGS x.tar.gz]\n",
-         lambda c: c.jobs["job"].chunks(), ["R CMD check $ARGS x.tar.gz\nG=1\nARGS=--as-cran"]),
+         lambda c: list(c.jobs["job"].view), ["R CMD check $ARGS x.tar.gz\nARGS=--as-cran"]),
+        ("a variable read through another one's value is in the text view",
+         "variables: {B: --as-cran, C: x}\njob:\n  variables: {A: \"${B} -v\"}\n  script: [R CMD check $A x.tar.gz]\n",
+         lambda c: list(c.jobs["job"].view), ["R CMD check $A x.tar.gz\nB=--as-cran\nA=${B} -v"]),
     )
     if collect is None:
         for tag, text, probe, want in reader_cases:
@@ -3268,6 +3284,28 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
                  edit(edit(cran, ci, "    - *deps\n    - Rscript tools/gates.R\n", "    - *deps\n    - Rscript $GATES\n"),
                       ci, "gates:\n  extends: [.r, .on-main]\n",
                       "gates:\n  extends: [.r, .on-main]\n  variables:\n    GATES: tools/gates.R\n"), fixture_state())
+    # A variable nothing reads is no command: it neither supplies a flag nor
+    # makes a job an R job.
+    expect_gap("reader e2e: --as-cran only in a variable nothing reads", "does not use --as-cran", "punycoder",
+               edit(edit(cran, ci, 'rcmdcheck(args = "--as-cran", error_on = "warning")\'\ncoverage',
+                         'rcmdcheck(error_on = "warning")\'\ncoverage'),
+                    ci, "variables:\n", "variables:\n  ARGS: --as-cran\n"), fixture_state())
+    expect_clean("reader e2e: an R command in a variable nothing reads", "punycoder",
+                 edit(cran, ci, "variables:\n", "variables:\n  RUNNER_CMD: Rscript tools/gates.R\n"), fixture_state())
+    # A script a job runs that cannot be read leaves CI not judged, never a gap.
+    class Unreadable(DictSource):
+        def read(self, path: str) -> str | None:
+            if path == "tools/gates.R":
+                raise ProbeError("reading tools/gates.R: 503")
+            return super().read(path)
+
+    if collect is None:
+        report = check_repo("punycoder", Unreadable(cran), fixture_state(), None)
+        if (any(area == "ci" for area, _ in report.gaps)
+                or not any(area == "ci" and "could not read a script" in t for area, t in report.unjudged)
+                or exit_status([report]) != 2):
+            failures.append(f"reader e2e: an unreadable script a job runs: expected CI not judged and exit 2, got "
+                            f"{report.gaps} / {report.unjudged}")
     # A `spec:` header document before the config is valid GitLab.
     expect_clean("reader e2e: a `spec:` header, then the config", "punycoder",
                  dict(cran, **{ci: "spec:\n  inputs:\n    image:\n      default: rocker/r-ver:4.6.1\n---\n" + cran[ci]}),
