@@ -101,9 +101,9 @@ WHAT IT CHECKS, by section of the standard.
   judged by its last command. The download saves the release to FILE with
   curl or wget, the check reads a pinned digest line naming FILE (from
   echo or printf on stdin, or a here-string), paths compared as whole
-  words, and the download has a time limit: curl
-  `--max-time` or `-m`, wget `--timeout` with `--tries` of 5 or fewer, or
-  `timeout`. The install counts in the `before_script` or `script` the job
+  words, and the download has a time limit: curl `--max-time` or `-m`,
+  with `--retry-max-time` and `--retry-delay` if it retries, or `timeout`
+  around either. The install counts in the `before_script` or `script` the job
   ends up with (its own, else the template's that GitLab merges last), not in
   `default:`, which also reaches jobs on images without dpkg or curl; a pin
   found only there is reported, to move into the template.
@@ -1176,17 +1176,19 @@ DIGEST_LINE_RE = r"(?:(?<![\w$])[0-9a-fA-F]{64}|\$\w+)[ \t]+\*?"
 # substitution that could compute the digest from the file itself.
 DIGEST_WRITER_RE = re.compile(r"(?:echo|printf)(?:\s|$)")
 # A download with no time limit hangs on a stalled CDN instead of failing into
-# the warn fallback. Every pattern of the tool must match; a limit of 0 means
-# none to curl, wget and timeout(1) alike. curl `--max-time`/`-m` (bundled
-# too, `-fsSLm 300`) bounds an attempt, and its `--retry` count is finite.
-# wget's `--timeout`/`--read-timeout`/`-T` bounds one try, but wget tries 20
-# times by default, waiting between tries, and `--tries=0` is forever, so a
-# limit counts only with `--tries` of 5 or fewer: about the ceiling of seor's
-# curl (4 attempts of 120 s).
+# the warn fallback (download_bounded()). A limit of 0 means none to curl and
+# timeout(1) alike. curl `--max-time`/`-m` (bundled too, `-fsSLm 300`) bounds
+# one attempt; a `--retry` count above 0 adds attempts and waits between
+# them, a server's Retry-After included, so it needs both `--retry-max-time`
+# and `--retry-delay` above 0. No count bounds a Retry-After wait, so none is
+# capped. A `--retry` not literally 0 (`$N`) counts as above 0. wget has no
+# such limit: `--timeout`/`--read-timeout`/`-T` bound idle time, not the
+# download, so only timeout(1) bounds it.
 DOWNLOAD_BOUND_RE = {
-    "curl": (re.compile(r"(?:^|\s)(?:--max-time(?:\s+|=)|-[A-Za-z]*m\s*)0*[1-9]"),),
-    "wget": (re.compile(r"(?:^|\s)(?:--(?:read-)?timeout(?:\s+|=)|-[A-Za-z]*T\s*)0*[1-9]"),
-             re.compile(r"(?:^|\s)(?:--tries(?:\s+|=)|-[A-Za-z]*t\s*)0*[1-5](?![\d.])")),
+    "curl": re.compile(r"(?:^|\s)(?:--max-time(?:\s+|=)|-[A-Za-z]*m\s*)0*[1-9]"),
+    "retry": re.compile(r"(?:^|\s)--retry(?:\s+|=)(?!0*(?:[\s;&|)]|$))"),
+    "retry limits": (re.compile(r"(?:^|\s)--retry-max-time(?:\s+|=)0*[1-9]"),
+                     re.compile(r"(?:^|\s)--retry-delay(?:\s+|=)0*[1-9]")),
 }
 # `timeout 300 curl …` bounds the whole download, retries included.
 TIMEOUT_WRAPPER_RE = re.compile(
@@ -1356,7 +1358,14 @@ def check_reads(step: Shell, path: str) -> bool:
 
 
 def download_bounded(tool: str, command: str) -> bool:
-    return bool(TIMEOUT_WRAPPER_RE.search(command)) or all(p.search(command) for p in DOWNLOAD_BOUND_RE[tool])
+    """Whether the download has a time limit: under timeout(1), or curl with
+    `--max-time` and, when it retries, `--retry-max-time` and `--retry-delay`."""
+    if TIMEOUT_WRAPPER_RE.search(command):
+        return True
+    if tool != "curl" or not DOWNLOAD_BOUND_RE["curl"].search(command):
+        return False
+    return (not DOWNLOAD_BOUND_RE["retry"].search(command)
+            or all(p.search(command) for p in DOWNLOAD_BOUND_RE["retry limits"]))
 
 
 INSTALL_STATES = ("noncanonical", "unbounded", "installed")
@@ -1509,7 +1518,7 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
       for redirect in ("> /tmp/pandoc.deb", "2>/dev/null > /tmp/pandoc.deb", "&>/dev/null >/tmp/pandoc.deb",
                        "2>&1 >/tmp/pandoc.deb", ">| /tmp/pandoc.deb")),
     # Time limits: timeout(1) and a bundled -m bound the download; wget's
-    # --timeout bounds one try, and it tries 20 times by default (0: forever).
+    # --timeout and --tries do not (only timeout(1) bounds wget).
     ("no time limit", [PANDOC_CASE_DL.replace("--max-time 120 ", ""), PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
      "unbounded"),
     ("a zero time limit", [PANDOC_CASE_DL.replace("--max-time 120", "--max-time 0"), PANDOC_CASE_CHECK,
@@ -1519,13 +1528,13 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
     *((f"download bounded: {bounded[:30]!r}", [bounded, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed")
       for bounded in (f"timeout 300 curl -fsSL --retry 3 -o /tmp/pandoc.deb {PANDOC_CASE_URL}",
                       f"curl -fsSLm 300 -o /tmp/pandoc.deb {PANDOC_CASE_URL}",
-                      f"timeout -k 10 5m wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}",
-                      f"wget -q -T 60 -t 3 -O /tmp/pandoc.deb {PANDOC_CASE_URL}")),
+                      f"timeout -k 10 5m wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}")),
     *((f"download unbounded: {unbounded[:40]!r}", [unbounded, PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "unbounded")
       for unbounded in (f"timeout 0 curl -fsSL -o /tmp/pandoc.deb {PANDOC_CASE_URL}",
                         f"wget -q --timeout=60 -O /tmp/pandoc.deb {PANDOC_CASE_URL}",
                         f"wget -q --timeout=60 --tries=0 -O /tmp/pandoc.deb {PANDOC_CASE_URL}",
-                        f"wget -q --timeout=60 --tries=20 -O /tmp/pandoc.deb {PANDOC_CASE_URL}")),
+                        f"wget -q --timeout=60 --tries=20 -O /tmp/pandoc.deb {PANDOC_CASE_URL}",
+                        f"wget -q -T 60 -t 3 -O /tmp/pandoc.deb {PANDOC_CASE_URL}")),
     # SEOR-ltseyxpe. A digest computed from the file itself checks nothing: the
     # check names FILE, or reads it from the digest line fed to it.
     ("self-referential digest",
@@ -1584,30 +1593,27 @@ PANDOC_INSTALL_CASES: tuple[tuple[str, list[str], str], ...] = (
       "  if true; then echo ok; else echo no; fi\nfi\n"], "noncanonical"),
     # A block in a function's body runs only if the function is called.
     ("the block in a function's body", [f"install_pandoc() {{ {PANDOC_CASE_ONE_LINE}; }}"], "noncanonical"),
-    # OPEN (SEOR-ltseyxpe item 3, flagged): today's verdict, which the standard
-    # does not settle. curl's --max-time bounds one attempt, and nothing caps
-    # --retry here.
+    # SEOR-ltseyxpe. curl's --max-time bounds one attempt: a --retry above 0
+    # needs --retry-max-time and --retry-delay above 0 too, whatever its
+    # count. wget's --timeout and --tries bound no download: only timeout(1).
     ("curl with --max-time and an uncapped --retry",
      [f"curl -fsSL --retry 100 --max-time 300 -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK,
-      PANDOC_CASE_DPKG], "installed"),
-    # PINNED (SEOR-ltseyxpe): today's verdicts, before curl's --retry needs
-    # --retry-max-time and --retry-delay and wget needs timeout(1). Rows
-    # marked `today` flip with that change.
+      PANDOC_CASE_DPKG], "unbounded"),
     *((f"download time limit: {flags!r}",
        [f"curl -fsSL {flags} -o /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], want)
-      for flags, want in (("--retry 3 --retry-delay 5 --max-time 120", "installed"),  # today
-                          ("--retry 3 --retry-max-time 300 --max-time 120", "installed"),  # today
+      for flags, want in (("--retry 3 --retry-delay 5 --max-time 120", "unbounded"),
+                          ("--retry 3 --retry-max-time 300 --max-time 120", "unbounded"),
                           ("--retry 3 --retry-delay 5 --retry-max-time 300 --max-time 120", "installed"),
                           ("--retry 0 --max-time 120", "installed"),
                           ("--retry=3 --retry-delay=5 --retry-max-time=300 --max-time=120", "installed"),
-                          ("--retry=3 --retry-max-time=300 --max-time=120", "installed"),  # today
-                          ("--retry 3 --retry-delay 5 --retry-max-time 0 --max-time 120", "installed"),  # today
-                          ("--retry 3 --retry-delay 0 --retry-max-time 300 --max-time 120", "installed"),  # today
-                          ("--retry $RETRIES --max-time 120", "installed"),  # today
+                          ("--retry=3 --retry-max-time=300 --max-time=120", "unbounded"),
+                          ("--retry 3 --retry-delay 5 --retry-max-time 0 --max-time 120", "unbounded"),
+                          ("--retry 3 --retry-delay 0 --retry-max-time 300 --max-time 120", "unbounded"),
+                          ("--retry $RETRIES --max-time 120", "unbounded"),
                           ("--retry 100 --retry-delay 5 --retry-max-time 300 --max-time 120", "installed"))),
     ("wget with --timeout and a few --tries",
      [f"wget -q --timeout 30 --tries 3 -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG],
-     "installed"),  # today
+     "unbounded"),
     ("wget under timeout(1)",
      [f"timeout 300 wget -q -O /tmp/pandoc.deb {PANDOC_CASE_URL}", PANDOC_CASE_CHECK, PANDOC_CASE_DPKG], "installed"),
 )
@@ -1948,9 +1954,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
                         "time limit> && <sha256sum -c of FILE> && dpkg -i FILE; then ...; else <warn>; fi` in one "
                         "script item, or the download, the `sha256sum -c` and the `dpkg -i` as three script items in "
                         "that order, each one command or pipeline (design/fleet-standard.md)",
-        "unbounded": f"downloads pandoc {PANDOC_PIN} with no time limit (curl --max-time, wget --timeout with "
-                     "--tries of 5 or fewer, or timeout(1)), so a stalled download hangs the job instead of "
-                     "reaching the warn fallback",
+        "unbounded": f"downloads pandoc {PANDOC_PIN} with no time limit (curl --max-time, with --retry-max-time "
+                     "and --retry-delay when it retries, or timeout(1) around curl or wget), so a stalled "
+                     "download hangs the job instead of reaching the warn fallback",
     }
     for state, names in unverified.items():
         report.gap("ci", f"{', '.join(names)}: {reasons[state]}")
