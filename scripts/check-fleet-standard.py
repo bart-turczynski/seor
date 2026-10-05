@@ -2487,6 +2487,18 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
         ".gitlab/merge_request_templates/Default.md": "x\n",
     })
     files.update({path: "x\n" for path in LOGO_FILES})
+    # The keywords logo-metadata.py writes from the DESCRIPTION above, spelled
+    # out rather than built here, in its two bags (the RDF block's and the XMP
+    # packet's).
+    subject = ("<dc:subject><rdf:Bag><rdf:li>R</rdf:li><rdf:li>rstats</rdf:li><rdf:li>R package</rdf:li>"
+               "<rdf:li>punycode</rdf:li><rdf:li>idna</rdf:li><rdf:li>idn</rdf:li><rdf:li>unicode</rdf:li>"
+               "<rdf:li>domain-names</rdf:li></rdf:Bag></dc:subject>")
+    files["man/figures/logo.svg"] = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">\n<metadata>\n'
+        f"<rdf:RDF><cc:Work>\n{subject}\n</cc:Work></rdf:RDF>\n"
+        f'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description>\n{subject}\n'
+        "</rdf:Description></rdf:RDF></x:xmpmeta>\n</metadata>\n<rect width=\"10\" height=\"10\"/>\n</svg>\n"
+    )
     files.update({path: "x\n" for path in AUDIT_TEST_FILES})
     return files
 
@@ -2738,6 +2750,11 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
     no_svg = dict(cran)
     del no_svg["man/figures/logo.svg"]
     expect_gap("no logo.svg", "missing man/figures/logo.svg", "punycoder", no_svg, fixture_state())
+    # Logo keywords (SEOR-uwpnkqnb): logo.svg's dc:subject bags against the
+    # list logo-metadata.py builds from DESCRIPTION's X-schema.org-keywords.
+    expect_clean("logo keywords match DESCRIPTION", "punycoder", cran, fixture_state())
+    expect_clean("a case-only duplicate tag in DESCRIPTION is not drift", "punycoder",
+                 edit(cran, "DESCRIPTION", "domain-names\n", "domain-names, IDNA\n"), fixture_state())
     expect_gap("no level-1 heading", "the first heading is not", "punycoder",
                edit(cran, "README.Rmd", fixture_h1("punycoder") + "\n", ""), fixture_state())
     expect_clean("single-quoted logo src", "punycoder",
