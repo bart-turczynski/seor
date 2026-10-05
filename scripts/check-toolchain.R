@@ -482,8 +482,11 @@ pandoc_set_res <- c(
     "(?:^\\s*(?:-\\s+)?|[;&|({\\[,]\\s*|\\b(?:then|do|else|export|env|",
     "readonly|local|declare|typeset)\\s+(?:-\\w+\\s+)*)",
     # Lazy, so an assignment before it is not swallowed as a prefix and
-    # each one on the line counts.
-    "(?:\\w+=\\S*\\s+)*?[\"']?PANDOC_VERSION\\+?="
+    # each one on the line counts. A quoted value may hold spaces: in
+    # `X="a b" PANDOC_VERSION=3.9` the reader stops at the space, and this
+    # must not.
+    "(?:\\w+=(?:\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|\\S)*\\s+)*?",
+    "[\"']?PANDOC_VERSION\\+?="
   ),
   default = "\\$\\{PANDOC_VERSION:="
 )
@@ -1032,6 +1035,14 @@ self_test <- function() {
       "    - PANDOC_VERSION=3.10; PANDOC_VERSION=${OLD}"
     ),
     `env prefix` = c("  script:", "    - env PANDOC_VERSION=3.9 sh install.sh"),
+    `after a quoted value with a space` = c(
+      "  script:",
+      "    - export X=\"a b\" PANDOC_VERSION=3.9"
+    ),
+    `prefix after a quoted value` = c(
+      "  script:",
+      "    - X='a b' PANDOC_VERSION=3.9 sh install.sh"
+    ),
     `local` = c("  script:", "    - f() { local PANDOC_VERSION=3.9; }"),
     `assign default` = c("  script:", "    - : \"${PANDOC_VERSION:=3.9}\"")
   )
@@ -1093,7 +1104,7 @@ self_test <- function() {
 
   paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 75 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, 77 pandoc cases)\n"
   )
 }
 

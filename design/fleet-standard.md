@@ -231,7 +231,11 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   `check-toolchain.R` does not read: it stops and asks for the plain scalar.
   It stops the same way when `.gitlab-ci.yml` uses `$PANDOC_VERSION` but
   holds no pin it reads: one under a merge key, in a flow mapping, behind a
-  quoted key or in an included file.
+  quoted key or in an included file. And it stops on any `PANDOC_VERSION`
+  value set in a spelling it does not read, whatever pin it reads elsewhere
+  and even when the value matches: a job's `variables: {PANDOC_VERSION:
+  "3.9"}` beside a global `PANDOC_VERSION: "3.10"` would read as 3.10 while
+  that job installs 3.9.
 - The `.deb` comes from the pandoc GitHub release
   (`https://github.com/jgm/pandoc/releases/download/<version>/pandoc-<version>-1-<arch>.deb`),
   and `sha256sum -c` checks it against the release's published digest before
