@@ -58,6 +58,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import io
+import os
 import re
 import struct
 import sys
@@ -180,19 +182,38 @@ def logo_keywords(pkg: str, text: str, where: str) -> list[str]:
     return keywords
 
 
+def as_text(data: bytes, encoding: str) -> str:
+    """`data` decoded as Path.read_text() decodes a file: the same codec and
+    universal newlines, so CRLF and CR line breaks become LF."""
+    return io.TextIOWrapper(io.BytesIO(data), encoding=encoding).read()
+
+
+def known_package(pkg: str) -> None:
+    if pkg not in PACKAGES:
+        sys.exit(f"logo-metadata: unknown package {pkg!r}; known: {', '.join(PACKAGES)}")
+
+
+def description_text(data: bytes, where: str) -> str:
+    """A DESCRIPTION's bytes as text; `where` names it in the refusal."""
+    try:
+        return as_text(data, "utf-8-sig")  # tolerate a BOM
+    except UnicodeDecodeError:
+        sys.exit(f"logo-metadata: {where} is not UTF-8; the fleet's DESCRIPTIONs are")
+
+
+def read_description(path: Path) -> str:
+    if not path.is_file():
+        sys.exit(f"logo-metadata: no DESCRIPTION at {path}; name one with --description")
+    return description_text(path.read_bytes(), str(path))
+
+
 class Facts:
-    def __init__(self, pkg: str, description: Path) -> None:
-        if pkg not in PACKAGES:
-            sys.exit(f"logo-metadata: unknown package {pkg!r}; known: {', '.join(PACKAGES)}")
-        if not description.is_file():
-            sys.exit(f"logo-metadata: no DESCRIPTION at {description}; name one with --description")
+    def __init__(self, pkg: str, description: str, where: str = "DESCRIPTION") -> None:
+        """`description` is the DESCRIPTION's text; `where` names it in refusals."""
+        known_package(pkg)
         self.pkg = pkg
         self.what, doi = PACKAGES[pkg]
-        try:
-            text = description.read_text(encoding="utf-8-sig")  # tolerate a BOM
-        except UnicodeDecodeError:
-            sys.exit(f"logo-metadata: {description} is not UTF-8; the fleet's DESCRIPTIONs are")
-        self.keywords = logo_keywords(pkg, text, str(description))
+        self.keywords = logo_keywords(pkg, description, where)
         self.a11y = f"Logo of the {pkg} library for R, white text on a black background"
         self.ext_descr = (
             f"A black hexagon with a thin white border. The package name, {pkg}, "
@@ -395,21 +416,22 @@ ROOT = re.compile(r"<svg\b[^>]*>", re.S)
 ATTR = re.compile(r"""([\w:.-]+)\s*=\s*("[^"]*"|'[^']*')""")
 
 
-def rewrite_svg(f: Facts, path: Path) -> str:
-    text = path.read_text(encoding="utf-8")
+def rewrite_svg(f: Facts, name: str, data: bytes, where: str) -> str:
+    """The SVG `name` with `data` as its bytes; `where` names it in refusals."""
+    text = as_text(data, "utf-8")
     # Drop what this script owns: every <metadata> (ours or a C2PA one), the
     # root <title> and <desc>, and the c2pa namespace declaration.
     text = re.sub(r"\s*<metadata\b.*?</metadata>", "", text, flags=re.S)
     for tag in ("title", "desc"):
         found = re.findall(rf"<{tag}\b", text)
         if len(found) > 1:
-            sys.exit(f"logo-metadata: {path} has {len(found)} <{tag}> elements; expected at most one")
+            sys.exit(f"logo-metadata: {where} has {len(found)} <{tag}> elements; expected at most one")
         text = re.sub(rf"\s*<{tag}\b[^>]*>.*?</{tag}>", "", text, flags=re.S)
     text = re.sub(r'\s+xmlns:c2pa="[^"]*"', "", text)
 
     m = ROOT.search(text)
     if not m:
-        sys.exit(f"logo-metadata: {path} has no <svg> root")
+        sys.exit(f"logo-metadata: {where} has no <svg> root")
     attrs = dict(ATTR.findall(m.group(0)))
     # version="1.1" goes: role, aria-* and lang are not SVG 1.1 attributes.
     for key in ("version", "role", "aria-labelledby", "aria-describedby", "xml:lang", "lang"):
@@ -426,8 +448,8 @@ def rewrite_svg(f: Facts, path: Path) -> str:
     head = (
         f'\n<title id="{f.pkg}-title">{esc(f.pkg)}</title>'
         f'\n<desc id="{f.pkg}-desc">{esc(f.a11y)}</desc>'
-        f'\n<metadata id="{f.pkg}-metadata">{svg_rdf(f, path.name)}\n'
-        f"{xmp_packet(f, path.name, 'image/svg+xml', wrapper=False)}\n</metadata>"
+        f'\n<metadata id="{f.pkg}-metadata">{svg_rdf(f, name)}\n'
+        f"{xmp_packet(f, name, 'image/svg+xml', wrapper=False)}\n</metadata>"
     )
     text = text[: m.start()] + root + head + text[m.end():]
     if not text.startswith("<?xml"):
@@ -523,10 +545,10 @@ def exif_block(f: Facts, name: str, width: int, height: int) -> bytes:
     return head + emit(ifd0) + emit(exif) + bytes(blobs)
 
 
-def rewrite_png(f: Facts, path: Path) -> bytes:
-    raw = path.read_bytes()
+def rewrite_png(f: Facts, name: str, raw: bytes, where: str) -> bytes:
+    """The PNG `name` with `raw` as its bytes; `where` names it in refusals."""
     if not raw.startswith(PNG_SIG):
-        sys.exit(f"logo-metadata: {path} is not a PNG")
+        sys.exit(f"logo-metadata: {where} is not a PNG")
     chunks, p = [], len(PNG_SIG)
     while p < len(raw):
         (n,) = struct.unpack(">I", raw[p:p + 4])
@@ -534,7 +556,7 @@ def rewrite_png(f: Facts, path: Path) -> bytes:
         p += 12 + n
     kinds = [k for k, _ in chunks]
     if kinds[0] != b"IHDR" or kinds[-1] != b"IEND":
-        sys.exit(f"logo-metadata: {path} does not start with IHDR and end with IEND")
+        sys.exit(f"logo-metadata: {where} does not start with IHDR and end with IEND")
     width, height = struct.unpack(">II", chunks[0][1][:8])
     kept = [(k, d) for k, d in chunks if k not in OWNED]
     first_idat = next(i for i, (k, _) in enumerate(kept) if k == b"IDAT")
@@ -552,13 +574,13 @@ def rewrite_png(f: Facts, path: Path) -> bytes:
         text_chunk("Keywords", ", ".join(f.keywords)),
         *[text_chunk("URL", u) for u in f.links],
         itxt_chunk("Description", f.a11y, LANG, "Description"),
-        itxt_chunk("XML:com.adobe.xmp", xmp_packet(f, path.name, "image/png", wrapper=True)),
+        itxt_chunk("XML:com.adobe.xmp", xmp_packet(f, name, "image/png", wrapper=True)),
     ]
     out = [PNG_SIG, chunk(*kept[0])]
     if not any(k in COLOR_CHUNKS for k in kinds):
         out.append(chunk(b"sRGB", b"\0"))  # perceptual intent
     out += [chunk(k, d) for k, d in kept[1:first_idat]]
-    out.append(chunk(b"eXIf", exif_block(f, path.name, width, height)))
+    out.append(chunk(b"eXIf", exif_block(f, name, width, height)))
     out += texts
     out += [chunk(k, d) for k, d in kept[first_idat:-1]]
     y, mo, d = (int(x) for x in METADATA_DATE.split("-"))
@@ -567,19 +589,23 @@ def rewrite_png(f: Facts, path: Path) -> bytes:
     return b"".join(out)
 
 
-def render(f: Facts, path: Path) -> bytes:
-    return rewrite_svg(f, path).encode("utf-8") if path.suffix == ".svg" else rewrite_png(f, path)
+def render(f: Facts, name: str, data: bytes, where: str) -> bytes:
+    """What this script writes for the logo file `name` whose bytes are
+    `data`; `where` names the file in refusals. It reads and writes nothing."""
+    if Path(name).suffix == ".svg":
+        return rewrite_svg(f, name, data, where).encode("utf-8")
+    return rewrite_png(f, name, data, where)
 
 
-def finalize(f: Facts, path: Path) -> bytes:
+def finalize(f: Facts, name: str, data: bytes, where: str) -> bytes:
     """Render with PLACEHOLDER as the InstanceID, hash those bytes (artwork and
     metadata), then render again with the ID that hash gives."""
-    f.iid[path.name] = PLACEHOLDER
-    draft = render(f, path)
-    f.iid[path.name] = "uuid:" + str(uuid.uuid5(FLEET_NS, "instance:" + hashlib.sha256(draft).hexdigest()))
-    if path.name == MASTER:
-        f.master = (f.document_id(MASTER), f.iid[path.name])
-    return render(f, path)
+    f.iid[name] = PLACEHOLDER
+    draft = render(f, name, data, where)
+    f.iid[name] = "uuid:" + str(uuid.uuid5(FLEET_NS, "instance:" + hashlib.sha256(draft).hexdigest()))
+    if name == MASTER:
+        f.master = (f.document_id(MASTER), f.iid[name])
+    return render(f, name, data, where)
 
 
 # The files this script handles, in the order it finalizes them: logo.svg
@@ -587,28 +613,20 @@ def finalize(f: Facts, path: Path) -> bytes:
 LOGO_NAMES = ("logo.svg", "logo.png", "logo-print.svg", "logo-480.png")
 
 
-def finalized(f: Facts, targets: list[Path]):
-    """Each target (in LOGO_NAMES order) with what this script writes for it
-    and whether that differs from the file: the --check verdict."""
-    for t in targets:
-        new = finalize(f, t)
-        yield t, new, new != t.read_bytes()
-
-
 def check_logos(pkg: str, description: bytes | str,
                 logos: dict[str, bytes]) -> tuple[dict[str, bytes | None], dict[str, str]]:
     """--check on files held in memory (the fleet checker reads them from
     GitLab or a checkout). First, for each name in `logos` it judges, what
     this script would write, or None when the file is current; second, for
-    each file it cannot judge, why. The files are written to a temporary
-    man/figures under a DESCRIPTION holding `description` (as read: bytes,
-    so a DESCRIPTION that is not UTF-8 is refused as --check refuses it),
-    and finalized as --check does, so the verdict is its verdict. Exits as
-    --check does on a DESCRIPTION it refuses, naming paths from the
-    repository root. A file it refuses or cannot parse, where --check
-    would stop, goes in the second dict; the others keep their verdicts,
-    except that the renditions are not judged without logo.svg's, since
-    they name it. Results are cached by input."""
+    each file it cannot judge, why. `description` is the DESCRIPTION as
+    read (bytes, so one that is not UTF-8 is refused as --check refuses
+    it), and each file is finalized as --check does, so the verdict is its
+    verdict. It reads and writes no file. Exits as --check does on a
+    DESCRIPTION it refuses, naming files from the repository root
+    (DESCRIPTION, man/figures/<name>). A file it refuses or cannot parse,
+    where --check would stop, goes in the second dict; the others keep
+    their verdicts, except that the renditions are not judged without
+    logo.svg's, since they name it. Results are cached by input."""
     unknown = sorted(set(logos) - set(LOGO_NAMES))
     if unknown:
         raise ValueError(f"not a logo file name: {', '.join(unknown)}")
@@ -621,39 +639,28 @@ def check_logos(pkg: str, description: bytes | str,
 @lru_cache(maxsize=64)
 def _check_logos(pkg: str, description: bytes, logos: tuple[tuple[str, bytes], ...]):
     files = dict(logos)
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp).resolve()  # as default_description() resolves it
-        figures = root / "man" / "figures"
-        figures.mkdir(parents=True)
-        (root / "DESCRIPTION").write_bytes(description)
-        targets = []
-        for name in LOGO_NAMES:
-            if name in files:
-                (figures / name).write_bytes(files[name])
-                targets.append(figures / name)
+    known_package(pkg)  # before the DESCRIPTION is decoded, as in main()
+    f = Facts(pkg, description_text(description, "DESCRIPTION"), "DESCRIPTION")
+    verdicts: dict[str, bytes | None] = {}
+    broken: dict[str, str] = {}
+    for name in (n for n in LOGO_NAMES if n in files):
+        if MASTER in broken:
+            broken[name] = f"not judged without {MASTER}'s verdict"
+            continue
+        where = f"man/figures/{name}"
         try:
-            f = Facts(pkg, default_description(figures))
+            new = finalize(f, name, files[name], where)
         except SystemExit as refusal:
-            raise SystemExit(str(refusal.code).replace(f"{root}/", "")) from None
-        verdicts: dict[str, bytes | None] = {}
-        broken: dict[str, str] = {}
-        for t in targets:
-            if MASTER in broken:
-                broken[t.name] = f"not judged without {MASTER}'s verdict"
-                continue
-            try:
-                new = finalize(f, t)
-            except SystemExit as refusal:
-                broken[t.name] = str(refusal.code).replace(f"{root}/", "")
-                continue
-            # A truncated PNG or a non-UTF-8 SVG, named by type and reason:
-            # a UnicodeDecodeError's repr would carry the whole file.
-            except (ValueError, LookupError, StopIteration, struct.error) as error:
-                broken[t.name] = (f"logo-metadata: man/figures/{t.name} cannot be parsed "
-                                  f"({type(error).__name__}: {str(error)[:200]})")
-                continue
-            verdicts[t.name] = None if new == t.read_bytes() else new
-        return tuple(verdicts.items()), tuple(broken.items())
+            broken[name] = str(refusal.code)
+            continue
+        # A truncated PNG or a non-UTF-8 SVG, named by type and reason:
+        # a UnicodeDecodeError's repr would carry the whole file.
+        except (ValueError, LookupError, StopIteration, struct.error) as error:
+            broken[name] = (f"logo-metadata: {where} cannot be parsed "
+                            f"({type(error).__name__}: {str(error)[:200]})")
+            continue
+        verdicts[name] = None if new == files[name] else new
+    return tuple(verdicts.items()), tuple(broken.items())
 
 
 # --- self-test ---------------------------------------------------------------
@@ -759,14 +766,86 @@ def self_test() -> int:
         (figures / "logo.svg").write_text(TEST_SVG, encoding="utf-8")
         (figures / "logo.png").write_bytes(test_png())
         expect("default DESCRIPTION", default_description(figures) == (root / "DESCRIPTION").resolve())
-        expect("no DESCRIPTION refused", exits_with(lambda: Facts("seor", root / "nowhere"), "no DESCRIPTION"))
-        f = Facts("seor", default_description(figures))
-        svg = finalize(f, figures / "logo.svg")
-        png = finalize(f, figures / "logo.png")
+        expect("no DESCRIPTION refused", exits_with(lambda: read_description(root / "nowhere"), "no DESCRIPTION"))
+        f = Facts("seor", read_description(default_description(figures)))
+        svg = finalize(f, "logo.svg", (figures / "logo.svg").read_bytes(), "logo.svg")
+        png = finalize(f, "logo.png", (figures / "logo.png").read_bytes(), "logo.png")
         expect("SVG dc:subject (RDF and XMP)", read_svg_subjects(svg.decode("utf-8")) == [want, want])
         text, xp = read_png_keywords(png)
         expect("PNG Keywords", text == ", ".join(want))
         expect("EXIF XPKeywords", xp == "; ".join(want))
+
+    # check_logos(), the fleet checker's --check on files in memory: its
+    # verdict is finalize()'s, and its messages name files from the root.
+    desc = description("seor", SEOR_TAGS)
+    stale = {"logo.svg": TEST_SVG.encode("utf-8"), "logo.png": test_png()}
+
+    def judge(files: dict[str, bytes], text: bytes | str = desc, pkg: str = "seor"):
+        return check_logos(pkg, text, files)
+
+    expect("check_logos: drift is what finalize writes", judge(stale) == ({"logo.svg": svg, "logo.png": png}, {}))
+    expect("check_logos: current files",
+           judge({"logo.svg": svg, "logo.png": png}) == ({"logo.svg": None, "logo.png": None}, {}))
+    expect("check_logos: DESCRIPTION as bytes", judge(stale, desc.encode("utf-8")) == judge(stale))
+    expect("check_logos: DESCRIPTION with a byte-order mark", judge(stale, "\ufeff" + desc) == judge(stale))
+    for eol in ("\r\n", "\r"):
+        expect(f"check_logos: DESCRIPTION lines ending {eol!r}",
+               judge(stale, desc.replace("\n", eol)) == judge(stale))
+    # An unknown package is named before the DESCRIPTION is decoded, as main() names it.
+    expect("check_logos: unknown package before a DESCRIPTION it refuses",
+           exits_with(lambda: judge(stale, b"\xff", "nopkg"), "unknown package 'nopkg'"))
+    # An SVG is read as text, so its line breaks are translated as read_text() does.
+    for eol in ("\r\n", "\r"):
+        expect(f"check_logos: SVG lines ending {eol!r}",
+               judge({"logo.svg": TEST_SVG.replace("\n", eol).encode("utf-8")}) == ({"logo.svg": svg}, {}))
+    try:
+        judge({"logo.jpg": b""})
+        expect("check_logos: a file name it does not handle", False)
+    except ValueError as e:
+        expect("check_logos: a file name it does not handle", str(e) == "not a logo file name: logo.jpg")
+    expect("check_logos: a logo.png that is no PNG", judge(dict(stale, **{"logo.png": b"x\n"}))
+           == ({"logo.svg": svg}, {"logo.png": "logo-metadata: man/figures/logo.png is not a PNG"}))
+    two = b'<svg xmlns="http://www.w3.org/2000/svg"><title>a</title><title>b</title></svg>'
+    expect("check_logos: an SVG it refuses", judge({"logo.svg": two})
+           == ({}, {"logo.svg": "logo-metadata: man/figures/logo.svg has 2 <title> elements; expected at most one"}))
+    verdicts, broken = judge(dict(stale, **{"logo.svg": stale["logo.svg"] + b"\xff"}))
+    expect("check_logos: an SVG that is not UTF-8", verdicts == {} and broken["logo.svg"].startswith(
+        "logo-metadata: man/figures/logo.svg cannot be parsed (UnicodeDecodeError: 'utf-8' codec can't decode"))
+    expect("check_logos: no rendition judged without logo.svg",
+           broken["logo.png"] == "not judged without logo.svg's verdict")
+    expect("check_logos: a DESCRIPTION that is not UTF-8",
+           exits_with(lambda: judge(stale, desc.encode("utf-8") + b"Note: caf\xe9\n"),
+                      "logo-metadata: DESCRIPTION is not UTF-8;"))
+    expect("check_logos: a DESCRIPTION it refuses",
+           exits_with(lambda: judge(stale, description("ssrfr", "ssrf, SEO"), "ssrfr"),
+                      "logo-metadata: DESCRIPTION tags ssrfr 'SEO'"))
+
+    # check_logos() is pure: it creates, writes and removes no file or
+    # directory. An audit hook (it cannot be removed, so it is switched off
+    # after) records every such call while uncached inputs are judged.
+    touched: list[str] = []
+    watching = [True]
+    writing = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
+
+    def audit(event: str, args: tuple) -> None:
+        # Python caching the bytecode of a module first imported in the
+        # window (mkdir, open and rename under __pycache__) is not check_logos.
+        if not watching[0] or (args and "__pycache__" in str(args[0])):
+            return
+        if event == "open" and isinstance(args[2], int) and args[2] & writing:
+            touched.append(f"open {args[0]}")
+        elif event in ("os.mkdir", "os.remove", "os.rmdir", "os.rename", "os.link", "os.symlink", "os.truncate"):
+            touched.append(f"{event} {args[0]}")
+
+    sys.addaudithook(audit)
+    try:
+        _check_logos.cache_clear()
+        judge(stale)
+        judge(dict(stale, **{"logo.png": b"x\n"}))
+        exits_with(lambda: judge(stale, description("ssrfr", "ssrf, SEO"), "ssrfr"), "SEO")
+    finally:
+        watching[0] = False
+    expect(f"check_logos creates no files ({'; '.join(touched)})", not touched)
     print("logo-metadata self-test: OK")
     return 0
 
@@ -792,10 +871,14 @@ def main() -> int:
     targets = [args.figures / n for n in LOGO_NAMES if (args.figures / n).exists()]
     if not any(t.name in ("logo.svg", "logo.png") for t in targets):
         sys.exit(f"logo-metadata: no logo.svg or logo.png in {args.figures}")
-    f = Facts(args.pkg, args.description or default_description(args.figures))
+    known_package(args.pkg)  # an unknown package is named before a missing DESCRIPTION
+    path = args.description or default_description(args.figures)
+    f = Facts(args.pkg, read_description(path), str(path))
     drift = 0
-    for t, new, drifted in finalized(f, targets):
-        if not drifted:
+    for t in targets:  # in LOGO_NAMES order
+        old = t.read_bytes()
+        new = finalize(f, t.name, old, str(t))
+        if new == old:
             print(f"current  {t}")
             continue
         drift += 1
