@@ -74,14 +74,17 @@ back with the next construct nobody had rebuilt.
      decoded, with nested lists flattened as GitLab flattens them;
    - its variables as typed values, so settings such as
      `_R_CHECK_CRAN_INCOMING_` are checked directly;
-   - `job.chunks()`, the one searchable view every text rule reads
+   - `job.view`, the one searchable view every text rule reads
      (`--as-cran`, `error_on`, `rcmdcheck`, CRAN incoming, coverage
      thresholds, sanitizer flags, `fossa analyze`, the gates), built once
      per job. It holds the job's effective script items with a `NAME=value`
-     line for each variable the job sees, then the repository scripts that
-     text names, each a separate text. So a flag or a script path passed
-     through a variable counts, and a parent's script the job replaces and
-     an anchor it never uses are not in it.
+     line for each variable they read (`$NAME`, `${NAME}`,
+     `Sys.getenv("NAME")`, in the items, the scripts or another counted
+     variable's value), then the repository scripts that text names, each a
+     separate text. So a flag or a script path passed through a variable
+     counts, and a variable nothing reads, a parent's script the job
+     replaces and an anchor it never uses are not in it. A script it names
+     that cannot be read leaves the CI rules not judged.
 
    Raw YAML text is no longer an input to any rule. The one exception is the
    pandoc pin, which `check-toolchain.R --pandoc-assignments` reads from the
@@ -93,10 +96,11 @@ back with the next construct nobody had rebuilt.
    meaning: a variable, or an assignment in a setup item that the commands
    after it see (plain, or through `export`, `readonly`, `declare` or
    `typeset`), must supply the pin. The name in a comment, an echoed string
-   or a here-document does not count, nor an assignment in a subshell, a
-   pipeline stage or a command's prefix. An assignment under `eval`, `sh -c`,
-   `$(...)`, backticks or a function's `local` is not judged, and leaves the
-   run incomplete.
+   or a here-document does not count, nor an assignment anywhere in a
+   subshell, in a pipeline stage or a backgrounded compound command, or in a
+   command's prefix. An assignment in a function's body, or under `eval`,
+   `sh -c`, `$(...)` or backticks, is not judged, and leaves the run
+   incomplete.
 5. **The dependency is pinned and lives in the hook.** The
    `check-fleet-standard-self-test` pre-commit hook is `language: python` with
    `additional_dependencies: [pyyaml==6.0.3]`, and its entry runs that

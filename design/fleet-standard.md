@@ -534,9 +534,11 @@ What it checks, section by section:
   sees, and never in a `parallel: matrix` entry, which pins per leg. An
   assignment is one sh would run and keep for the commands after it, plain
   or through `export`, `readonly`, `declare` or `typeset`: not the same text
-  in a comment, an `echo` or a here-document, and not one in a subshell, a
-  pipeline stage or a command's prefix (`PANDOC_VERSION=3.10 curl …`). One
-  under `eval`, `sh -c`, `$(...)` or a function's `local` is not judged. The pin is read by running `check-toolchain.R`'s own reader
+  in a comment, an `echo` or a here-document, and not one anywhere in a
+  subshell, a pipeline stage or a backgrounded compound command, or in a
+  command's prefix (`PANDOC_VERSION=3.10 curl …`). One in a function's body,
+  or under `eval`, `sh -c` or `$(...)`, is not judged. The pin is read by
+  running `check-toolchain.R`'s own reader
   (`--pandoc-assignments`), so the two scripts cannot disagree on it; that
   needs `Rscript`. The install has one of the two shapes above, read from the
   job's script items (a `- |` block, a folded or plain item, or a flow

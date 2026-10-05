@@ -1514,9 +1514,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
     assignment in an item of its setup that the commands after it see
     (pin_assignment()): not the name in a comment, an echoed string or a
     here-document, nor an assignment in a subshell, a pipeline stage or a
-    command's prefix. An assignment where this reader cannot see (under
-    `eval`, `sh -c`, `$(...)`, or a function's `local`) is not judged, and
-    leaves the run incomplete. A `parallel: matrix` entry is a gap of its
+    command's prefix. An assignment where this reader cannot see (in a
+    function's body, or under `eval`, `sh -c` or `$(...)`) is not judged,
+    and leaves the run incomplete. A `parallel: matrix` entry is a gap of its
     own: a pin per leg is not one pin.
     """
     matrix = [job.name for job in ci.jobs.values() if any("PANDOC_VERSION" in entry for entry in job.matrix())]
@@ -1590,7 +1590,7 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report) -> None:
                          "nor its setup assign")
     if opaque:
         report.skip("ci", f"{', '.join(opaque)}: whether the setup assigns PANDOC_VERSION is not judged (an "
-                          "assignment under eval, sh -c, `$(...)` or backticks, or a function's `local`)",
+                          "assignment in a function's body, or under eval, sh -c, `$(...)` or backticks)",
                     incomplete=True)
     if other:
         report.gap("ci", f"{', '.join(other)}: pins pandoc {values[0]}, not the fleet's {PANDOC_PIN}")
