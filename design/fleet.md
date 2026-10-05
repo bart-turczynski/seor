@@ -33,7 +33,7 @@ as the written source.
   seor issue never restates implementation detail.
 - Non-coding work (articles, analyses, brainstorming) is `[PARKED]`.
 - A fleet request asks for a `NEWS.md` bullet only when the change meets the
-  NEWS rule in `AGENTS_LANG.md` (SEOR-adoxkmgi). A housekeeping sweep (logos,
+  NEWS rule in seor's `AGENTS_LANG.md` (SEOR-adoxkmgi). A housekeeping sweep (logos,
   metadata, README, CI, gates) says "No NEWS bullet".
 
 ### Session ownership

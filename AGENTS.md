@@ -4,7 +4,7 @@ R metapackage, tidyverse-style: `library(seor)` installs and attaches the member
 - Branch pushes and MRs start no pipeline. The pre-push hook is the only branch gate; an empty pipeline list is not a pass.
 - Gate red on an untouched tree: check toolchain drift first, `Rscript scripts/check-toolchain.R`.
 - `man/` and `NAMESPACE` are generated from roxygen in `R/`.
-- NEWS.md: one terse line per change a package user notices; never logos, metadata, CI, gates or housekeeping (AGENTS_LANG.md). Top heading matches `DESCRIPTION` Version.
+- NEWS.md: one terse line per change a package user notices; never logos, image or repository metadata, CI, gates or housekeeping (AGENTS_LANG.md). Top heading: the `DESCRIPTION` Version or "(development version)".
 - `_scratch/`, `tmp/`, `.fp/` stay uncommitted. `docs/` is pkgdown output, never design docs.
 - Git follows the `agent-workflow` skill. fp tracks issues; status changes stay decoupled from git (the `fp` skill's decoupling reference).
 

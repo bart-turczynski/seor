@@ -133,8 +133,9 @@ unexpected (e.g. misspelled) arguments — for instance with
   repository metadata (`codemeta.json`, `CITATION.cff`, keywords), CI, gates,
   lint sets, spelling sweeps, agent files or other housekeeping, and no
   `## Internal` section to hold them.
-- The `news-version` workflow checks that the top `NEWS.md` heading matches
-  the `DESCRIPTION` `Version`, so bump both together.
+- The `news-version` gate (`scripts/gates.sh`) passes when the top `NEWS.md`
+  heading reads "(development version)" or names the `DESCRIPTION`
+  `Version`; the release checklist renames it at release.
 - Never hand-edit generated files: `NAMESPACE` or anything under `man/`. Edit
   the roxygen source in `R/` and re-run `devtools::document()`.
 
