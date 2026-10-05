@@ -152,6 +152,17 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # check-docs-drift.R is the one copy every package vendors
+      # (SEOR-lyciowif). Its self-test runs it on throwaway fixture packages
+      # (docs missing, changed, stale and in sync, with git on PATH and
+      # without), only when the script changes; it takes seconds.
+      - id: check-docs-drift-self-test
+        name: check-docs-drift self-test
+        entry: Rscript scripts/check-docs-drift.R --self-test
+        language: system
+        pass_filenames: false
+        files: ^scripts/check-docs-drift\.R$
+        stages: [pre-push]
       # A stale .Rd is still valid .Rd, so lint, spelling and R CMD check all
       # pass it. This regenerates man/, NAMESPACE and DESCRIPTION with the
       # pinned roxygen2 in a `git archive` export of the commit being pushed
