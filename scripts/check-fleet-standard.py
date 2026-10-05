@@ -4311,11 +4311,11 @@ def self_test() -> list[str]:
                      edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"{item}    - curl"),
                      fixture_state())
     # The builtins that assign in the current shell count as assignments: the
-    # job sees the pin, and check-toolchain.R reads it (SEOR-bqroclcz).
+    # job sees the pin, and check-toolchain.R reads it (SEOR-bqroclcz). It is
+    # the file's only pin, so a reader that skipped it would find none.
     for spelling in ("readonly PANDOC_VERSION=3.10", "declare -x PANDOC_VERSION=3.10", "typeset -x PANDOC_VERSION=3.10"):
         expect_clean(f"reader e2e: the pin assigned with {spelling.split()[0]}", "punycoder",
-                     edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl", f"    - {spelling}\n    - curl"),
-                     fixture_state())
+                     edit(cran, ci, "    - PANDOC_VERSION=3.10\n", f"    - {spelling}\n"), fixture_state())
     # An assignment this reader cannot see into is not judged, and the run is incomplete.
     # A function's body runs only if the function is called: not judged, `local` or not.
     # check-toolchain.R stops on `local` and `eval`, settings it does not
