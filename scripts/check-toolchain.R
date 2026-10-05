@@ -602,6 +602,16 @@ self_test <- function() {
   for (line in c("  PANDOC_VERSION: 3.10", "  PANDOC_VERSION: 3.10 # pinned")) {
     expect(paste("pandoc-pin:", line), identical(pinned_pandoc(line), "3.1"))
   }
+  # GitLab's expanded form, a `value:` mapping, block or flow. TODAY'S
+  # VERDICT, pinned before it is fixed (SEOR-zvnrwaku): the block form is no
+  # pin, and the flow form is read as the version `{value: "3.10"}`.
+  block <- c("  PANDOC_VERSION:", "    value: \"3.10\"")
+  expect("pandoc-expanded-block-today", !length(pinned_pandoc(block)))
+  flow <- "  PANDOC_VERSION: {value: \"3.10\"}"
+  expect(
+    "pandoc-expanded-flow-today",
+    identical(pinned_pandoc(flow), "{value: \"3.10\"}")
+  )
   expect("pandoc-match", !length(check_pandoc("3.10", "3.10")))
   expect("pandoc-unpinned", !length(check_pandoc(character(), "3.11")))
   flagged("pandoc-skew", check_pandoc("3.10", "3.11"), "rmarkdown uses 3.11")
@@ -663,7 +673,7 @@ self_test <- function() {
 
   paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 27 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, 29 pandoc cases)\n"
   )
 }
 
