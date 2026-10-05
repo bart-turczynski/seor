@@ -29,6 +29,7 @@ Triage, in order:
 ## Checks
 
 - `python3 scripts/check-design.py` — pre-push. ADR immutability, ARCHITECTURE coverage, frontmatter.
+- `sh scripts/docs-drift.sh` — pre-push (`docs-drift` hook). Regenerates `man/`, `NAMESPACE` and `DESCRIPTION` with the pinned roxygen2 in a throwaway `git archive` export of the commit being pushed, and fails on any difference. It checks commits, not the working tree: commit a roxygen edit before it counts. Fix: `devtools::document()`, then commit.
 - `sh scripts/clean-tmp.sh` — empties `tmp/`.
 - Warns: `_scratch/` untouched 3+ days. Graduate or delete.
 

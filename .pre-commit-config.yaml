@@ -151,6 +151,21 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # A stale .Rd is still valid .Rd, so lint, spelling and R CMD check all
+      # pass it. This regenerates man/, NAMESPACE and DESCRIPTION with the
+      # pinned roxygen2 in a `git archive` export of the commit being pushed
+      # (PRE_COMMIT_TO_REF, else HEAD) and fails on any difference
+      # (SEOR-nwfmerhu). The hooks around it read the working tree and this one
+      # the pushed commit, so on a push of another branch their verdicts can
+      # differ. Local only: CI's `gates` job installs roxygen2 unpinned (8.1.0),
+      # not the 8.0.0 pin (SEOR-fhrisfpt).
+      - id: docs-drift
+        name: generated docs match roxygen (man/, NAMESPACE, DESCRIPTION)
+        entry: sh scripts/docs-drift.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       # Fetches every URL the package declares (DESCRIPTION, man/,
       # inst/CITATION, NEWS, README.md) and fails on a dead one: `verify` runs
       # --as-cran with CRAN incoming OFF (ADR 0004), so nothing else in this
