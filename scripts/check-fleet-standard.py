@@ -2750,6 +2750,180 @@ def self_test_cases(collect: list[str] | None) -> list[str]:
         expect_gap(f"download unbounded: {unbounded_dl[:40]!r}", unbounded, "punycoder",
                    setup(f"    - {unbounded_dl}\n", check_line, install_line), fixture_state())
 
+    # The CI reader's case table (SEOR-oznwzhem). Every expected value is what
+    # GitLab makes of the YAML, written down from the YAML 1.1 spec and GitLab's
+    # documented semantics (`extends` deep-merges mappings and replaces arrays,
+    # `default:` fills only the keys a job leaves unset, script lists flatten),
+    # never what an earlier reader printed. First the reader itself, then the
+    # same cases end to end.
+    def ci_of(text: str) -> CI:
+        return CI(text, DictSource({ci: text}))
+
+    def config_of(c: CI, name: str) -> dict:
+        return c.jobs[name].config
+
+    deep_merge_ci = (
+        ".base:\n  image:\n    name: rocker/r-ver:4.5.3\n  variables: {A: \"1\", B: \"1\"}\n"
+        "  artifacts:\n    reports:\n      coverage_report:\n        coverage_format: cobertura\n"
+        "  script: [echo base]\n  rules:\n    - if: $CI_COMMIT_TAG\n"
+        ".mid:\n  extends: .base\n  variables: {B: \"2\"}\n"
+        "  artifacts:\n    reports:\n      coverage_report:\n        path: cobertura.xml\n"
+        "job:\n  extends: .mid\n  image:\n    entrypoint: [\"\"]\n  variables:\n    C: \"3\"\n"
+        "  rules:\n    - when: manual\n")
+    default_ci = (
+        "default:\n  image: rocker/r-ver:4.6.1\n  before_script: [echo default]\n  artifacts:\n    paths: [a]\n"
+        "bare:\n  script: [echo x]\n"
+        "own:\n  before_script: [echo own]\n  artifacts:\n    expire_in: 1 week\n  script: [echo y]\n"
+        "picky:\n  inherit:\n    default: [image]\n  script: [echo z]\n"
+        "none:\n  inherit:\n    default: false\n  script: [echo w]\n")
+    reader_cases: tuple[tuple[str, str, Callable[[CI], object], object], ...] = (
+        ("extends with a trailing comment keeps its template",
+         ".r:\n  image: rocker/r-ver:4.6.1\n  script:\n    - Rscript -e 'rcmdcheck::rcmdcheck()'\n"
+         "check:\n  extends: .r  # template\n",
+         lambda c: (config_of(c, "check").get("image"), c.jobs["check"].script()),
+         ("rocker/r-ver:4.6.1", ["Rscript -e 'rcmdcheck::rcmdcheck()'"])),
+        ("when with a trailing comment runs on push", "job:\n  script: [x]\n  when: on_success # explicit\n",
+         lambda c: c.jobs["job"].runs["push"], True),
+        ("a quoted image with a trailing comment", "job:\n  image: \"rocker/r-ver:4.5\" # newer\n  script: [x]\n",
+         lambda c: c.images(c.jobs["job"]), ["rocker/r-ver:4.5"]),
+        ("allow_failure with a trailing comment is the boolean",
+         "job:\n  script: [x]\n  allow_failure: true # soft for now\n",
+         lambda c: config_of(c, "job").get("allow_failure"), True),
+        ("YAML 1.1: an unquoted 3.10 is the float 3.1",
+         "variables:\n  A: 3.10\n  B: \"3.10\"\njob:\n  script: [x]\n  variables:\n    C: 4.10\n",
+         lambda c: (c.global_vars, c.jobs["job"].variables, c.env("push")["A"]),
+         ({"A": 3.1, "B": "3.10"}, {"C": 4.1}, "3.1")),
+        ("YAML 1.1 booleans, and the string GitLab hands the job",
+         "variables:\n  A: true\n  B: \"true\"\n  C: yes\n  D: off\n  E: False\njob:\n  script: [x]\n",
+         lambda c: (c.global_vars, [c.env("push")[k] for k in "ABCDE"]),
+         ({"A": True, "B": "true", "C": True, "D": False, "E": False}, ["true", "true", "true", "false", "false"])),
+        ("flow and block lists, `- |` and `- >`",
+         "job:\n  before_script: [echo a, \"echo b\", 'echo ''c''']\n  script:\n    - |\n      line one\n      line two\n"
+         "    - >\n      folded one\n      folded two\n    - plain\n      continued\n    - \"quoted # not a comment\"\n",
+         lambda c: c.jobs["job"].script(),
+         ["echo a", "echo b", "echo 'c'", "line one\nline two\n", "folded one folded two\n", "plain continued",
+          "quoted # not a comment"]),
+        ("a script given as one string", "job:\n  script: Rscript -e 'x'  # one item\n",
+         lambda c: c.jobs["job"].script(), ["Rscript -e 'x'"]),
+        ("an anchored `- &name |` item reused in a job's own list",
+         ".r:\n  before_script:\n    - &pandoc |\n      echo install\n    - echo other\n"
+         "check:\n  extends: .r\n  before_script:\n    - echo own\n    - *pandoc\n  script: [echo run]\n",
+         lambda c: c.jobs["check"].script(), ["echo own", "echo install\n", "echo run"]),
+        ("nested script lists flatten, aliases included",
+         ".deps: &deps\n  - echo one\n  - echo two\njob:\n  script:\n    - *deps\n    - echo three\n"
+         "    - [echo four, [echo five]]\n",
+         lambda c: c.jobs["job"].script(), ["echo one", "echo two", "echo three", "echo four", "echo five"]),
+        ("YAML merge keys come from YAML",
+         ".tpl: &tpl\n  image: rocker/r-ver:4.5.3\n  script: [echo tpl]\njob:\n  <<: *tpl\n  script: [echo own]\n",
+         lambda c: (config_of(c, "job").get("image"), c.jobs["job"].script()), ("rocker/r-ver:4.5.3", ["echo own"])),
+        ("nested extends deep-merges mappings and replaces arrays", deep_merge_ci,
+         lambda c: (config_of(c, "job").get("image"), c.jobs["job"].variables, config_of(c, "job").get("artifacts"),
+                    c.jobs["job"].script(), config_of(c, "job").get("rules")),
+         ({"name": "rocker/r-ver:4.5.3", "entrypoint": [""]}, {"A": "1", "B": "2", "C": "3"},
+          {"reports": {"coverage_report": {"coverage_format": "cobertura", "path": "cobertura.xml"}}},
+          ["echo base"], [{"when": "manual"}])),
+        ("several parents: the later one wins, mappings still merge",
+         ".a:\n  script: [a]\n  variables: {X: a, Y: a}\n.b:\n  script: [b]\n  variables: {Y: b}\njob:\n  extends: [.a, .b]\n",
+         lambda c: (c.jobs["job"].script(), c.jobs["job"].variables), (["b"], {"X": "a", "Y": "b"})),
+        ("a job overrides its parent's script",
+         ".tpl:\n  script:\n    - R CMD check --as-cran x.tar.gz\njob:\n  extends: .tpl\n  script:\n    - echo skipped\n",
+         lambda c: (c.jobs["job"].script(), [chunk for chunk in c.jobs["job"].chunks() if "R CMD check" in chunk]),
+         (["echo skipped"], [])),
+        ("default: fills only the keys a job leaves unset", default_ci,
+         lambda c: [(config_of(c, n).get("image"), config_of(c, n).get("artifacts"), c.jobs[n].script())
+                    for n in ("bare", "own", "picky", "none")],
+         [("rocker/r-ver:4.6.1", {"paths": ["a"]}, ["echo default", "echo x"]),
+          ("rocker/r-ver:4.6.1", {"expire_in": "1 week"}, ["echo own", "echo y"]),
+          ("rocker/r-ver:4.6.1", None, ["echo z"]),
+          (None, None, ["echo w"])]),
+        ("an unknown tag is a load error", "job:\n  script:\n    - !reference [.r, script]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("a syntax error is a load error", "job:\n  script: [x\n", lambda c: (bool(c.error), c.jobs), (True, {})),
+        ("extends naming no block is a load error", "job:\n  extends: .missing\n  script: [x]\n",
+         lambda c: (bool(c.error), c.jobs), (True, {})),
+    )
+    if collect is None:
+        for tag, text, probe, want in reader_cases:
+            try:
+                got = probe(ci_of(text))
+            except Exception as error:  # noqa: BLE001 - a reader that raises fails the row
+                got = f"raised {type(error).__name__}: {error}"
+            if got != want:
+                failures.append(f"reader: {tag}: expected {want!r}, got {got!r}")
+
+    check_tpl = edit(cran, ci, "check:\n  extends: [.r, .on-main]\n  script:\n",
+                     ".check-tpl:\n  extends: [.r, .on-main]\n  script:\n")
+    expect_clean("reader e2e: extends with a trailing comment", "punycoder",
+                 edit(check_tpl, ci, "coverage:\n  extends", "check:\n  extends: .check-tpl  # template\ncoverage:\n  extends"),
+                 fixture_state())
+    expect_gap("reader e2e: a job overrides its parent's script", "no R CMD check runs on a push to main", "punycoder",
+               edit(check_tpl, ci, "coverage:\n  extends",
+                    "check:\n  extends: .check-tpl\n  script:\n    - echo skipped\ncoverage:\n  extends"), fixture_state())
+    expect_clean("reader e2e: when with a trailing comment", "punycoder",
+                 edit(cran, ci, "pages:\n  extends: [.r, .on-main]\n",
+                      "pages:\n  extends: .r\n  rules:\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH\n"
+                      "      when: on_success # explicit\n"), fixture_state())
+    rcmdcheck_item = "  script:\n    - Rscript -e 'rcmdcheck::rcmdcheck(args = \"--as-cran\", error_on = \"warning\")'\n"
+    no_oldrel = edit(cran, ci, '"4.6.1", "4.5.3", "devel"', '"4.6.1", "devel"')
+    expect_clean("reader e2e: a quoted image with a trailing comment", "punycoder",
+                 edit(no_oldrel, ci, "sanitizers:\n", "\"check:oldrel\":\n  extends: .deep\n"
+                      "  image: \"rocker/r-ver:4.5.3\" # oldrel\n" + rcmdcheck_item + "sanitizers:\n"), fixture_state())
+    expect_clean("reader e2e: an image mapping deep-merged along extends", "punycoder",
+                 edit(no_oldrel, ci, "sanitizers:\n", ".oldrel-image:\n  image:\n    name: \"rocker/r-ver:4.5.3\"\n"
+                      "\"check:oldrel\":\n  extends: [.deep, .oldrel-image]\n  image:\n    entrypoint: [\"\"]\n"
+                      + rcmdcheck_item + "sanitizers:\n"), fixture_state())
+    expect_gap("reader e2e: allow_failure with a trailing comment", "coverage: allow_failure: true", "punycoder",
+               edit(cran, ci, "coverage:\n  extends: [.r, .on-main]\n",
+                    "coverage:\n  extends: [.r, .on-main]\n  allow_failure: true # soft for now\n"), fixture_state())
+    no_floor = edit(cran, ci, ', "4.1.3"]', "]")
+    floor_job = "floor:\n  extends: .deep\n  image: rocker/r-ver:$R_FLOOR\n  variables:\n    R_FLOOR: {}\n" + rcmdcheck_item
+    expect_clean("reader e2e: an unquoted 4.10 is R 4.1", "punycoder",
+                 edit(no_floor, ci, "sanitizers:\n", floor_job.format("4.10") + "sanitizers:\n"), fixture_state())
+    expect_gap("reader e2e: a quoted \"4.10\" is not R 4.1", "no deep-check leg at the declared R floor (4.1)", "punycoder",
+               edit(no_floor, ci, "sanitizers:\n", floor_job.format('"4.10"') + "sanitizers:\n"), fixture_state())
+    expect_gap("reader e2e: incoming off as a boolean job variable", "check: turns CRAN incoming off", "punycoder",
+               edit(cran, ci, "check:\n  extends: [.r, .on-main]\n",
+                    "check:\n  extends: [.r, .on-main]\n  variables:\n    _R_CHECK_CRAN_INCOMING_: false\n"), fixture_state())
+    expect_gap("reader e2e: incoming off as a global variable", "check: turns CRAN incoming off", "punycoder",
+               edit(cran, ci, "variables:\n", "variables:\n  _R_CHECK_CRAN_INCOMING_: \"FALSE\"\n"), fixture_state())
+    cov_artifacts = ("  artifacts:\n    reports:\n      coverage_report:\n        coverage_format: cobertura\n"
+                     "        path: cobertura.xml\n")
+    in_default_artifacts = edit(edit(cran, ci, cov_artifacts, ""), ci, "default:\n  image: rocker/r-ver:4.6.1\n",
+                                "default:\n  image: rocker/r-ver:4.6.1\n" + cov_artifacts)
+    expect_clean("reader e2e: default: artifacts reach a job that sets none", "punycoder", in_default_artifacts,
+                 fixture_state())
+    expect_gap("reader e2e: default: does not merge into a job's own artifacts", "coverage: no cobertura", "punycoder",
+               edit(in_default_artifacts, ci, "  coverage: '/Coverage",
+                    "  artifacts:\n    paths: [cobertura.xml]\n  coverage: '/Coverage"), fixture_state())
+    anchored = edit(cran, ci, pin_lines, seor_shape.replace("    - |\n", "    - &pandoc |\n", 1))
+    expect_clean("reader e2e: an anchored install item reused in a job's own before_script", "punycoder",
+                 edit(anchored, ci, "check:\n  extends: [.r, .on-main]\n",
+                      "check:\n  extends: [.r, .on-main]\n  before_script:\n    - PANDOC_VERSION=3.10\n    - *pandoc\n"),
+                 fixture_state())
+    # The pin reaches a job through a variable or an assignment sh runs, not a
+    # mention; an assignment this reader cannot see into is not judged.
+    pin_elsewhere = edit(cran, ci, "    - fossa analyze\n", "    - PANDOC_VERSION=3.10\n    - fossa analyze\n")
+    expect_gap("reader e2e: the pin only in an echoed string", "which neither its variables nor its setup assign",
+               "punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl",
+                                 "    - echo \"PANDOC_VERSION=3.10 is set in fossa\"\n    - curl"), fixture_state())
+    report = run("punycoder", edit(pin_elsewhere, ci, "    - PANDOC_VERSION=3.10\n    - curl",
+                                   "    - eval \"PANDOC_VERSION=3.10\"\n    - curl"), fixture_state())
+    if collect is None and (any("neither its variables" in t for _, t in report.gaps)
+                            or not any("PANDOC_VERSION" in t and "not judged" in t for _, t in report.unjudged)):
+        failures.append(f"reader e2e: an assignment under eval: expected not judged, got {report.gaps} / {report.unjudged}")
+    # A load error: CI is not judged, the run is incomplete, the other areas are still judged.
+    for tag, old, new in (("an unknown tag", "    - *deps\n    - Rscript tools/gates.R\n",
+                           "    - !reference [.deps]\n    - Rscript tools/gates.R\n"),
+                          ("a syntax error", "stages: [check, deploy, audit]\n", "stages: [check, deploy, audit\n")):
+        broken = edit(no_arch, ci, old, new)
+        report = run("punycoder", broken, fixture_state())
+        if collect is None and (any(area == "ci" for area, _ in report.gaps)
+                                or not any("missing ARCHITECTURE.md" in t for _, t in report.gaps)
+                                or not any(area == "ci" and "could not read .gitlab-ci.yml" in t
+                                           for area, t in report.unjudged)
+                                or exit_status([Report("x", unjudged=report.unjudged)]) != 2):
+            failures.append(f"reader e2e: {tag}: expected CI not judged and exit 2, got {report.gaps} / {report.unjudged}")
+
     # NEGATIVE: local gate and schedules.
     expect_gap("URL check missing", "no URL check", "punycoder",
                dict(cran, **{"tools/verify.R": "# check_url_db is only mentioned in a comment\nx <- 1\n"}), fixture_state())
