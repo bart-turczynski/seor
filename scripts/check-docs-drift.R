@@ -7,8 +7,8 @@
 # package vendors it byte for byte as scripts/check-docs-drift.R; seor's
 # scripts/check-fleet-standard.py reports a copy that differs (line endings
 # aside) as a local-gate gap (SEOR-lyciowif). Change it here, then copy it
-# out. Nothing in it is specific to one repository: whatever differs between
-# packages is an argument, and the caller decides where it runs.
+# out. Nothing in it is specific to one repository: its one argument is the
+# package directory, and the caller decides where it runs.
 #
 # Why this exists: a stale .Rd is still perfectly valid .Rd, so nothing else in
 # a verify gate can see it. lintr::lint_package() reads R/ and never looks at
@@ -41,9 +41,9 @@
 # HEAD), never the working tree: that judges the commit rather than the disk,
 # so a fix left uncommitted does not rescue a stale committed man/, and an
 # untracked man/*.Rd does not count as present. A CI job may run it in place,
-# in a checkout of the pushed commit that nothing else uses. In seor the
-# callers are scripts/docs-drift.sh (the pre-push hook) and the `docs-drift`
-# CI job; each package's gate calls it the same way.
+# in a checkout of the pushed commit that nothing else uses. Its callers
+# belong to each package: a pre-push wrapper that makes the export, and a CI
+# job where one installs the pinned roxygen2.
 #
 # git is used for one thing: printing the line diff on drift (git diff
 # --no-index, which works outside a repository). The verdict itself -- which
@@ -78,8 +78,9 @@
 # drift -- and when the installed version is the newer one, roxygen2 quietly
 # rewrites Config/roxygen2/version in DESCRIPTION, which is itself an unwanted
 # diff. Refusing to guess keeps every failure this gate reports a real one.
-# scripts/check-toolchain.R checks the same pin earlier in the pre-push chain;
-# repeating it here keeps the script safe to run on its own, as CI does.
+# A package's pre-push chain may check the same pin earlier (the fleet's
+# scripts/check-toolchain.R does); repeating it here keeps the script safe to
+# run on its own, as CI does.
 roxygen_pin <- function(pkg) {
   desc_path <- file.path(pkg, "DESCRIPTION")
   if (!file.exists(desc_path)) {
@@ -215,7 +216,8 @@ compare_docs <- function(committed_dir, committed_files, root) {
 # 1 just means "differences found", so the non-zero status warning is
 # expected. Without git the file list is the whole report, and this says so
 # rather than printing nothing, or a "git: not found" line posing as a diff.
-docs_diff <- function(committed_dir, regenerated_dir, git = Sys.which("git")) {
+docs_diff <- function(committed_dir, regenerated_dir) {
+  git <- Sys.which("git")
   if (!nzchar(git[[1L]])) {
     return(paste0(
       "(git not found on PATH, so the line diff is omitted; the files listed ",
@@ -415,6 +417,15 @@ self_test <- function() {
     stats::setNames(ok, tag)
   }
   has <- function(res, lines) all(lines %in% res$out)
+  # A section of the report: its header, then exactly these files, in order.
+  lists <- function(res, lines) {
+    at <- match(lines[[1L]], res$out)
+    after <- res$out[at + length(lines)]
+    !is.na(at) &&
+      identical(res$out[seq(at, length.out = length(lines))], lines) &&
+      (is.na(after) || !startsWith(after, "    "))
+  }
+  with_git <- nzchar(Sys.which("git")[[1L]])
   no_diff <- function(res) !any(startsWith(res$out, "diff --git "))
   says_omitted <- function(res) {
     any(grepl("diff is omitted", res$out, fixed = TRUE))
@@ -453,7 +464,7 @@ self_test <- function() {
     check(
       "added, no git: exits 1, NAMESPACE and man/f.Rd listed as missing",
       added$status == 1L &&
-        has(
+        lists(
           added,
           c(
             "  Missing (roxygen would create) (2):",
@@ -472,33 +483,41 @@ self_test <- function() {
     check(
       "changed, no git: exits 1, man/f.Rd listed as changed",
       changed$status == 1L &&
-        has(changed, c("  Changed (1):", "    man/f.Rd")) &&
+        lists(changed, c("  Changed (1):", "    man/f.Rd")) &&
         no_diff(changed),
       changed
     ),
     check(
       "deleted, no git: exits 1, man/g.Rd listed as stale",
       stale$status == 1L &&
-        has(stale, c("  Stale (roxygen would delete) (1):", "    man/g.Rd")) &&
+        lists(
+          stale,
+          c("  Stale (roxygen would delete) (1):", "    man/g.Rd")
+        ) &&
         no_diff(stale),
       stale
     ),
-    check(
-      "changed, with git: exits 1 and prints the diff, paths package-relative",
-      nzchar(Sys.which("git")[[1L]]) &&
+    # Only where git is on PATH; a machine without it skips this one case.
+    if (!with_git) {
+      message("skip  changed, with git: no git on PATH")
+    },
+    if (with_git) {
+      check(
+        "changed, with git: exits 1, prints the diff, paths package-relative",
         changed_git$status == 1L &&
-        has(
-          changed_git,
-          c(
-            "--- committed/man/f.Rd",
-            "+++ regenerated/man/f.Rd",
-            "-\\title{Add one}",
-            "+\\title{Add two}"
-          )
-        ) &&
-        !says_omitted(changed_git),
-      changed_git
-    ),
+          has(
+            changed_git,
+            c(
+              "--- committed/man/f.Rd",
+              "+++ regenerated/man/f.Rd",
+              "-\\title{Add one}",
+              "+\\title{Add two}"
+            )
+          ) &&
+          !says_omitted(changed_git),
+        changed_git
+      )
+    },
     check(
       "no git: each report says the diff was omitted",
       says_omitted(added) && says_omitted(changed) && says_omitted(stale),

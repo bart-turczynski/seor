@@ -2696,13 +2696,19 @@ def seor_docs_drift() -> str:
 
 
 def check_docs_drift_copy(source, report: Report) -> None:
-    """A package's scripts/check-docs-drift.R is seor's, the copy beside this
-    script: one canonical copy, vendored byte for byte (SEOR-lyciowif), its
-    repository specifics passed as arguments rather than forked in. Compared
-    as text with line endings made LF, so a local and a GitLab read agree. A
-    missing copy is a gap of its own, whatever else in the local gate runs
-    roxygen2 on an export."""
-    path = "scripts/check-docs-drift.R"
+    """A package's scripts/check-docs-drift.R is seor's: one canonical copy,
+    vendored byte for byte (SEOR-lyciowif). It takes the package directory
+    as its one argument and nothing repository-specific. A missing copy is a
+    gap of its own, whatever else in the local gate runs roxygen2 on an
+    export."""
+    check_vendored_copy(source, report, "scripts/check-docs-drift.R", seor_docs_drift, "the canonical copy")
+
+
+def check_vendored_copy(source, report: Report, path: str, seor_copy: Callable[[], str], role: str) -> None:
+    """A package's `path` is seor's copy of it (`seor_copy()`), vendored byte
+    for byte; `role` says what seor's copy is, in the gap. Compared as text
+    with line endings made LF, so a local and a GitLab read agree. A missing
+    copy is a gap of its own."""
     try:
         member = source.read(path)
     except ProbeError as error:
@@ -2712,12 +2718,12 @@ def check_docs_drift_copy(source, report: Report) -> None:
         report.gap("local gate", f"no {path}; copy seor's, which every package vendors byte for byte")
         return
     try:
-        seor = seor_docs_drift()
+        seor = seor_copy()
     except OSError as error:
         report.skip("local gate", f"{path} not compared with seor's copy ({error})", incomplete=True)
         return
     if member.replace("\r\n", "\n") != seor.replace("\r\n", "\n"):
-        report.gap("local gate", f"{path} differs from seor's, the canonical copy (it is vendored byte for byte); "
+        report.gap("local gate", f"{path} differs from seor's, {role} (it is vendored byte for byte); "
                                  f"copy seor's {path} over it")
 
 
@@ -2768,25 +2774,9 @@ def check_toolchain_copy(source, report: Report) -> None:
     """A package's scripts/check-toolchain.R is seor's, the copy beside this
     script (TOOLCHAIN_R): it is vendored byte for byte, and this script runs
     seor's copy to read the pin the package's own copy reads before a push.
-    Compared as text with line endings made LF, so a local and a GitLab read
-    agree. A missing copy is a gap of its own: the file is vendored, whatever
-    else in the local gate compares pandoc with the CI pin."""
-    try:
-        member = source.read("scripts/check-toolchain.R")
-    except ProbeError as error:
-        report.skip("local gate", f"could not read scripts/check-toolchain.R ({error})", incomplete=True)
-        return
-    if member is None:
-        report.gap("local gate", "no scripts/check-toolchain.R; copy seor's, which every package vendors byte for byte")
-        return
-    try:
-        seor = seor_toolchain()
-    except OSError as error:
-        report.skip("local gate", f"scripts/check-toolchain.R not compared with seor's copy ({error})", incomplete=True)
-        return
-    if member.replace("\r\n", "\n") != seor.replace("\r\n", "\n"):
-        report.gap("local gate", "scripts/check-toolchain.R differs from seor's, the copy this checker runs (it is "
-                                 "vendored byte for byte); copy seor's scripts/check-toolchain.R over it")
+    A missing copy is a gap of its own: the file is vendored, whatever else
+    in the local gate compares pandoc with the CI pin."""
+    check_vendored_copy(source, report, "scripts/check-toolchain.R", seor_toolchain, "the copy this checker runs")
 
 
 def check_schedules(state: State, report: Report) -> None:
@@ -4144,8 +4134,6 @@ def self_test() -> list[str]:
     # check-docs-drift.R is vendored (SEOR-lyciowif): every member carries
     # seor's copy, byte for byte. The fixture carries it.
     docs_drift = "scripts/check-docs-drift.R"
-    if cran[docs_drift] != seor_docs_drift():
-        failures.append("the fixture's check-docs-drift.R is not seor's copy")
     expect_clean("a member's check-docs-drift.R identical to seor's", "punycoder", cran, fixture_state())
     docs_drift_drifted = "scripts/check-docs-drift.R differs from seor's, the canonical copy"
     docs_drift_missing = "no scripts/check-docs-drift.R; copy seor's, which every package vendors byte for byte"
@@ -4194,8 +4182,6 @@ def self_test() -> list[str]:
     # check-toolchain.R is vendored: every member carries seor's copy, byte
     # for byte. The fixture carries it.
     toolchain = "scripts/check-toolchain.R"
-    if cran[toolchain] != seor_toolchain():
-        failures.append("the fixture's check-toolchain.R is not seor's copy")
     expect_clean("a member's check-toolchain.R identical to seor's", "punycoder", cran, fixture_state())
     drifted = "scripts/check-toolchain.R differs from seor's, the copy this checker runs"
 
