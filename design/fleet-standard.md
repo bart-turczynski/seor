@@ -412,7 +412,8 @@ job installs the pinned roxygen2 (rurl, punycoder, raddr, pagerankr, seor;
 SEOR-fhrisfpt, SEOR-yufxgcre).
 
 The check is one script: seor's `scripts/check-docs-drift.R`, which every
-package vendors byte for byte at that path (SEOR-lyciowif). A fix goes into
+package vendors byte for byte at that path (SEOR-lyciowif; two pending,
+below). A fix goes into
 seor's copy and is copied out, never into a fork. Its one argument is the
 package directory (default `.`), and it reads no environment variable of its
 own; where it runs, an export or a CI checkout used in place, is the caller's
@@ -421,9 +422,9 @@ roxygen2 is missing or not the pinned version, naming the install. git only
 prints the diff: without git the report still lists the changed, missing and
 stale files and says the diff is omitted. `--self-test` runs it on fixture
 packages, with git and without. rurl, pslr, punycoder, raddr, pagerankr and
-ssrfr carry hand-forked copies until they vendor seor's; robotstxtr has
-`dev/check-docs-drift.R`, and sitemapr's `tools/check-docs.R` still
-regenerates in the working tree (SEOR-zxyztpbr).
+ssrfr vendor it (2026-10-05). robotstxtr and sitemapr do not yet: robotstxtr
+has `dev/check-docs-drift.R` (SEOR-lyciowif), and sitemapr's
+`tools/check-docs.R` still regenerates in the working tree (SEOR-zxyztpbr).
 
 ## Files every package carries
 
