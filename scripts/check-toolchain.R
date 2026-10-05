@@ -61,6 +61,8 @@
 #    value CI installs; two different values there are reported, not
 #    resolved. Its reader is the fleet's only one: check-fleet-standard.py
 #    runs `--pandoc-assignments` (below) instead of parsing the pin itself.
+#    GitLab's expanded form, a `value:` mapping, is an error that asks for a
+#    plain scalar: read as a pin it would be none, or the wrong one.
 #    Unlike check 1's field, it is not the only place the version lives: a
 #    bump also moves the two sha256 digests beside it, a re-knit of
 #    README.md, and the fleet's PANDOC_PIN in check-fleet-standard.py. A
@@ -300,7 +302,16 @@ run_stale_check <- function(root) {
 # assignment overrides `variables:` at run time, so which value a job installs
 # depends on where each one sits; the rule is therefore one value, and a second
 # distinct value anywhere is reported rather than resolved.
-pandoc_yaml_re <- "^\\s*(?:-\\s+)?PANDOC_VERSION:\\s*(\\S.*)$"
+# GitLab's expanded form is not a pin this reads: the key with a mapping, flow,
+# `PANDOC_VERSION: {value: "3.10"}`, or block, `PANDOC_VERSION:` with
+# `value:` (and `description:`, `expand:` or `options:`, in any order)
+# indented below it. pinned_pandoc() stops on it and names the fix, a plain
+# scalar (SEOR-zvnrwaku); --pandoc-assignments prints no pin for it.
+pandoc_yaml_re <- "^\\s*(?:-\\s+)?PANDOC_VERSION:\\s*([^\\s{].*)$"
+pandoc_key_re <- "^(\\s*(?:-\\s+)?)PANDOC_VERSION:\\s*(.*)$"
+expanded_key_re <- paste0(
+  "^(\\s*)[\"']?(?:value|description|expand|options)[\"']?:(?:\\s|$)"
+)
 pandoc_shell_re <- paste0(
   "(?:^\\s*(?:-\\s+)?|[;&|({\\[,]\\s*|\\b(?:then|do|else|export)\\s+)",
   "(?:\\w+=\\S*\\s+)*[\"']?PANDOC_VERSION=[\"']?([\\w.-]+)"
@@ -344,10 +355,15 @@ yaml_scalar <- function(raw) {
   value
 }
 
+# `lines` with each trailing comment dropped: a `#` that starts a word.
+drop_comments <- function(lines) {
+  sub("(^|\\s)#.*$", "", lines, perl = TRUE)
+}
+
 # Each PANDOC_VERSION assignment in `lines`, in any spelling above: a data
 # frame of the line number and the value, in file order.
 pandoc_assignments <- function(lines) {
-  lines <- sub("(^|\\s)#.*$", "", lines, perl = TRUE)
+  lines <- drop_comments(lines)
   per_line <- lapply(lines, function(line) {
     yaml <- regmatches(line, regexec(pandoc_yaml_re, line, perl = TRUE))[[1L]]
     code <- mask_quoted_args(line)
@@ -380,9 +396,58 @@ pandoc_assignment_report <- function(lines) {
   }))
 }
 
+# The line numbers where `lines` write PANDOC_VERSION in GitLab's expanded
+# form. Flow: a mapping in braces after the key. Block: the key alone, and the
+# first line below it with text is a `value:`, `description:`, `expand:` or
+# `options:` key indented deeper than it. A key at the same indent or less,
+# as in a following variable, is not the mapping's.
+expanded_pandoc_lines <- function(lines) {
+  lines <- drop_comments(lines)
+  keys <- grep(pandoc_key_re, lines, perl = TRUE)
+  keys[vapply(
+    keys,
+    function(i) {
+      key <- regmatches(
+        lines[[i]],
+        regexec(pandoc_key_re, lines[[i]], perl = TRUE)
+      )[[1L]]
+      rest <- trimws(key[[3L]])
+      if (nzchar(rest)) {
+        return(startsWith(rest, "{"))
+      }
+      below <- lines[-seq_len(i)]
+      below <- below[nzchar(trimws(below))]
+      if (!length(below)) {
+        return(FALSE)
+      }
+      child <- regmatches(
+        below[[1L]],
+        regexec(expanded_key_re, below[[1L]], perl = TRUE)
+      )[[1L]]
+      length(child) > 0L && nchar(child[[2L]]) > nchar(key[[2L]])
+    },
+    logical(1)
+  )]
+}
+
 # Every distinct PANDOC_VERSION value .gitlab-ci.yml assigns. Empty when it
-# assigns none; more than one is reported by check_pandoc().
+# assigns none; more than one is reported by check_pandoc(). The expanded form
+# stops here with the fix: read as a pin, it is none or the wrong one.
 pinned_pandoc <- function(lines) {
+  expanded <- expanded_pandoc_lines(lines)
+  if (length(expanded)) {
+    stop(
+      ".gitlab-ci.yml writes PANDOC_VERSION in GitLab's expanded form (a ",
+      "mapping with `value:`) on line",
+      if (length(expanded) > 1L) "s",
+      " ",
+      toString(expanded),
+      ", which check-toolchain.R does not read. Write the pin as a plain ",
+      "scalar, `PANDOC_VERSION: \"<version>\"`, or as a shell assignment, ",
+      "`PANDOC_VERSION=<version>`.",
+      call. = FALSE
+    )
+  }
   unique(pandoc_assignments(lines)$value)
 }
 
@@ -454,6 +519,8 @@ check_pandoc <- function(pinned, installed) {
 }
 
 run_checks <- function(root) {
+  # First: a pin in GitLab's expanded form stops the run, before CRAN is read.
+  pandoc_pin <- read_pandoc_pin(root)
   installed <- tryCatch(
     as.character(utils::packageVersion("roxygen2")),
     error = function(e) NA_character_
@@ -466,7 +533,7 @@ run_checks <- function(root) {
       running
     ),
     run_stale_check(root),
-    check_pandoc(read_pandoc_pin(root), installed_pandoc())
+    check_pandoc(pandoc_pin, installed_pandoc())
   )
 }
 
@@ -602,15 +669,65 @@ self_test <- function() {
   for (line in c("  PANDOC_VERSION: 3.10", "  PANDOC_VERSION: 3.10 # pinned")) {
     expect(paste("pandoc-pin:", line), identical(pinned_pandoc(line), "3.1"))
   }
-  # GitLab's expanded form, a `value:` mapping, block or flow. TODAY'S
-  # VERDICT, pinned before it is fixed (SEOR-zvnrwaku): the block form is no
-  # pin, and the flow form is read as the version `{value: "3.10"}`.
+  # GitLab's expanded form, a `value:` mapping, block or flow, keys in any
+  # order: no pin is read from it, which would be none (block) or the version
+  # `{value: "3.10"}` (flow); it stops, naming the line and the plain scalar
+  # (SEOR-zvnrwaku).
+  refusal <- function(lines) {
+    tryCatch(
+      {
+        pinned_pandoc(lines)
+        ""
+      },
+      error = conditionMessage
+    )
+  }
   block <- c("  PANDOC_VERSION:", "    value: \"3.10\"")
-  expect("pandoc-expanded-block-today", !length(pinned_pandoc(block)))
   flow <- "  PANDOC_VERSION: {value: \"3.10\"}"
+  expanded <- list(
+    block = c("variables:", block),
+    flow = c("variables:", flow),
+    `block, description first` = c(
+      "variables:",
+      "  PANDOC_VERSION:  # the fleet pin",
+      "    # pinned",
+      "    description: the fleet's pandoc",
+      "    expand: false",
+      "    value: \"3.10\""
+    ),
+    `flow, description first` = c(
+      "variables:",
+      "  PANDOC_VERSION: {description: pin, value: \"3.10\"}"
+    )
+  )
+  for (case in names(expanded)) {
+    why <- refusal(expanded[[case]])
+    tag <- paste("pandoc-expanded:", case)
+    expect(tag, grepl("GitLab's expanded form", why, fixed = TRUE))
+    expect(tag, grepl("on line 2,", why, fixed = TRUE))
+    expect(tag, grepl("PANDOC_VERSION: \"<version>\"", why, fixed = TRUE))
+  }
+  # A bare key whose next line is no mapping of its own is not the expanded
+  # form: a sibling key, even one named `value`, a scalar, or nothing.
+  for (lines in list(
+    c("  PANDOC_VERSION:", "  value: \"3.10\""),
+    c("  PANDOC_VERSION:", "  R_VERSION: \"4.6.1\"", "    value: \"3.10\""),
+    c("  PANDOC_VERSION:", "    \"3.10\""),
+    c("  PANDOC_VERSION:", "    default: \"3.10\""),
+    "  PANDOC_VERSION:"
+  )) {
+    tag <- paste("pandoc-not-expanded:", paste(lines, collapse = " / "))
+    expect(tag, !nzchar(refusal(lines)))
+    expect(tag, !length(pinned_pandoc(lines)))
+  }
+  # --pandoc-assignments prints no pin for it; a plain pin beside it is
+  # still printed.
   expect(
-    "pandoc-expanded-flow-today",
-    identical(pinned_pandoc(flow), "{value: \"3.10\"}")
+    "pandoc-expanded-report",
+    identical(
+      pandoc_assignment_report(c(block, "\f", flow, "  - PANDOC_VERSION=3.9")),
+      "2\t2\t3.9"
+    )
   )
   expect("pandoc-match", !length(check_pandoc("3.10", "3.10")))
   expect("pandoc-unpinned", !length(check_pandoc(character(), "3.11")))
@@ -673,7 +790,7 @@ self_test <- function() {
 
   paste0(
     "check-toolchain self-test: PASS (5 roxygen cases, 5 build-version ",
-    "cases, 9 CRAN-version cases, 29 pandoc cases)\n"
+    "cases, 9 CRAN-version cases, 37 pandoc cases)\n"
   )
 }
 
