@@ -400,10 +400,17 @@ yaml_sequence <- function(x) {
   x
 }
 
+# The yaml package's warnings that change nothing this reader reads: a
+# number out of R's integer or double range loads as NA, which a
+# PANDOC_VERSION key refuses as unread, and which is no script item.
+yaml_harmless <- "is out of (?:integer|real) range$"
+
 # Each YAML document in `lines` (a `---` line starts one) parsed, or the
 # first that does not load: list(docs, error), the error's line (NA when the
-# parser names none) and message. A warning fails the load: the yaml package
-# otherwise loads an unknown alias as a string.
+# parser names none) and message, its line numbers counted from the top of
+# `lines`. A warning fails the load unless it is harmless: the yaml package
+# otherwise loads an unknown alias as a string, and a `!!int` it cannot
+# read as NA.
 load_ci <- function(lines) {
   need_yaml()
   starts <- unique(c(1L, grep("^---(?:\\s|$)", lines, perl = TRUE)))
@@ -422,7 +429,12 @@ load_ci <- function(lines) {
           merge.precedence = "override",
           handlers = list(seq = yaml_sequence, reference = gitlab_reference)
         ),
-        warning = function(w) stop(conditionMessage(w), call. = FALSE)
+        warning = function(w) {
+          if (grepl(yaml_harmless, conditionMessage(w), perl = TRUE)) {
+            invokeRestart("muffleWarning")
+          }
+          stop(conditionMessage(w), call. = FALSE)
+        }
       ),
       error = function(e) e
     )
@@ -433,13 +445,16 @@ load_ci <- function(lines) {
         conditionMessage(doc)
       )
       message <- trimws(gsub("\\s+", " ", message))
-      at <- regmatches(
-        message,
-        gregexpr("(?<=line )\\d+", message, perl = TRUE)
-      )[[1L]]
+      # The parser counts lines from the document's start.
+      m <- gregexpr("(?<=line )\\d+", message, perl = TRUE)
+      regmatches(message, m) <- lapply(
+        regmatches(message, m),
+        function(n) as.character(starts[[d]] - 1L + as.integer(n))
+      )
+      at <- regmatches(message, m)[[1L]]
       # The end of the text is the line after its last.
       line <- if (length(at)) {
-        min(starts[[d]] - 1L + as.integer(at[[length(at)]]), ends[[d]])
+        min(as.integer(at[[length(at)]]), ends[[d]])
       } else {
         NA_integer_
       }
@@ -653,7 +668,17 @@ read_pandoc <- function(lines) {
     read$error <- loaded$error
     return(read)
   }
-  nodes <- lapply(loaded$docs, ci_nodes)
+  docs <- loaded$docs
+  # A `spec:` header document declares an include's inputs, not variables:
+  # its keys set nothing (the file is that header, `---`, then the config).
+  if (
+    length(docs) == 2L &&
+      is.list(docs[[1L]]) &&
+      identical(names(docs[[1L]]), "spec")
+  ) {
+    docs <- docs[-1L]
+  }
+  nodes <- lapply(docs, ci_nodes)
   pins <- integer()
   values <- character()
   set <- integer()
@@ -1233,9 +1258,33 @@ self_test <- function() {
       ),
       "3.10"
     ),
-    # A `spec:` header document, then the config.
+    # A `spec:` header document, then the config. An input the header
+    # declares is no variable, whatever its name and however it is written.
     `a header document` = list(
       c("spec:", "  inputs: {}", "---", global, job(use)),
+      "3.10"
+    ),
+    `a header document declaring a PANDOC_VERSION input` = list(
+      c(
+        "spec:",
+        "  inputs:",
+        "    PANDOC_VERSION: {description: pin, default: \"3.10\"}",
+        "---",
+        global,
+        job(use)
+      ),
+      "3.10"
+    ),
+    # A number out of R's range loads as NA with a warning that changes
+    # nothing read here, so it is no load error.
+    `numbers out of range elsewhere` = list(
+      c(
+        "variables:",
+        "  PROJECT: 12345678901",
+        "  MASK: 0x7FFFFFFFFF",
+        "  HUGE: 1.0e+400",
+        "  PANDOC_VERSION: \"3.10\""
+      ),
       "3.10"
     ),
     # Beside a readable pin, lines that set no second value pass with that
@@ -1547,6 +1596,12 @@ self_test <- function() {
       5L
     ),
     `beside: a boolean` = list(beside("PANDOC_VERSION: yes"), unread, 5L),
+    # Out of R's integer range, the number loads as NA: no pin.
+    `beside: a number out of range` = list(
+      beside("PANDOC_VERSION: 12345678901"),
+      unread,
+      5L
+    ),
     `beside: a computed variable` = list(
       beside("PANDOC_VERSION: \"3.9${SUFFIX}\""),
       unread,
@@ -1606,6 +1661,13 @@ self_test <- function() {
     ),
     `an unknown alias` = list(
       c(global, "job:", "  variables: *nothing"),
+      "does not load as YAML",
+      NA
+    ),
+    # A warning that changes what is read still fails the load: the yaml
+    # package loads a `!!int` it cannot read as NA.
+    `a tag its value cannot hold` = list(
+      c(global, "job:", "  script: [!!int PANDOC_VERSION=3.9]"),
       "does not load as YAML",
       NA
     )
@@ -1693,6 +1755,19 @@ self_test <- function() {
           "line 3, column 4 did not find expected ',' or ']' at line 4, ",
           "column 1"
         )
+      )
+    )
+  )
+  # The parser counts a later document's lines from its `---`; the message
+  # counts them from the top of the file, as the line does.
+  case(
+    "pandoc-report: unloadable, a later document",
+    identical(
+      unread_lines(c(global, "---", "x: [1")),
+      paste0(
+        "unloadable\t1\t4\tParser error: while parsing a flow sequence at ",
+        "line 4, column 4 did not find expected ',' or ']' at line 5, ",
+        "column 1"
       )
     )
   )

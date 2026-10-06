@@ -3992,6 +3992,14 @@ def self_test() -> list[str]:
     expect_gap("a duplicate key check-toolchain.R does not load", "does not load in check-toolchain.R", "punycoder",
                edit(cran, ci, "variables:\n", "variables:\n  P3M_SNAPSHOT: \"2026-08-01\"\n"), fixture_state(),
                then=unloadable_alone)
+    # Both readers load these: a number past R's integer range (the yaml
+    # package warns and loads NA, which changes nothing it reads), and an
+    # input a `spec:` header declares, which is no variable.
+    expect_clean("a number past R's integer range", "punycoder",
+                 edit(cran, ci, "variables:\n", "variables:\n  PROJECT_ID: 12345678901\n"), fixture_state())
+    expect_clean("a PANDOC_VERSION input in a `spec:` header", "punycoder",
+                 dict(cran, **{ci: "spec:\n  inputs:\n    PANDOC_VERSION: {description: pin, default: \"3.10\"}\n"
+                                   "---\n" + cran[ci]}), fixture_state())
 
     # The install reader through its interface: shell items in, state out.
     for name, entries, want in PANDOC_INSTALL_CASES:
