@@ -2094,8 +2094,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
     values: list[str] | None = None
     unread: tuple[int, ...] = ()
     # An unread setting stops check-toolchain.R whether or not a job installs
-    # pandoc, so any text naming PANDOC_VERSION is read for it.
-    if candidates or "PANDOC_VERSION" in ci.text:
+    # pandoc, so every text is read for it: a name split or escaped
+    # (`PANDOC_"VERSION"`) holds no PANDOC_VERSION text (SEOR-eeswpcpq).
+    if candidates or ci.text:
         try:
             found = (pins or {}).get(ci.text)
             if found is None:
@@ -2115,10 +2116,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
             report.skip("ci", f"the pandoc pin was not read, only the install steps (probe failed: {error})", incomplete=True)
     if unread and not expanded:
         report.gap("ci", f".gitlab-ci.yml line{'s' if len(unread) > 1 else ''} {', '.join(map(str, unread))}: sets "
-                         "PANDOC_VERSION in a spelling check-toolchain.R does not read (a `!reference`, a list, a "
-                         "mapping, a boolean, an empty or computed value, a number YAML typed from a block scalar, "
-                         "an alias or a line below its key, `+=`, or a value set by `env`, `local`, `eval`, `for`, "
-                         "`select`, `read`, `printf -v` or `${PANDOC_VERSION:=...}`), which its check stops on "
+                         "PANDOC_VERSION in a spelling check-toolchain.R does not read (in YAML, anything but a plain "
+                         "scalar; in a script, anything but the pin, a use, a bare `export` or `readonly` or a "
+                         "comment, echoed text included), which its check stops on "
                          "whatever pin it reads elsewhere; write the pin as "
                          f"a plain scalar, `PANDOC_VERSION: \"{PANDOC_PIN}\"` (until then its value is not judged)")
     if values and len(values) > 1:
@@ -3866,10 +3866,17 @@ def self_test() -> list[str]:
     expect_gap("pin only in a job that installs no pandoc", "which neither its variables nor its setup assign",
                "punycoder", edit(edit(cran, ci, "    - PANDOC_VERSION=3.10\n", ""), ci, "    - fossa analyze\n",
                                  "    - PANDOC_VERSION=3.10\n    - fossa analyze\n"), fixture_state())
-    # Only an assignment sh would run is a pin: not text in a comment or an echo.
-    expect_clean("pin named in a comment and in echo text", "punycoder",
-                 edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "    - PANDOC_VERSION=3.10  # was PANDOC_VERSION=3.9\n"
-                      "    - echo \"PANDOC_VERSION=3.9 is gone\"\n"), fixture_state())
+    # Only an assignment sh would run is a pin: not text in a comment. Echoed
+    # text is no pin either, but check-toolchain.R refuses it, as it refuses
+    # every mention that is not a pin, a use, a bare export or a comment
+    # (SEOR-eeswpcpq).
+    expect_clean("pin named in a comment", "punycoder",
+                 edit(cran, ci, "    - PANDOC_VERSION=3.10\n", "    - PANDOC_VERSION=3.10  # was PANDOC_VERSION=3.9\n"),
+                 fixture_state())
+    expect_gap("pin named in echo text", "in a spelling check-toolchain.R does not read", "punycoder",
+               edit(cran, ci, "    - PANDOC_VERSION=3.10\n",
+                    "    - PANDOC_VERSION=3.10\n    - echo \"PANDOC_VERSION=3.9 is gone\"\n"),
+               fixture_state())
     # A matrix entry is a pin per leg: a gap even with the fleet's value.
     expect_gap("pin in a parallel: matrix", "check:deep: sets PANDOC_VERSION in `parallel: matrix`", "punycoder",
                edit(cran, ci, "      - R_VERSION: [\"4.6.1\", \"4.5.3\", \"devel\", \"4.1.3\"]\n",
@@ -3941,10 +3948,9 @@ def self_test() -> list[str]:
         def judge(report: Report) -> None:
             pandoc = [t for _, t in report.gaps if "pandoc" in t.lower()]
             if pandoc != [f".gitlab-ci.yml line {line}: sets PANDOC_VERSION in a spelling check-toolchain.R does "
-                          "not read (a `!reference`, a list, a mapping, a boolean, an empty or computed value, a "
-                          "number YAML typed from a block scalar, an alias or a line below its key, `+=`, or a value "
-                          "set by `env`, `local`, `eval`, `for`, `select`, `read`, `printf -v` or "
-                          "`${PANDOC_VERSION:=...}`), which its check stops on whatever pin it reads elsewhere; "
+                          "not read (in YAML, anything but a plain scalar; in a script, anything but the pin, a use, a "
+                          "bare `export` or `readonly` or a comment, echoed text included), which its check stops on whatever pin "
+                          "it reads elsewhere; "
                           "write the pin as a plain scalar, `PANDOC_VERSION: \"3.10\"` (until then its value is not "
                           "judged)"]:
                 failures.append(f"{tag}: expected the unread setting's one gap alone, got {report.gaps}")

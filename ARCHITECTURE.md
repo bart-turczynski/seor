@@ -72,7 +72,10 @@ dependencies and (2) attach them all on `library(seor)`.
   ([ADR 0008](design/adr/0008-fleet-checker-reads-ci-with-pyyaml.md)).
   `check-toolchain.R`, which every member vendors, is not base R only either:
   it reads the pandoc pin in `.gitlab-ci.yml` with the yaml package
-  ([ADR 0009](design/adr/0009-check-toolchain-reads-the-ci-pin-with-yaml.md)).
+  ([ADR 0009](design/adr/0009-check-toolchain-reads-the-ci-pin-with-yaml.md)),
+  and refuses any shell mention of it that is not a pin, a use, a bare
+  `export` or `readonly`, or a comment
+  ([ADR 0010](design/adr/0010-check-toolchain-allows-shell-mentions-it-reads.md)).
   `logo-metadata.py` writes every member's logo metadata, keywords copied
   from `DESCRIPTION`. Its `--self-test` and `--check seor man/figures`, which
   fails when seor's own logo has drifted from `DESCRIPTION`, run from the

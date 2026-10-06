@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded-by: 0010
 date: 2026-10-06
 tracking: SEOR-bqroclcz
 ---
