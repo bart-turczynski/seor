@@ -387,9 +387,15 @@ sh_quoted <- "\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'"
 # where it was, so what a pattern finds on it is read on the line itself.
 # This is the one reading of quotes, escapes and substitutions the shell
 # side has: the settings, the stray `)`s and the comments are all found on
-# its output.
+# its output. Its attribute `arithmetic` holds the text of each `$((...))`
+# outside single quotes and backquotes: an assignment there sets a variable
+# in the shell that runs it, though the mask hides it.
 sh_mask <- function(lines) {
-  vapply(lines, sh_mask_line, character(1), USE.NAMES = FALSE)
+  masks <- lapply(lines, sh_mask_line)
+  structure(
+    vapply(masks, `[[`, character(1), "masked"),
+    arithmetic = as.character(unlist(lapply(masks, `[[`, "arithmetic")))
+  )
 }
 
 # What ends a word before a `#` that starts a comment.
@@ -399,6 +405,9 @@ sh_mask_line <- function(line) {
   ch <- strsplit(line, "", fixed = TRUE)[[1L]]
   n <- length(ch)
   at <- function(i) if (i <= n) ch[[i]] else ""
+  quotes <- which(ch == "'")
+  found <- new.env()
+  found$arithmetic <- character()
   # From `i`, the index after the `close` that ends a part opened before
   # `i`, or n + 1 when none does. A backslash escapes in every part: in
   # `'` (as `$'...'`) and `` ` `` nothing else is read; in `"`, `$(`, `` ` ``
@@ -421,7 +430,9 @@ sh_mask_line <- function(line) {
       }
       nested <- close != "\""
       i <- if (c == "$" && at(i + 1L) == "(") {
-        skip(i + 2L, ")")
+        substitution(i)
+      } else if (nested && c == "$" && at(i + 1L) == "'") {
+        skip(i + 2L, "'")
       } else if (c == "$" && at(i + 1L) == "{") {
         skip(i + 2L, "}")
       } else if (c == "`") {
@@ -443,9 +454,19 @@ sh_mask_line <- function(line) {
   }
   # A single-quoted string, where nothing escapes.
   single <- function(i) {
-    end <- which(ch == "'")
-    end <- end[end >= i]
+    end <- quotes[quotes >= i]
     if (length(end)) end[[1L]] + 1L else n + 1L
+  }
+  # A `$(` at `i`, its text kept when it is arithmetic, `$((`.
+  substitution <- function(i) {
+    end <- skip(i + 2L, ")")
+    if (at(i + 2L) == "(") {
+      found$arithmetic <- c(
+        found$arithmetic,
+        paste(ch[i:min(end - 1L, n)], collapse = "")
+      )
+    }
+    end
   }
   hide <- logical(n)
   keep <- n
@@ -461,12 +482,17 @@ sh_mask_line <- function(line) {
       skip(i + 1L, c)
     } else if (c == "$" && after == "'") {
       skip(i + 2L, "'")
-    } else if (c %in% c("$", "<", ">") && after == "(") {
+    } else if (c == "$" && after == "(") {
+      substitution(i)
+    } else if (c %in% c("<", ">") && after == "(") {
       skip(i + 2L, ")")
     } else if (c == "$" && after == "{") {
       skip(i + 2L, "}")
     }
-    if (c == "#" && (i == 1L || ch[[i - 1L]] %in% sh_word_ends)) {
+    # A hidden character before it, a part's, is the same word's.
+    if (
+      c == "#" && (i == 1L || ch[[i - 1L]] %in% sh_word_ends && !hide[[i - 1L]])
+    ) {
       keep <- i - 1L
       break
     }
@@ -479,7 +505,10 @@ sh_mask_line <- function(line) {
     }
   }
   ch[hide] <- "."
-  paste(ch[seq_len(keep)], collapse = "")
+  list(
+    masked = paste(ch[seq_len(keep)], collapse = ""),
+    arithmetic = found$arithmetic
+  )
 }
 
 # `lines` with each trailing comment dropped.
@@ -556,7 +585,7 @@ load_ci <- function(tagged) {
   starts <- unique(c(1L, grep("^---(?:\\s|$)", lines, perl = TRUE)))
   ends <- c(starts[-1L] - 1L, length(lines))
   docs <- vector("list", length(starts))
-  header <- spec_header(lines[seq_len(ends[[1L]])])
+  header <- length(starts) > 1L && spec_header(lines[seq_len(ends[[1L]])])
   for (d in seq_along(starts)) {
     if (d == 1L && header) {
       next
@@ -594,7 +623,8 @@ load_ci <- function(tagged) {
 }
 
 # Whether `text`, the first document's lines, is a `spec:` header: its one
-# line at the top level, past comments and `---`, starts `spec:`. Read from
+# line at the top level, past comments and `---`, starts `spec:`, and a
+# `---` follows it, whatever comes after that. Read from
 # the text, not the parse, so a header the parser refuses (a duplicate
 # input, say) is still one. A header written another way, `"spec":` or
 # `{spec: ...}`, is parsed as config, where a setting in it is refused.
@@ -650,9 +680,11 @@ yaml_parse <- function(text) {
 # The ids of the duplicate PANDOC_VERSION keys in `text`, a document's lines,
 # `parsed` its yaml_parse(). A mapping still open where the parser stops on
 # an error is never built, so its keys are not seen: the lines above the
-# first line the error names are parsed again for theirs, and so on while
-# that parse stops too. An error that names no line (a duplicate of another
-# key) leaves those keys unseen; the load still fails.
+# line the error stops on, the last it names, are parsed again for theirs,
+# and so on while that parse stops too. A mapping no such prefix closes (a
+# flow mapping the error is inside) and an error that names no line (a
+# duplicate of another key) leave its keys unseen; the load still fails,
+# naming the error.
 yaml_duplicates <- function(text, parsed) {
   duplicates <- parsed$duplicates
   if (!inherits(parsed$doc, "error")) {
@@ -665,7 +697,8 @@ yaml_duplicates <- function(text, parsed) {
   if (!length(named)) {
     return(duplicates)
   }
-  above <- text[seq_len(min(as.integer(named), length(text)) - 1L)]
+  stop_at <- as.integer(named[[length(named)]])
+  above <- text[seq_len(min(stop_at, length(text)) - 1L)]
   if (!length(above)) {
     return(duplicates)
   }
@@ -696,18 +729,15 @@ yaml_error <- function(message, start, end) {
 }
 
 # What a parsed document holds for the reader: `keys`, each PANDOC_VERSION
-# key's id and value; `shell`, the script items; `text`, every string. A
-# `!reference` holds names, not text.
+# key's id and value; `shell`, the script items; `text`, every other string.
+# A `!reference` holds names, not text.
 ci_nodes <- function(node, shell = FALSE) {
   found <- list(keys = list(), shell = character(), text = character())
   if (inherits(node, "gitlab_reference")) {
     return(found)
   }
   if (is.character(node)) {
-    found$text <- node
-    if (shell) {
-      found$shell <- node
-    }
+    found[[if (shell) "shell" else "text"]] <- node
     return(found)
   }
   if (!is.list(node)) {
@@ -874,13 +904,24 @@ sh_unquote <- function(words) {
 # `read` or `for` target, `unset`, `getopts`) fails closed.
 eval_setting_re <- paste0("(?<![\\w${])", pandoc_tag, "\\d+\\b")
 
+# A setting in arithmetic, `$((...))`: an assignment (`=`, `+=`, `<<=`,
+# ...), an increment or a decrement. `==`, `!=`, `<=` and `>=` compare.
+sh_arithmetic_setting <- paste0(
+  pandoc_tag,
+  "\\d+\\s*(?:(?:[-+*/%&|^]|<<|>>)?=(?!=)|\\+\\+|--)|(?:\\+\\+|--)\\s*",
+  pandoc_tag,
+  "\\d+"
+)
+
 # What the lines of script items, `lines`, set: the ids they assign a
 # literal pin (`pins`, `values`) and the ids they set otherwise (`set`).
 # Each line is masked (sh_mask()) and its settings found on the mask, a
 # value read from the line where the mask has it. A setting in `eval`'s
 # arguments and `${PANDOC_VERSION:=...}` are read through quotes: both set
-# the value wherever it is quoted. Any setting after a stray `)` (sh_stray)
-# is one set otherwise. Each pattern runs once over all the lines.
+# the value wherever it is quoted, and so is a setting in arithmetic,
+# whose `$((...))` the mask hides. Any setting after a stray `)`
+# (sh_stray) is one set otherwise. Each pattern runs once over all the
+# lines.
 sh_read <- function(lines) {
   found <- list(pins = integer(), values = character(), set = integer())
   lines <- grep(pandoc_tag, lines, fixed = TRUE, value = TRUE)
@@ -932,7 +973,8 @@ sh_read <- function(lines) {
   found$set <- c(
     id[(assigned & !pin) | other],
     tagged_ids(args, eval_setting_re),
-    tagged_ids(lines, paste0("\\$\\{", pandoc_tag, "\\d+:?="))
+    tagged_ids(lines, paste0("\\$\\{", pandoc_tag, "\\d+:?=")),
+    tagged_ids(attr(masked, "arithmetic"), sh_arithmetic_setting)
   )
   found
 }
@@ -992,7 +1034,11 @@ read_pandoc <- function(lines) {
     "\n",
     fixed = TRUE
   ))
-  text <- drop_comments(grep(pandoc_tag, text, fixed = TRUE, value = TRUE))
+  # Only shell has comments: elsewhere a `#` is text.
+  text <- c(
+    drop_comments(grep(pandoc_tag, shell, fixed = TRUE, value = TRUE)),
+    text
+  )
   used <- tagged_ids(
     text,
     paste0(
@@ -1597,6 +1643,25 @@ self_test <- function() {
       c(global, job("echo $(cat <(ls)) PANDOC_VERSION=3.9")),
       "3.10"
     ),
+    # A `#` after a substitution or an escape is the same word's, and
+    # `$'...'` escapes its `'` inside a substitution too (SEOR-evttkqjl).
+    `beside: a # after a substitution` = list(
+      c(global, job("echo $(x)#; PANDOC_VERSION=3.9")),
+      c("3.10", "3.9")
+    ),
+    `beside: a # after an escape` = list(
+      c(global, job("echo a\\;#; PANDOC_VERSION=3.9")),
+      c("3.10", "3.9")
+    ),
+    `beside: an escaped quote in a substitution` = list(
+      c(global, job("echo $(echo $'a\\'b'); PANDOC_VERSION=3.9")),
+      c("3.10", "3.9")
+    ),
+    # Arithmetic that compares sets nothing.
+    `beside: arithmetic comparing` = list(
+      c(global, job("echo $((PANDOC_VERSION == 3))")),
+      "3.10"
+    ),
     # A `#` that starts a word after `;` starts a comment.
     `beside: a comment after ;` = list(
       c(global, block_job("true;# was; PANDOC_VERSION=3.9")),
@@ -2133,6 +2198,30 @@ self_test <- function() {
       unread,
       5L
     ),
+    # An assignment in arithmetic sets the variable in the shell that runs
+    # it, though the mask hides it (SEOR-evttkqjl).
+    `beside: arithmetic assigning` = list(
+      c(global, job("echo $((PANDOC_VERSION=3))")),
+      unread,
+      5L
+    ),
+    `beside: arithmetic incrementing in quotes` = list(
+      c(global, job("echo \"$((PANDOC_VERSION++))\"")),
+      unread,
+      5L
+    ),
+    # A `spec:` alone, no `---` after it, is no header: its keys are read.
+    `a spec: with no document after it` = list(
+      c("spec:", "  inputs:", "    PANDOC_VERSION: {default: \"3.9\"}"),
+      unread,
+      3L
+    ),
+    # A `#` in a string that is not shell is text, not a comment.
+    `use, after a # in a variable's value` = list(
+      c("variables:", "  NOTE: \"pandoc #42: ${PANDOC_VERSION}\""),
+      no_pin,
+      2L
+    ),
     `beside: an append` = list(
       c(global, job("PANDOC_VERSION+=.1")),
       unread,
@@ -2234,6 +2323,11 @@ self_test <- function() {
     # warning stops it (SEOR-evttkqjl).
     `a duplicate key in a mapping a parser error leaves open` = list(
       c(global, "  PANDOC_VERSION: \"3.9\"", "  y: [1"),
+      "does not load as YAML",
+      3L
+    ),
+    `a duplicate key in a block mapping the parser cannot close` = list(
+      c(global, "  PANDOC_VERSION: \"3.9\"", "  x: y", "  - a"),
       "does not load as YAML",
       3L
     ),
@@ -2453,16 +2547,19 @@ self_test <- function() {
 # YAML. With both flags, one run prints both kinds of line, assignments
 # first, from one parse of each text (pandoc_report()).
 main <- function() {
-  # The pandoc reader parses .gitlab-ci.yml with the yaml package, and every
-  # run reads some: the self-test's fixtures, or the texts on stdin.
-  need_yaml()
   args <- commandArgs(trailingOnly = TRUE)
   flags <- c("--pandoc-assignments", "--pandoc-unread") %in% args
   if (any(flags)) {
     lines <- readLines(file("stdin"), warn = FALSE, encoding = "UTF-8")
+    # Only a text that names PANDOC_VERSION is parsed (read_pandoc()).
+    if (any(grepl("PANDOC_VERSION", lines, fixed = TRUE))) {
+      need_yaml()
+    }
     writeLines(pandoc_report(lines, flags[[1L]], flags[[2L]]))
     return(0L)
   }
+  # The self-test's fixtures are parsed with the yaml package.
+  need_yaml()
   cat(self_test())
   if ("--self-test" %in% args) {
     return(0L)
