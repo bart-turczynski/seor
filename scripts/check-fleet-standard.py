@@ -3992,6 +3992,12 @@ def self_test() -> list[str]:
     expect_gap("a duplicate key check-toolchain.R does not load", "does not load in check-toolchain.R", "punycoder",
                edit(cran, ci, "variables:\n", "variables:\n  P3M_SNAPSHOT: \"2026-08-01\"\n"), fixture_state(),
                then=unloadable_alone)
+    # A duplicate PANDOC_VERSION key, which PyYAML loads keeping the last (a
+    # null here): check-toolchain.R stops on it, naming the second key.
+    files = edit(no_shell_pin, ci, "variables:\n", "variables:\n  PANDOC_VERSION: \"3.10\"\n  PANDOC_VERSION:\n")
+    line = files[ci].splitlines().index("  PANDOC_VERSION:") + 1
+    expect_gap("a duplicate PANDOC_VERSION key", "does not load in check-toolchain.R's YAML reader (Duplicate map key: "
+               f"'PANDOC_VERSION', line {line})", "punycoder", files, fixture_state())
     # Both readers load these: a number past R's integer range (the yaml
     # package warns and loads NA, which changes nothing it reads), and an
     # input a `spec:` header declares, which is no variable.

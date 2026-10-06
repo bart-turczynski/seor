@@ -368,13 +368,23 @@ drop_comments <- function(lines) {
   sub("(^|\\s)#.*$", "", lines, perl = TRUE)
 }
 
+# A PANDOC_VERSION token, not one inside an anchor's or an alias's name
+# (`&pv-PANDOC_VERSION`, `*PANDOC_VERSION`): renamed there, the anchor and
+# its alias would no longer match. A name followed by `=` or `+=` is a shell
+# assignment after `&` or `&&` (`true &&PANDOC_VERSION=3.9 sh i.sh`), not a
+# name.
+pandoc_token_re <- paste0(
+  "[&*][^\\s,\\[\\]{}]*?(?<!\\w)PANDOC_VERSION(?!\\w|\\+?=)",
+  "[^\\s,\\[\\]{}]*(*SKIP)(*FAIL)|(?<!\\w)PANDOC_VERSION(?!\\w)"
+)
+
 # `lines` with each PANDOC_VERSION token renamed PANDOC_VERSION__<id>, the
 # ids counting the tokens in file order, and `at`, each id's line. The yaml
 # package keeps no line numbers, so the reader parses the renamed text: a key
-# or a script item the parser hands back names its own line. An anchor or an
-# alias spelled `&PANDOC_VERSION` or `*PANDOC_VERSION` keeps its name.
+# or a script item the parser hands back names its own line. An anchor's or
+# an alias's name keeps its text.
 tag_pandoc <- function(lines) {
-  m <- gregexpr("(?<![&*\\w])PANDOC_VERSION(?!\\w)", lines, perl = TRUE)
+  m <- gregexpr(pandoc_token_re, lines, perl = TRUE)
   n <- vapply(m, function(x) sum(x > 0L), integer(1))
   at <- rep(seq_along(lines), n)
   ids <- split(seq_along(at), factor(at, levels = seq_along(lines)))
@@ -406,9 +416,13 @@ yaml_sequence <- function(x) {
 yaml_harmless <- "is out of (?:integer|real) range$"
 
 # Each YAML document in `lines` (a `---` line starts one) parsed, or the
-# first that does not load: list(docs, error), the error's line (NA when the
-# parser names none) and message, its line numbers counted from the top of
-# `lines`. A warning fails the load unless it is harmless: the yaml package
+# first that does not load: list(docs, error, duplicates), the error's line
+# (NA when the parser names none) and message, its line numbers counted from
+# the top of `lines`. `duplicates` holds the id of each PANDOC_VERSION key
+# after the first in one mapping: renamed, they no longer collide, so the
+# parser cannot refuse them as it refuses any other duplicate key, and
+# GitLab keeps the last. A key a `<<` merge brings in was a key of the
+# mapping it came from first, and is no duplicate. A warning fails the load unless it is harmless: the yaml package
 # otherwise loads an unknown alias as a string, and a `!!int` it cannot
 # read as NA.
 load_ci <- function(lines) {
@@ -416,6 +430,18 @@ load_ci <- function(lines) {
   starts <- unique(c(1L, grep("^---(?:\\s|$)", lines, perl = TRUE)))
   ends <- c(starts[-1L] - 1L, length(lines))
   docs <- vector("list", length(starts))
+  keys <- new.env()
+  keys$seen <- integer()
+  keys$duplicates <- integer()
+  # The parser builds a merge's source, and every mapping inside another,
+  # before the mapping that holds it.
+  yaml_mapping <- function(x) {
+    ids <- tagged_ids(names(x), paste0("^", pandoc_tag, "\\d+$"))
+    own <- sort(setdiff(ids, keys$seen))
+    keys$duplicates <- c(keys$duplicates, own[-1L])
+    keys$seen <- c(keys$seen, ids)
+    x
+  }
   for (d in seq_along(starts)) {
     text <- lines[seq.int(
       starts[[d]],
@@ -427,7 +453,11 @@ load_ci <- function(lines) {
           paste(text, collapse = "\n"),
           eval.expr = FALSE,
           merge.precedence = "override",
-          handlers = list(seq = yaml_sequence, reference = gitlab_reference)
+          handlers = list(
+            seq = yaml_sequence,
+            map = yaml_mapping,
+            reference = gitlab_reference
+          )
         ),
         warning = function(w) {
           if (grepl(yaml_harmless, conditionMessage(w), perl = TRUE)) {
@@ -458,11 +488,15 @@ load_ci <- function(lines) {
       } else {
         NA_integer_
       }
-      return(list(docs = list(), error = list(line = line, message = message)))
+      return(list(
+        docs = list(),
+        error = list(line = line, message = message),
+        duplicates = integer()
+      ))
     }
     docs[d] <- list(doc)
   }
-  list(docs = docs, error = NULL)
+  list(docs = docs, error = NULL, duplicates = keys$duplicates)
 }
 
 # What a parsed document holds for the reader: `keys`, each PANDOC_VERSION
@@ -664,6 +698,12 @@ read_pandoc <- function(lines) {
   }
   tagged <- tag_pandoc(lines)
   loaded <- load_ci(tagged$lines)
+  if (length(loaded$duplicates)) {
+    loaded$error <- list(
+      line = tagged$at[[min(loaded$duplicates)]],
+      message = "Duplicate map key: 'PANDOC_VERSION'"
+    )
+  }
   if (!is.null(loaded$error)) {
     read$error <- loaded$error
     return(read)
@@ -1244,6 +1284,33 @@ self_test <- function() {
       c(global, job("X='a b' PANDOC_VERSION=3.9 sh install.sh")),
       c("3.10", "3.9")
     ),
+    # An own key beside a `<<` merge that brings in the same key overrides
+    # it, as YAML allows: two keys of one mapping, but no duplicate.
+    `a merge key and an own key` = list(
+      c(
+        ".vars: &vars",
+        "  PANDOC_VERSION: \"3.10\"",
+        "job:",
+        "  variables:",
+        "    <<: *vars",
+        "    PANDOC_VERSION: \"3.10\""
+      ),
+      "3.10"
+    ),
+    # An anchor's or an alias's name keeps its text, so the two still match.
+    `an anchor named after the pin` = list(
+      c(
+        ".x: &a-PANDOC_VERSION \"3.10\"",
+        "variables:",
+        "  PANDOC_VERSION: *a-PANDOC_VERSION"
+      ),
+      "3.10"
+    ),
+    # After `&&` with no space, the name is an assignment, not an alias.
+    `beside: a prefix after && with no space` = list(
+      c(global, job("true &&PANDOC_VERSION=3.9 sh i.sh")),
+      c("3.10", "3.9")
+    ),
     # An anchored list counts whether a job uses it or not, and once
     # however many jobs do.
     `an anchored list` = list(
@@ -1653,6 +1720,14 @@ self_test <- function() {
       c(global, "job:", "  script: [a, b"),
       "does not load as YAML",
       4L
+    ),
+    # The parser cannot see a duplicate PANDOC_VERSION key once the two are
+    # renamed apart, so the reader refuses it, naming the second: GitLab
+    # keeps the last, here null, which no pin read as 3.10 would show.
+    `a duplicate PANDOC_VERSION key` = list(
+      c("variables:", "  PANDOC_VERSION: \"3.10\"", "  PANDOC_VERSION:"),
+      "does not load as YAML",
+      3L
     ),
     `a duplicate key` = list(
       c(global, "job: 1", "job: 2"),
