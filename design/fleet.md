@@ -24,12 +24,20 @@ as the written source.
   - **Fleet sweeps:** the same change in three or more repositories with no
     per-repository judgment. One issue with a per-repository checklist, and no
     copies in the repositories.
-  - **Catch-ups:** one issue per package whose sweep lines wait on its CRAN
-    review, depending on that package's cascade step. Once a sweep's only open
-    lines are held this way, they move to the package's catch-up issue with the
-    sweep's acceptance checks, and the sweep closes. A line that must land
-    before a submission goes to the submission's cascade step instead.
-    Adopted in the groom of 2026-10-06 (SEOR-cxetanvb).
+  - **Catch-ups:** one issue per package whose sweep lines wait on a CRAN
+    review of that package. It depends on the cascade step that closes when
+    CRAN accepts the package, so nothing in it lands while a resubmission
+    could still be built from main. If CRAN sends the package back, the
+    catch-up keeps waiting, and fixes CRAN asks for go into the resubmission.
+    Once a sweep's only open lines wait on held packages, each held line
+    moves: a line that must ship in the submission becomes its own issue,
+    which the submission step depends on; a line that lands after acceptance
+    goes to the package's catch-up issue. Either way it takes the sweep's
+    acceptance checks with it. The sweep then closes as done, with a comment
+    naming where each held line went. A catch-up is the one seor issue that
+    carries one repository's implementation detail, because an issue in that
+    repository could not depend on the seor cascade step. Adopted in the
+    groom of 2026-10-06 (SEOR-cxetanvb).
   - **Owner-only settings across repositories:** one `[USER]` issue.
 - fp dependencies cannot cross projects. A repository issue that waits on
   another repository's release carries `[USER]` (label `maintainer-gated`) and
@@ -50,10 +58,11 @@ fix while the punycoder session held a release queue.
 - When a session is live in a repository's folder, it is the only one that
   writes to that repository: branches, MRs, pipeline triggers and that
   repository's fp backlog.
-- The seor session files and orders fleet sweeps and cascades. It does the
-  work itself only in repositories with no live session. For a repository
-  that has one, it messages that session with the SEOR id and the checklist
-  line, then ticks the line from the evidence that session reports back.
+- The seor session files and orders fleet sweeps, catch-ups and cascades. It
+  does the work itself only in repositories with no live session. For a
+  repository that has one, it messages that session with the SEOR id and the
+  checklist line, then ticks the line from the evidence that session reports
+  back.
 - A seor `/burndown` run may write to every fleet repository (amended
   2026-10-03, SEOR-plnwieyf). Before each wave it checks `ListAgents` and
   skips any repository that has a live session, so the first rule above still
