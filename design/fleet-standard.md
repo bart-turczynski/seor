@@ -425,14 +425,15 @@ green. The check exports the commit being pushed (`PRE_COMMIT_TO_REF`, else
 tree. There it runs roxygen2 at exactly the version `Config/roxygen2/version`
 pins and fails, printing the diff, when `man/`, `NAMESPACE` or `DESCRIPTION`
 differ from what is committed. It runs the checkout's copy of the check, and
-removes the export on every exit, signals included. CI runs it too, under the
-pinned roxygen2: seor and every package that vendors the script (below) in a
-`docs-drift` job, robotstxtr's `gates` and sitemapr's verify job through their
-own checks (2026-10-05; SEOR-fhrisfpt, SEOR-yufxgcre).
+seor's wrapper removes the export on every exit, signals included. CI runs it
+too, under the pinned roxygen2, in each package's own job: a `docs-drift` job
+in seor, rurl, pslr and ssrfr, the `gates` job in punycoder, pagerankr and
+robotstxtr, `check:linux-release` in raddr and `check` in sitemapr
+(2026-10-05, SEOR-fhrisfpt, SEOR-yufxgcre; robotstxtr's and sitemapr's on the
+vendored script since 2026-10-06).
 
 The check is one script: seor's `scripts/check-docs-drift.R`, which every
-package vendors byte for byte at that path (SEOR-lyciowif; two pending,
-below). A fix goes into
+package vendors byte for byte at that path (SEOR-lyciowif). A fix goes into
 seor's copy and is copied out, never into a fork. Its one argument is the
 package directory (default `.`), and it reads no environment variable of its
 own; where it runs, an export or a CI checkout used in place, is the caller's
@@ -441,9 +442,11 @@ roxygen2 is missing or not the pinned version, naming the install. git only
 prints the diff: without git the report still lists the changed, missing and
 stale files and says the diff is omitted. `--self-test` runs it on fixture
 packages, with git and without. rurl, pslr, punycoder, raddr, pagerankr and
-ssrfr vendor it (2026-10-05). robotstxtr and sitemapr do not yet: robotstxtr
-has `dev/check-docs-drift.R` (SEOR-lyciowif), and sitemapr's
-`tools/check-docs.R` still regenerates in the working tree (SEOR-zxyztpbr).
+ssrfr vendor it (2026-10-05), and robotstxtr and sitemapr since 2026-10-06
+(robotstxtr !53, sitemapr !88). Both were under a CRAN hold; the owner allowed
+changes to their `.Rbuildignore`d tooling paths only, so nothing that ships
+changed. robotstxtr's fork `dev/check-docs-drift.R` and sitemapr's in-place
+`tools/check-docs.R` are gone (SEOR-lyciowif, SEOR-zxyztpbr).
 
 ## Files every package carries
 
