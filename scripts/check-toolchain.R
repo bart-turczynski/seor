@@ -318,9 +318,11 @@ run_stale_check <- function(root) {
 #     command's prefix: `PANDOC_VERSION=3.10`,
 #     `export R_X=1 PANDOC_VERSION="3.10"`. `echo PANDOC_VERSION=3.9` assigns
 #     nothing, and neither does text in a quoted argument to a command,
-#     `echo "a; PANDOC_VERSION=3.9"`, nor a shell comment. A setting after
-#     any other `)` but a `$(...)`'s is refused, not read: sh starts no
-#     command there, unless in a `case` pattern this does not parse, and
+#     `echo "a; PANDOC_VERSION=3.9"`, nor a shell comment. Quotes, escapes,
+#     backquotes and substitutions are read once, by sh_mask(), for all of
+#     these. A setting after any other `)`, one no quote, escape or
+#     substitution holds, is refused, not read: sh starts no command there,
+#     unless in a `case` pattern this does not parse, and
 #     `echo logged in x) PANDOC_VERSION=3.9` is no case. A script item is
 #     a string in a YAML sequence, at any depth, or the value of `script`,
 #     `before_script` or `after_script`, so an anchored list and a
@@ -370,66 +372,118 @@ need_yaml <- function(pkg = "yaml", minimum = yaml_minimum) {
   }
 }
 
-# need_yaml() for the yaml package, checked once per process: load_ci()
-# runs for every text read.
-yaml_ready <- local({
-  ready <- new.env()
-  ready$ok <- FALSE
-  function() {
-    if (!ready$ok) {
-      need_yaml()
-      ready$ok <- TRUE
-    }
-    invisible()
-  }
-})
-
 # A quoted string in sh: double quotes, where a backslash escapes, or single
 # quotes, where nothing does.
 sh_quoted <- "\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'"
 
-# `text` with each match of `re` blanked, its length kept.
-blank <- function(text, re) {
-  m <- gregexpr(re, text, perl = TRUE)
-  regmatches(text, m) <- lapply(
-    regmatches(text, m),
-    function(s) strrep("_", nchar(s))
-  )
-  text
+# `lines`, shell, masked: each part of a word sh does not read as plain text
+# hidden, every character of it turned into `.`, and a trailing comment cut.
+# The parts are quoted strings (`'...'`, `"..."`, `$'...'`), an escape
+# (`\x`), a backquoted command, and `$(...)`, `$((...))`, `${...}`, `<(...)`
+# and `>(...)` with all they nest, so a `)`, `;`, `#` or space inside one is
+# hidden with it. A comment is a `#` that starts a word: at the start of the
+# line, after a space or after one of `;&|()<>`. A part a line does not close
+# is hidden to its end. A masked line keeps each character it does not cut
+# where it was, so what a pattern finds on it is read on the line itself.
+# This is the one reading of quotes, escapes and substitutions the shell
+# side has: the settings, the stray `)`s and the comments are all found on
+# its output.
+sh_mask <- function(lines) {
+  vapply(lines, sh_mask_line, character(1), USE.NAMES = FALSE)
 }
 
-# `lines` with every quoted string blanked, their lengths kept.
-mask_quotes <- function(lines) blank(lines, sh_quoted)
+# What ends a word before a `#` that starts a comment.
+sh_word_ends <- c(" ", "\t", ";", "&", "|", "(", ")", "<", ">")
 
-# Where each trailing comment starts in `lines`, -1 for none: a `#` that
-# starts a word outside quotes, so `X='a #b'` holds no comment.
-comment_at <- function(lines) {
-  regexpr("(?:^|\\s)#", mask_quotes(lines), perl = TRUE)
-}
-
-# `line` with each quoted argument to a command blanked: a quoted word after
-# another word, as in `echo "…"`. A quoted value after `=` keeps its text.
-mask_quoted_args <- function(line) {
-  blank(line, paste0("\\w\\s+\\K(?:", sh_quoted, ")"))
-}
-
-# `line` with each command substitution, `$(...)`, and arithmetic, `$((...))`,
-# blanked, the innermost first, so a `)` left ends neither.
-mask_substitutions <- function(line) {
-  re <- "\\$\\(\\([^()]*\\)\\)|\\$\\([^()]*\\)"
-  while (grepl(re, line, perl = TRUE)) {
-    line <- blank(line, re)
+sh_mask_line <- function(line) {
+  ch <- strsplit(line, "", fixed = TRUE)[[1L]]
+  n <- length(ch)
+  at <- function(i) if (i <= n) ch[[i]] else ""
+  # From `i`, the index after the `close` that ends a part opened before
+  # `i`, or n + 1 when none does. A backslash escapes in every part: in
+  # `'` (as `$'...'`) and `` ` `` nothing else is read; in `"`, `$(`, `` ` ``
+  # and `${` open a nested part; in `)` and `}`, quotes do too, and in `)`
+  # each `(` needs a `)` of its own.
+  skip <- function(i, close) {
+    depth <- 0L
+    while (i <= n) {
+      c <- ch[[i]]
+      if (c == "\\") {
+        i <- i + 2L
+        next
+      }
+      if (c == close && depth == 0L) {
+        return(i + 1L)
+      }
+      if (close %in% c("'", "`")) {
+        i <- i + 1L
+        next
+      }
+      nested <- close != "\""
+      i <- if (c == "$" && at(i + 1L) == "(") {
+        skip(i + 2L, ")")
+      } else if (c == "$" && at(i + 1L) == "{") {
+        skip(i + 2L, "}")
+      } else if (c == "`") {
+        skip(i + 1L, "`")
+      } else if (nested && c == "\"") {
+        skip(i + 1L, "\"")
+      } else if (nested && c == "'") {
+        single(i + 1L)
+      } else {
+        if (close == ")" && c == "(") {
+          depth <- depth + 1L
+        } else if (close == ")" && c == ")") {
+          depth <- depth - 1L
+        }
+        i + 1L
+      }
+    }
+    n + 1L
   }
-  line
+  # A single-quoted string, where nothing escapes.
+  single <- function(i) {
+    end <- which(ch == "'")
+    end <- end[end >= i]
+    if (length(end)) end[[1L]] + 1L else n + 1L
+  }
+  hide <- logical(n)
+  keep <- n
+  i <- 1L
+  while (i <= n) {
+    c <- ch[[i]]
+    after <- at(i + 1L)
+    end <- if (c == "\\") {
+      i + 2L
+    } else if (c == "'") {
+      single(i + 1L)
+    } else if (c %in% c("\"", "`")) {
+      skip(i + 1L, c)
+    } else if (c == "$" && after == "'") {
+      skip(i + 2L, "'")
+    } else if (c %in% c("$", "<", ">") && after == "(") {
+      skip(i + 2L, ")")
+    } else if (c == "$" && after == "{") {
+      skip(i + 2L, "}")
+    }
+    if (c == "#" && (i == 1L || ch[[i - 1L]] %in% sh_word_ends)) {
+      keep <- i - 1L
+      break
+    }
+    if (is.null(end)) {
+      i <- i + 1L
+    } else {
+      end <- min(end, n + 1L)
+      hide[i:(end - 1L)] <- TRUE
+      i <- end
+    }
+  }
+  ch[hide] <- "."
+  paste(ch[seq_len(keep)], collapse = "")
 }
 
 # `lines` with each trailing comment dropped.
-drop_comments <- function(lines) {
-  hash <- comment_at(lines)
-  cut <- hash > 0L
-  lines[cut] <- substr(lines[cut], 1L, hash[cut] - 1L)
-  lines
-}
+drop_comments <- function(lines) substr(lines, 1L, nchar(sh_mask(lines)))
 
 # A PANDOC_VERSION token, not one inside an anchor's or an alias's name
 # (`&pv-PANDOC_VERSION`, `*PANDOC_VERSION`): renamed there, the anchor and
@@ -486,100 +540,144 @@ yaml_harmless <- "is out of (?:integer|real) range$"
 # the earliest problem in file order: list(docs, error), the error's line
 # (NA when the parser names none) and message, its line numbers counted from
 # the top of the text. The earliest problem is in the first document that
-# has one: of its duplicate PANDOC_VERSION keys and the parser's error, the
-# one on the first line, an error with no line last. A duplicate is a
-# PANDOC_VERSION key after the first in one mapping: renamed, they no
+# has one: of its duplicate PANDOC_VERSION keys, the parser's error and its
+# warnings, the one on the first line, one with no line last. A duplicate
+# is a PANDOC_VERSION key after the first in one mapping: renamed, they no
 # longer collide, so the parser cannot refuse them as it refuses any other
 # duplicate key, and GitLab keeps the last. A key a `<<` merge brings in was
 # a key of the mapping it came from first, and is no duplicate. A warning
 # fails the load unless it is harmless: the yaml package otherwise loads an
 # unknown alias as a string, and a `!!int` it cannot read as NA. A `spec:`
-# header document, the first of two and holding only `spec:`, declares an
-# include's inputs, not variables: its keys set nothing, so it is neither
-# returned nor refused for a duplicate key.
+# header (spec_header()) declares an include's inputs, not variables: its
+# keys set nothing, so it is neither parsed nor returned, and no key in it
+# is refused, whatever its name.
 load_ci <- function(tagged) {
-  yaml_ready()
   lines <- tagged$lines
   starts <- unique(c(1L, grep("^---(?:\\s|$)", lines, perl = TRUE)))
   ends <- c(starts[-1L] - 1L, length(lines))
   docs <- vector("list", length(starts))
-  header <- integer()
-  keys <- new.env()
-  keys$seen <- integer()
-  keys$duplicates <- integer()
-  # The parser builds a merge's source, and every mapping inside another,
-  # before the mapping that holds it.
-  yaml_mapping <- function(x) {
-    ids <- tagged_ids(names(x), paste0("^", pandoc_tag, "\\d+$"))
-    own <- sort(setdiff(ids, keys$seen))
-    keys$duplicates <- c(keys$duplicates, own[-1L])
-    keys$seen <- c(keys$seen, ids)
-    x
-  }
+  header <- spec_header(lines[seq_len(ends[[1L]])])
   for (d in seq_along(starts)) {
-    keys$duplicates <- integer()
+    if (d == 1L && header) {
+      next
+    }
     text <- lines[seq.int(
       starts[[d]],
       length.out = ends[[d]] - starts[[d]] + 1L
     )]
-    doc <- tryCatch(
-      withCallingHandlers(
-        yaml::yaml.load(
-          paste(text, collapse = "\n"),
-          eval.expr = FALSE,
-          merge.precedence = "override",
-          handlers = list(
-            seq = yaml_sequence,
-            map = yaml_mapping,
-            reference = gitlab_reference
-          )
-        ),
-        warning = function(w) {
-          if (grepl(yaml_harmless, conditionMessage(w), perl = TRUE)) {
-            invokeRestart("muffleWarning")
-          }
-          stop(conditionMessage(w), call. = FALSE)
-        }
-      ),
-      error = function(e) e
+    parsed <- yaml_parse(text)
+    duplicates <- yaml_duplicates(text, parsed)
+    messages <- c(
+      if (inherits(parsed$doc, "error")) conditionMessage(parsed$doc),
+      parsed$warnings
     )
-    if (
-      d == 1L &&
-        length(starts) == 2L &&
-        is.list(doc) &&
-        identical(names(doc), "spec")
-    ) {
-      header <- d
-      next
-    }
-    problems <- data.frame(
-      line = tagged$at[keys$duplicates],
-      message = rep(
-        "Duplicate map key: 'PANDOC_VERSION'",
-        length(keys$duplicates)
+    problems <- do.call(
+      rbind,
+      c(
+        list(data.frame(
+          line = tagged$at[duplicates],
+          message = rep(
+            "Duplicate map key: 'PANDOC_VERSION'",
+            length(duplicates)
+          )
+        )),
+        lapply(messages, yaml_error, starts[[d]], ends[[d]])
       )
     )
-    if (inherits(doc, "error")) {
-      problems <- rbind(problems, yaml_error(doc, starts[[d]], ends[[d]]))
-    }
     if (nrow(problems)) {
       first <- order(problems$line, na.last = TRUE)[[1L]]
       return(list(docs = list(), error = as.list(problems[first, ])))
     }
-    docs[d] <- list(doc)
+    docs[d] <- list(parsed$doc)
   }
-  list(docs = docs[setdiff(seq_along(docs), header)], error = NULL)
+  list(docs = if (header) docs[-1L] else docs, error = NULL)
 }
 
-# What the parser's error `e` on the document from line `start` to `end`
-# says: its line (NA when the parser names none) and message, the message's
-# line numbers counted from the top of the text, as one row.
-yaml_error <- function(e, start, end) {
-  message <- gsub(
-    paste0(pandoc_tag, "\\d+"),
-    "PANDOC_VERSION",
-    conditionMessage(e)
+# Whether `text`, the first document's lines, is a `spec:` header: its one
+# line at the top level, past comments and `---`, starts `spec:`. Read from
+# the text, not the parse, so a header the parser refuses (a duplicate
+# input, say) is still one. A header written another way, `"spec":` or
+# `{spec: ...}`, is parsed as config, where a setting in it is refused.
+spec_header <- function(text) {
+  top <- grep("^[^\\s#]", text, perl = TRUE, value = TRUE)
+  top <- top[!grepl("^(?:---|\\.\\.\\.)(?:\\s|$)|^%", top, perl = TRUE)]
+  length(top) == 1L && grepl("^spec:(?:\\s|$)", top, perl = TRUE)
+}
+
+# `text`, a document's lines, parsed: list(doc, duplicates, warnings), `doc`
+# the document or the parser's error, `duplicates` the ids of the
+# PANDOC_VERSION keys after the first in a mapping the parser built, and
+# `warnings` the messages of the warnings that are not harmless. A warning
+# is kept and the parse goes on, so every mapping it was inside is built.
+yaml_parse <- function(text) {
+  found <- new.env()
+  found$seen <- integer()
+  found$duplicates <- integer()
+  found$warnings <- character()
+  # The parser builds a merge's source, and every mapping inside another,
+  # before the mapping that holds it.
+  yaml_mapping <- function(x) {
+    ids <- tagged_ids(names(x), paste0("^", pandoc_tag, "\\d+$"))
+    own <- sort(setdiff(ids, found$seen))
+    found$duplicates <- c(found$duplicates, own[-1L])
+    found$seen <- c(found$seen, ids)
+    x
+  }
+  doc <- tryCatch(
+    withCallingHandlers(
+      yaml::yaml.load(
+        paste(text, collapse = "\n"),
+        eval.expr = FALSE,
+        merge.precedence = "override",
+        handlers = list(
+          seq = yaml_sequence,
+          map = yaml_mapping,
+          reference = gitlab_reference
+        )
+      ),
+      warning = function(w) {
+        if (!grepl(yaml_harmless, conditionMessage(w), perl = TRUE)) {
+          found$warnings <- c(found$warnings, conditionMessage(w))
+        }
+        invokeRestart("muffleWarning")
+      }
+    ),
+    error = function(e) e
   )
+  list(doc = doc, duplicates = found$duplicates, warnings = found$warnings)
+}
+
+# The ids of the duplicate PANDOC_VERSION keys in `text`, a document's lines,
+# `parsed` its yaml_parse(). A mapping still open where the parser stops on
+# an error is never built, so its keys are not seen: the lines above the
+# first line the error names are parsed again for theirs, and so on while
+# that parse stops too. An error that names no line (a duplicate of another
+# key) leaves those keys unseen; the load still fails.
+yaml_duplicates <- function(text, parsed) {
+  duplicates <- parsed$duplicates
+  if (!inherits(parsed$doc, "error")) {
+    return(duplicates)
+  }
+  named <- regmatches(
+    conditionMessage(parsed$doc),
+    gregexpr("(?<=line )\\d+", conditionMessage(parsed$doc), perl = TRUE)
+  )[[1L]]
+  if (!length(named)) {
+    return(duplicates)
+  }
+  above <- text[seq_len(min(as.integer(named), length(text)) - 1L)]
+  if (!length(above)) {
+    return(duplicates)
+  }
+  union(duplicates, yaml_duplicates(above, yaml_parse(above)))
+}
+
+# What the parser's error or warning `message` on the document from line
+# `start` to `end` says: its line (NA when the parser names none) and
+# message, the message's line numbers counted from the top of the text, as
+# one row.
+yaml_error <- function(message, start, end) {
+  message <- gsub(paste0(pandoc_tag, "\\d+"), "PANDOC_VERSION", message)
   message <- trimws(gsub("\\s+", " ", message))
   # The parser counts lines from the document's start.
   m <- gregexpr("(?<=line )\\d+", message, perl = TRUE)
@@ -687,14 +785,12 @@ yaml_setting <- function(value, line, id) {
 sh_reserved <- "(?:(?:if|elif|while|until|then|do|else|time(?:\\s+-p)?|!)\\s+)*"
 # Where sh starts a command outside a `case`: the start of a line, `;`, `&`,
 # `|`, `(` or a `{` group.
-sh_start <- "(?:^|[;&|(]|(?<!\\$)\\{)"
-# A word in a `case` head: quoted, escaped, backquoted and `$(...)` parts
-# (one nested `(...)` deep) and unquoted text.
-sh_case_word <- paste0(
-  "(?:",
-  sh_quoted,
-  "|\\\\.|`[^`]*`|\\$\\((?:[^()]|\\([^()]*\\))*\\)|[^\\s;&|<>()\"'`\\\\])+"
-)
+sh_start <- "(?:^|[;&|({])"
+# A word on a masked line (sh_mask()): its quoted, escaped and substituted
+# parts are hidden there, so it is plain text.
+sh_word <- "[^\\s;&|<>()]*"
+# A word in a `case` head or pattern list.
+sh_case_word <- "[^\\s;&|<>()]+"
 # A `case` pattern list and its `)`: `a)`, `a|b)`, `a | b)`, `( a )`. One
 # follows `case WORD in` where a command starts, `;;`, `;;&` or `;&`, or
 # starts a line, as in a `case` written over several.
@@ -714,60 +810,62 @@ sh_case_pattern <- paste0(
 # sh's command head: where a command starts, or a `case` pattern's `)`,
 # then any reserved words.
 sh_head <- paste0("(?:", sh_case_pattern, "|", sh_start, ")\\s*", sh_reserved)
-# A `)` that ends neither a `case` pattern sh_head reads nor a `$(...)`, then
-# any reserved words. sh takes no command there but in a pattern's body, so
-# what follows it is a `case` pattern this does not parse, or text sh
-# rejects: a setting after it is refused, never passed.
+# A `)` that ends no `case` pattern sh_head reads, then any reserved words:
+# on a masked line no `)` of a substitution, a quote or an escape is left.
+# sh takes no command there but in a pattern's body, so what follows it is a
+# `case` pattern this does not parse, or text sh rejects: a setting after it
+# is refused, never passed.
 sh_stray <- paste0("\\)\\s*", sh_reserved)
-# And a word: quoted parts and unquoted text.
-sh_word <- paste0("(?:", sh_quoted, "|[^\\s;&|<>()\"'])*")
 
-# The settings of the token with `id`, read on a masked line: `assign`, an
-# assignment in the current shell or a command's prefix, whose value is a
-# pin when it is a literal; `other`, a setting never read as a pin: under
-# `local` or `env`, `for`'s or `select`'s loop variable, `read`'s or
-# `printf -v`'s target. Each follows `head`.
-sh_settings <- function(id, head = sh_head) {
-  name <- paste0(pandoc_tag, id)
-  list(
+# What stands before a PANDOC_VERSION token on a masked line, from `head`
+# to the token, for each way to set it: `assign`, an assignment in the
+# current shell or a command's prefix, through `export`, `readonly`,
+# `declare` or `typeset` or after other assignments; `scoped`, one under
+# `local` or `env`; `target`, `for`'s or `select`'s loop variable, `read`'s
+# or `printf -v`'s target. `assign` and `scoped` set it when `=` or `+=`
+# follows the token. Each pattern ends at the token, so a command that sets
+# several is read for each.
+sh_before <- function(head) {
+  c(
     assign = paste0(
       head,
       "(?:(?:export|readonly|declare|typeset)(?:\\s+[-+]\\w+)*",
       "(?:\\s+\\w+(?:=",
       sh_word,
-      ")?)*?\\s+|(?:\\w+=",
+      ")?)*\\s+|(?:\\w+=",
       sh_word,
-      "\\s+)*?)",
-      name,
-      "(\\+?)=(",
-      sh_word,
-      ")"
+      "\\s+)*)$"
     ),
-    other = paste0(
+    scoped = paste0(
       head,
-      "(?:(?:local(?:\\s+[-+]\\w+)*(?:\\s+\\w+(?:=",
+      "(?:local(?:\\s+[-+]\\w+)*(?:\\s+\\w+(?:=",
       sh_word,
-      ")?)*?|env(?:\\s+[^\\s;&|]+)*?)\\s+(?:\\w+=",
+      ")?)*|env(?:\\s+[^\\s;&|]+)*)\\s+(?:\\w+=",
       sh_word,
-      "\\s+)*?",
-      name,
-      "\\+?=|(?:for|select)\\s+",
-      name,
-      "\\b|read(?:\\s+[^\\s;&|]+)*?\\s+",
-      name,
-      "\\b|printf(?:\\s+[^\\s;&|]+)*?\\s+-v\\s*",
-      name,
-      "\\b)"
+      "\\s+)*$"
+    ),
+    target = paste0(
+      head,
+      "(?:(?:for|select)\\s+|read(?:\\s+[^\\s;&|]+)*\\s+",
+      "|printf(?:\\s+[^\\s;&|]+)*\\s+-v\\s*)$"
     )
   )
 }
+sh_before_head <- sh_before(sh_head)
+sh_before_stray <- sh_before(sh_stray)
+# What follows a token that is set: `=` or `+=` (its first group), then the
+# value (its second).
+sh_after <- paste0("^(\\+?)=(", sh_word, ")")
+# A token, its id the first group.
+sh_token <- paste0(pandoc_tag, "(\\d+)")
+# An `eval`, its arguments the match.
+sh_eval <- paste0("(?:", sh_head, "|", sh_stray, ")eval\\s\\K[^;&|]*")
 
-# A shell word's value: one quoted string loses its quotes.
-sh_unquote <- function(word) {
-  if (grepl(paste0("^(?:", sh_quoted, ")$"), word, perl = TRUE)) {
-    return(substr(word, 2L, nchar(word) - 1L))
-  }
-  word
+# Shell words' values: one quoted string loses its quotes.
+sh_unquote <- function(words) {
+  quoted <- grepl(paste0("^(?:", sh_quoted, ")$"), words, perl = TRUE)
+  words[quoted] <- substr(words[quoted], 2L, nchar(words[quoted]) - 1L)
+  words
 }
 
 # A setting in `eval`'s arguments, quoted or not: any PANDOC_VERSION token
@@ -776,58 +874,67 @@ sh_unquote <- function(word) {
 # `read` or `for` target, `unset`, `getopts`) fails closed.
 eval_setting_re <- paste0("(?<![\\w${])", pandoc_tag, "\\d+\\b")
 
-# What one line of a script item sets: the ids it assigns a literal pin
-# (`pins`, `values`) and the ids it sets otherwise (`set`). Quoted arguments
-# to commands and a trailing comment (a `#` outside quotes) are blanked
-# first. A setting in `eval`'s arguments and `${PANDOC_VERSION:=...}` are
-# read through quotes: both set the value wherever it is quoted. Any setting
-# after a stray `)` (sh_stray) is one set otherwise.
-sh_line <- function(line) {
-  masked <- mask_quoted_args(line)
-  hash <- comment_at(masked)
-  if (hash > 0L) {
-    line <- substr(line, 1L, hash - 1L)
-    masked <- substr(masked, 1L, hash - 1L)
-  }
-  # A `)` that closes a `$(...)` is a word's, so only the others are stray.
-  stray <- mask_substitutions(masked)
+# What the lines of script items, `lines`, set: the ids they assign a
+# literal pin (`pins`, `values`) and the ids they set otherwise (`set`).
+# Each line is masked (sh_mask()) and its settings found on the mask, a
+# value read from the line where the mask has it. A setting in `eval`'s
+# arguments and `${PANDOC_VERSION:=...}` are read through quotes: both set
+# the value wherever it is quoted. Any setting after a stray `)` (sh_stray)
+# is one set otherwise. Each pattern runs once over all the lines.
+sh_read <- function(lines) {
   found <- list(pins = integer(), values = character(), set = integer())
-  for (id in unique(tagged_ids(line, paste0(pandoc_tag, "\\d+")))) {
-    re <- sh_settings(id)
-    after_stray <- sh_settings(id, sh_stray)
-    assign <- regmatches(masked, regexec(re$assign, masked, perl = TRUE))[[1L]]
-    if (length(assign)) {
-      value <- sh_unquote(assign[[3L]])
-      if (!nzchar(assign[[2L]]) && grepl(pandoc_literal_re, value)) {
-        found$pins <- c(found$pins, id)
-        found$values <- c(found$values, value)
-      } else {
-        found$set <- c(found$set, id)
-      }
-    } else if (
-      grepl(re$other, masked, perl = TRUE) ||
-        grepl(after_stray$assign, stray, perl = TRUE) ||
-        grepl(after_stray$other, stray, perl = TRUE)
-    ) {
-      found$set <- c(found$set, id)
-    }
+  lines <- grep(pandoc_tag, lines, fixed = TRUE, value = TRUE)
+  if (!length(lines)) {
+    return(found)
   }
+  masked <- sh_mask(lines)
+  lines <- substr(lines, 1L, nchar(masked))
+  tokens <- gregexpr(sh_token, masked, perl = TRUE)
+  on <- rep(seq_along(masked), vapply(tokens, function(x) sum(x > 0L), 1L))
+  start <- as.integer(unlist(lapply(tokens, function(x) x[x > 0L])))
+  end <- start -
+    1L +
+    as.integer(unlist(lapply(tokens, function(x) {
+      attr(x, "match.length")[x > 0L]
+    })))
+  id <- as.integer(substring(masked[on], start + nchar(pandoc_tag), end))
+  before <- substr(masked[on], 1L, start - 1L)
+  after <- substring(masked[on], end + 1L)
+  m <- regexpr(sh_after, after, perl = TRUE)
+  set <- m > 0L
+  at <- attr(m, "capture.start")
+  size <- attr(m, "capture.length")
+  value <- sh_unquote(substr(
+    substring(lines[on], end + 1L),
+    at[, 2L],
+    at[, 2L] + size[, 2L] - 1L
+  ))
+  is <- function(re) grepl(re, before, perl = TRUE)
+  assigned <- set & is(sh_before_head[["assign"]])
+  pin <- assigned & size[, 1L] == 0L & grepl(pandoc_literal_re, value)
+  other <- !assigned &
+    (set &
+      (is(sh_before_head[["scoped"]]) |
+        is(sh_before_stray[["assign"]]) |
+        is(sh_before_stray[["scoped"]])) |
+      is(sh_before_head[["target"]]) |
+      is(sh_before_stray[["target"]]))
+  evals <- gregexpr(sh_eval, masked, perl = TRUE)
+  args <- unlist(Map(
+    function(line, at) {
+      substring(line, at, at + attr(at, "match.length") - 1L)[at > 0L]
+    },
+    lines,
+    evals
+  ))
+  found$pins <- id[pin]
+  found$values <- value[pin]
   found$set <- c(
-    found$set,
-    eval_ids(line, masked, sh_head),
-    eval_ids(line, stray, sh_stray),
-    tagged_ids(line, paste0("\\$\\{", pandoc_tag, "\\d+:?="))
+    id[(assigned & !pin) | other],
+    tagged_ids(args, eval_setting_re),
+    tagged_ids(lines, paste0("\\$\\{", pandoc_tag, "\\d+:?="))
   )
   found
-}
-
-# The ids `eval` sets in `line`, an eval found after `head` on `masked`, the
-# line masked: its arguments are read in `line`, through quotes.
-eval_ids <- function(line, masked, head) {
-  evals <- gregexpr(paste0(head, "eval\\s\\K[^;&|]*"), masked, perl = TRUE)
-  at <- evals[[1L]]
-  args <- substring(line, at, at + attr(at, "match.length") - 1L)
-  tagged_ids(args[at > 0L], eval_setting_re)
 }
 
 # Every PANDOC_VERSION setting in `lines`, a .gitlab-ci.yml text, by line:
@@ -876,17 +983,16 @@ read_pandoc <- function(lines) {
     "\n",
     fixed = TRUE
   ))
-  for (line in shell) {
-    found <- sh_line(line)
-    pins <- c(pins, found$pins)
-    values <- c(values, found$values)
-    set <- c(set, found$set)
-  }
-  text <- drop_comments(unlist(strsplit(
+  found <- sh_read(shell)
+  pins <- c(pins, found$pins)
+  values <- c(values, found$values)
+  set <- c(set, found$set)
+  text <- unlist(strsplit(
     unlist(lapply(nodes, `[[`, "text")),
     "\n",
     fixed = TRUE
-  )))
+  ))
+  text <- drop_comments(grep(pandoc_tag, text, fixed = TRUE, value = TRUE))
   used <- tagged_ids(
     text,
     paste0(
@@ -1431,6 +1537,34 @@ self_test <- function() {
       c(global, job("case $(uname -s) in Linux) PANDOC_VERSION=3.9 ;; esac")),
       c("3.10", "3.9")
     ),
+    `beside: a case on nested command substitutions` = list(
+      c(global, job("case $(a $(b $(c))) in x) PANDOC_VERSION=3.9 ;; esac")),
+      c("3.10", "3.9")
+    ),
+    # An assignment after one whose value holds a substitution, arithmetic,
+    # an escape or a defaulted use with a space sets its value too
+    # (SEOR-evttkqjl).
+    `beside: after an assigned command substitution` = list(
+      c(global, job("X=$(date) PANDOC_VERSION=3.9")),
+      c("3.10", "3.9")
+    ),
+    `beside: after assigned arithmetic` = list(
+      c(global, job("X=$((1+2)) PANDOC_VERSION=3.9")),
+      c("3.10", "3.9")
+    ),
+    `beside: after an escaped space` = list(
+      c(global, job("X=a\\ b PANDOC_VERSION=3.9")),
+      c("3.10", "3.9")
+    ),
+    `beside: after a defaulted use with a space` = list(
+      c(global, job("X=${Y:-a b} PANDOC_VERSION=3.9 sh i.sh")),
+      c("3.10", "3.9")
+    ),
+    # Each setting a command makes is read, not only its first.
+    `beside: two settings in one export` = list(
+      c(global, job("export PANDOC_VERSION=3.10 X PANDOC_VERSION=3.9")),
+      c("3.10", "3.9")
+    ),
     # A reserved word that is an argument, and a `)` that closes `$(...)`,
     # start no command.
     `beside: echoed if` = list(
@@ -1443,6 +1577,29 @@ self_test <- function() {
     ),
     `beside: after arithmetic` = list(
       c(global, job("echo $((1 + 2)) PANDOC_VERSION=3.9")),
+      "3.10"
+    ),
+    # Nor does a `)` in nested arithmetic, an escape, a quote inside a
+    # substitution or a process substitution (SEOR-evttkqjl).
+    `beside: after nested arithmetic` = list(
+      c(global, job("echo $(( (1 + 2) * 3 )) PANDOC_VERSION=3.9")),
+      "3.10"
+    ),
+    `beside: after an escaped )` = list(
+      c(global, job("echo :\\) PANDOC_VERSION=3.9")),
+      "3.10"
+    ),
+    `beside: after a quoted ) in a substitution` = list(
+      c(global, job("echo $(printf \"%s\" \")\") PANDOC_VERSION=3.9")),
+      "3.10"
+    ),
+    `beside: after a process substitution` = list(
+      c(global, job("echo $(cat <(ls)) PANDOC_VERSION=3.9")),
+      "3.10"
+    ),
+    # A `#` that starts a word after `;` starts a comment.
+    `beside: a comment after ;` = list(
+      c(global, block_job("true;# was; PANDOC_VERSION=3.9")),
       "3.10"
     ),
     # A `#` inside quotes starts no comment.
@@ -1584,7 +1741,8 @@ self_test <- function() {
       ),
       "3.10"
     ),
-    # Nor is a duplicate input it declares refused (SEOR-lmfgkesn).
+    # Nor is a duplicate input it declares refused, whatever its name
+    # (SEOR-lmfgkesn, SEOR-evttkqjl).
     `a header document declaring an input twice` = list(
       c(
         "spec:",
@@ -1594,6 +1752,31 @@ self_test <- function() {
         "---",
         global,
         job(use)
+      ),
+      "3.10"
+    ),
+    `a header document declaring another input twice` = list(
+      c(
+        "spec:",
+        "  inputs:",
+        "    stage: {default: test}",
+        "    stage: {default: build}",
+        "---",
+        global,
+        job(use)
+      ),
+      "3.10"
+    ),
+    # Whatever follows it: here a trailing `---` (SEOR-evttkqjl).
+    `a header document, then a trailing ---` = list(
+      c(
+        "spec:",
+        "  inputs:",
+        "    PANDOC_VERSION: {default: \"3.10\"}",
+        "---",
+        global,
+        job(use),
+        "---"
       ),
       "3.10"
     ),
@@ -2002,9 +2185,8 @@ self_test <- function() {
       5L
     ),
     # A `)` that ends no `case` pattern this reads, nor a `$(...)`: an `in`
-    # that is an argument starts no pattern, and a `case` word this does not
-    # parse hides one. Either way the setting after it is refused, not read
-    # as a pin nor passed (SEOR-lmfgkesn).
+    # that is an argument starts no pattern. The setting after it is
+    # refused, not read as a pin nor passed (SEOR-lmfgkesn).
     `beside: a ) after an echoed in` = list(
       c(global, job("echo logged in x) PANDOC_VERSION=3.9")),
       unread,
@@ -2012,11 +2194,6 @@ self_test <- function() {
     ),
     `beside: a ) after an echoed case` = list(
       c(global, job("echo case x in a) PANDOC_VERSION=3.9")),
-      unread,
-      5L
-    ),
-    `beside: a case word this does not parse` = list(
-      c(global, job("case $(a $(b $(c))) in x) PANDOC_VERSION=3.9 ;; esac")),
       unread,
       5L
     ),
@@ -2050,6 +2227,18 @@ self_test <- function() {
     ),
     `a duplicate key before a parser error` = list(
       c(global, "  PANDOC_VERSION: \"3.9\"", "x: [1"),
+      "does not load as YAML",
+      3L
+    ),
+    # Also in a mapping the parser has not closed where an error or a
+    # warning stops it (SEOR-evttkqjl).
+    `a duplicate key in a mapping a parser error leaves open` = list(
+      c(global, "  PANDOC_VERSION: \"3.9\"", "  y: [1"),
+      "does not load as YAML",
+      3L
+    ),
+    `a duplicate key in a mapping a warning leaves open` = list(
+      c(global, "  PANDOC_VERSION: \"3.9\"", "  y: *nothing"),
       "does not load as YAML",
       3L
     ),
@@ -2264,6 +2453,9 @@ self_test <- function() {
 # YAML. With both flags, one run prints both kinds of line, assignments
 # first, from one parse of each text (pandoc_report()).
 main <- function() {
+  # The pandoc reader parses .gitlab-ci.yml with the yaml package, and every
+  # run reads some: the self-test's fixtures, or the texts on stdin.
+  need_yaml()
   args <- commandArgs(trailingOnly = TRUE)
   flags <- c("--pandoc-assignments", "--pandoc-unread") %in% args
   if (any(flags)) {
