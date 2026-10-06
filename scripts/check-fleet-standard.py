@@ -2094,8 +2094,9 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
     values: list[str] | None = None
     unread: tuple[int, ...] = ()
     # An unread setting stops check-toolchain.R whether or not a job installs
-    # pandoc, so any text naming PANDOC_VERSION is read for it.
-    if candidates or "PANDOC_VERSION" in ci.text:
+    # pandoc, so every text is read for it: a name split or escaped
+    # (`PANDOC_"VERSION"`) holds no PANDOC_VERSION text (SEOR-eeswpcpq).
+    if candidates or ci.text:
         try:
             found = (pins or {}).get(ci.text)
             if found is None:
@@ -2116,8 +2117,8 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
     if unread and not expanded:
         report.gap("ci", f".gitlab-ci.yml line{'s' if len(unread) > 1 else ''} {', '.join(map(str, unread))}: sets "
                          "PANDOC_VERSION in a spelling check-toolchain.R does not read (in YAML, anything but a plain "
-                         "scalar; in a script, anything but the pin, a use, a bare `export` or a comment, echoed "
-                         "text included), which its check stops on "
+                         "scalar; in a script, anything but the pin, a use, a bare `export` or `readonly` or a "
+                         "comment, echoed text included), which its check stops on "
                          "whatever pin it reads elsewhere; write the pin as "
                          f"a plain scalar, `PANDOC_VERSION: \"{PANDOC_PIN}\"` (until then its value is not judged)")
     if values and len(values) > 1:
@@ -3948,7 +3949,7 @@ def self_test() -> list[str]:
             pandoc = [t for _, t in report.gaps if "pandoc" in t.lower()]
             if pandoc != [f".gitlab-ci.yml line {line}: sets PANDOC_VERSION in a spelling check-toolchain.R does "
                           "not read (in YAML, anything but a plain scalar; in a script, anything but the pin, a use, a "
-                          "bare `export` or a comment, echoed text included), which its check stops on whatever pin "
+                          "bare `export` or `readonly` or a comment, echoed text included), which its check stops on whatever pin "
                           "it reads elsewhere; "
                           "write the pin as a plain scalar, `PANDOC_VERSION: \"3.10\"` (until then its value is not "
                           "judged)"]:

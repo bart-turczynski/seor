@@ -49,27 +49,37 @@ This replaces ADR 0009's decision 4. Its other decisions stand.
 
    Any other token is refused as unread, naming its line, quoted or not and
    whatever the command: echoed text, a here-document, arithmetic, `let`,
-   `eval`, a wrapper and a builtin no list names.
-2. **A `\` continuation is read as sh reads it.** A line that ends in a `\`
-   outside single quotes and comments is joined to the next, inside one
-   script item. Each token keeps its id, so it still names its own line.
+   `eval`, a wrapper and a builtin no list names. A string in a list under a
+   key GitLab never runs as shell (`paths`, `needs`, `tags`, `extends`,
+   `include` and the like) is text, not a script item.
+2. **A script item's lines are joined as sh reads them.** A line that ends
+   in a `\` outside single quotes and comments is joined to the next, and so
+   is a line that ends inside a quote or a substitution, so a `#` that
+   starts the next line is the quote's, not a comment. Each token keeps its
+   id, so it still names its own line.
 3. **A disguised name is refused by line.** It may be split by a quote or a
    backslash, written with an escape that YAML or `$'...'` decodes, or
    broken across an escaped YAML line break. The token pattern cannot see
    such a name, so a line is refused when more names appear in its text
-   after decoding than before.
+   after decoding, up to three layers deep, than before. This runs on every
+   text, including one with no plain PANDOC_VERSION in it. A comment whose
+   escapes decode to the name is refused too: telling a YAML comment from a
+   line of a quoted scalar that starts with `#` takes a YAML reader.
 
 ## Consequences
 
 - A new way to set a variable needs no new rule. It is refused because it is
   not one of the allowed forms.
 - Echoed or printed text, a here-document, or arithmetic that names the
-  variable without setting it is now refused. The fix is to drop the name
-  from the text or to write it as a use, for example
+  variable without setting it is now refused, as is a bare `local`. The fix
+  is to drop the name from the text or to write it as a use, for example
   `echo "pandoc ${PANDOC_VERSION}"`. `check-fleet-standard.py` reports the
   same lines as a gap.
 - The reader got smaller: the `eval`, declaration-argument, `let` and
   arithmetic patterns and the stray-`)` patterns are gone.
+- A here-document whose text holds an unpaired quote joins the lines after
+  it into that quote, and a pin there is then refused, not read. A pin
+  written as the fleet writes it, outside here-documents, is unaffected.
 - Out of reach: a name computed at run time (`${P}_VERSION`), a file that is
   sourced, and the CI/CD settings. A static reader cannot see these.
 - Standing rule: do not add a shell spelling to a list of refusals. Widen the

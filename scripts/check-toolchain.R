@@ -340,6 +340,27 @@ run_stale_check <- function(root) {
 pandoc_tag <- "PANDOC_VERSION__"
 pandoc_literal_re <- "^[A-Za-z0-9.+-]+$"
 script_keys <- c("script", "before_script", "after_script")
+# Keys whose lists GitLab never runs as shell: file paths, job and stage
+# names, tags, rule conditions, includes. Their strings are text.
+text_keys <- c(
+  "paths",
+  "exclude",
+  "untracked",
+  "files",
+  "changes",
+  "exists",
+  "needs",
+  "dependencies",
+  "extends",
+  "stages",
+  "tags",
+  "only",
+  "except",
+  "refs",
+  "include",
+  "options",
+  "exit_codes"
+)
 expanded_keys <- c("value", "description", "expand", "options")
 
 # The oldest yaml package this reader runs on: yaml.load() takes
@@ -403,6 +424,7 @@ sh_mask_line <- function(line) {
   quotes <- which(ch == "'")
   found <- new.env()
   found$continued <- FALSE
+  found$open <- FALSE
   # From `i`, the index after the `close` that ends a part opened before
   # `i`, or n + 1 when none does. A backslash escapes in every part: in
   # `'` (as `$'...'`) and `` ` `` nothing else is read; in `"`, `$(`, `` ` ``
@@ -446,12 +468,17 @@ sh_mask_line <- function(line) {
         i + 1L
       }
     }
+    found$open <- TRUE
     n + 1L
   }
   # A single-quoted string, where nothing escapes.
   single <- function(i) {
     end <- quotes[quotes >= i]
-    if (length(end)) end[[1L]] + 1L else n + 1L
+    if (!length(end)) {
+      found$open <- TRUE
+      return(n + 1L)
+    }
+    end[[1L]] + 1L
   }
   hide <- logical(n)
   keep <- n
@@ -493,7 +520,8 @@ sh_mask_line <- function(line) {
   ch[hide] <- "."
   list(
     masked = paste(ch[seq_len(keep)], collapse = ""),
-    continued = keep == n && found$continued
+    continued = keep == n && found$continued,
+    open = keep == n && found$open
   )
 }
 
@@ -549,9 +577,9 @@ disguised_lines <- function(lines) {
       gregexpr("(?<!\\w)PANDOC_VERSION(?!\\w)", x, perl = TRUE)
     ))
   }
-  # Each escape decoded, a letter one (`\n`, `\t`) to a space as YAML and
-  # `$'...'` read it, then every quote and backslash dropped.
-  decoded <- function(x) {
+  # Each escape decoded once, a letter one (`\n`, `\t`) to a space as YAML
+  # and `$'...'` read it.
+  decoded_layer <- function(x) {
     m <- gregexpr(
       "\\\\(?:x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-7]{1,3}|.)",
       x,
@@ -571,7 +599,7 @@ disguised_lines <- function(lines) {
       out[is.na(out)] <- " "
       out
     })
-    gsub("[\"'\\\\]", "", x)
+    x
   }
   if (!length(lines)) {
     return(integer())
@@ -587,9 +615,17 @@ disguised_lines <- function(lines) {
     character(1)
   )
   raw <- vapply(split(count(lines), group), sum, integer(1))
-  # sh drops the backslash of `\D` where YAML reads `\n`: either may hold.
-  dropped <- gsub("[\"'\\\\]", "", joined)
-  first[pmax(count(decoded(joined)), count(dropped)) > raw]
+  # A `$'...'` in a YAML double-quoted string is decoded twice, so each
+  # layer is decoded in turn; and sh drops the backslash of `\D` where YAML
+  # reads `\n`, so each layer is also read with its backslashes dropped.
+  seen <- integer(length(joined))
+  layer <- joined
+  for (pass in 1:3) {
+    seen <- pmax(seen, count(gsub("[\"'\\\\]", "", layer)))
+    layer <- decoded_layer(layer)
+    seen <- pmax(seen, count(gsub("[\"'\\\\]", "", layer)))
+  }
+  first[seen > raw]
 }
 
 # GitLab's `!reference [...]`, kept as what it is: neither the parser nor
@@ -772,9 +808,10 @@ yaml_error <- function(message, start, end) {
 }
 
 # What a parsed document holds for the reader: `keys`, each PANDOC_VERSION
-# key's id and value; `shell`, the script items; `text`, every other string.
-# A `!reference` holds names, not text.
-ci_nodes <- function(node, shell = FALSE) {
+# key's id and value; `shell`, the script items; `text`, every other string,
+# and every string under one of text_keys. A `!reference` holds names, not
+# text.
+ci_nodes <- function(node, shell = FALSE, text = FALSE) {
   found <- list(keys = list(), shell = character(), text = character())
   if (inherits(node, "gitlab_reference")) {
     return(found)
@@ -793,7 +830,12 @@ ci_nodes <- function(node, shell = FALSE) {
     if (length(id)) {
       found$keys[[length(found$keys) + 1L]] <- list(id = id, value = node[[i]])
     }
-    inner <- ci_nodes(node[[i]], sequence || keys[[i]] %in% script_keys)
+    under_text <- text || keys[[i]] %in% text_keys
+    inner <- ci_nodes(
+      node[[i]],
+      !under_text && (sequence || keys[[i]] %in% script_keys),
+      under_text
+    )
     found$keys <- c(found$keys, inner$keys)
     found$shell <- c(found$shell, inner$shell)
     found$text <- c(found$text, inner$text)
@@ -931,27 +973,37 @@ sh_unquote <- function(words) {
   words
 }
 
-# The lines of one script item, `lines`, with each line a `\` continues
-# joined to the next, as sh reads them: a token on a joined line keeps its
-# id, so it still names its own line.
+# The lines of one script item, `lines`, joined as sh reads them: a line a
+# `\` continues is joined to the next without it, and a line that ends
+# inside a quote or a substitution is joined to the next with a space, so a
+# `#` or a `)` there is read as the part's, not as a comment or a command
+# head. A token on a joined line keeps its id, so it still names its own
+# line. Only a line holding a quote, a backslash or a substitution can
+# continue.
 sh_join <- function(lines) {
   out <- character()
   i <- 1L
   while (i <= length(lines)) {
     line <- lines[[i]]
-    while (
-      i < length(lines) &&
-        endsWith(line, "\\") &&
-        sh_mask_line(line)$continued
-    ) {
+    while (i < length(lines) && grepl(sh_part_re, line, perl = TRUE)) {
+      mask <- sh_mask_line(line)
+      if (mask$continued) {
+        line <- paste0(substr(line, 1L, nchar(line) - 1L), lines[[i + 1L]])
+      } else if (mask$open) {
+        line <- paste(line, lines[[i + 1L]])
+      } else {
+        break
+      }
       i <- i + 1L
-      line <- paste0(substr(line, 1L, nchar(line) - 1L), lines[[i]])
     }
     out <- c(out, line)
     i <- i + 1L
   }
   out
 }
+# What a line holds before it can continue: a quote, a backquote, a
+# backslash or a substitution.
+sh_part_re <- "[\"'`\\\\]|[$<>]\\(|\\$\\{"
 
 # What the lines of script items, `lines`, set: the ids they assign a
 # literal pin (`pins`, `values`) and the ids of every other mention
@@ -1024,6 +1076,7 @@ read_pandoc <- function(lines) {
     error = NULL
   )
   if (!any(grepl("PANDOC_VERSION", lines, fixed = TRUE))) {
+    read$unread <- disguised_lines(lines)
     return(read)
   }
   tagged <- tag_pandoc(lines)
@@ -1067,16 +1120,7 @@ read_pandoc <- function(lines) {
     drop_comments(grep(pandoc_tag, shell, fixed = TRUE, value = TRUE)),
     text
   )
-  used <- tagged_ids(
-    text,
-    paste0(
-      "\\$\\{?",
-      pandoc_tag,
-      "\\d+\\b|Sys\\.getenv\\(\\s*[\"']",
-      pandoc_tag,
-      "\\d+[\"']"
-    )
-  )
+  used <- tagged_ids(text, sh_use_re)
   # An alias or a merge key hands the parser one node in several places.
   keep <- !duplicated(pins)
   rank <- order(pins[keep])
@@ -1205,7 +1249,8 @@ pinned_pandoc <- function(lines) {
       "(`PANDOC_VERSION=<version>`, plain or through `export`, `readonly`, ",
       "`declare` or `typeset`), a use (`$PANDOC_VERSION`, ",
       "`${PANDOC_VERSION}`, `${PANDOC_VERSION:-...}`, ",
-      "`Sys.getenv(\"PANDOC_VERSION\")`), a bare `export PANDOC_VERSION` and ",
+      "`Sys.getenv(\"PANDOC_VERSION\")`), a bare `export PANDOC_VERSION` or ",
+      "`readonly PANDOC_VERSION`, and ",
       "a comment, and refuses any other mention, echoed text included, ",
       "since sh can set the value through it. Whatever pin it ",
       "reads elsewhere, a job that sees this value installs a pandoc this ",
@@ -1670,6 +1715,36 @@ self_test <- function() {
     ),
     `beside: a length use` = list(
       c(global, job("echo ${#PANDOC_VERSION}")),
+      "3.10"
+    ),
+    # A quote a line leaves open runs on into the next, so a `#` there is
+    # the quote's and the setting after it is read (SEOR-eeswpcpq).
+    `beside: after a double quote left open, a # line` = list(
+      c(global, block_job("echo \"a", "# \" ; PANDOC_VERSION=3.9")),
+      c("3.10", "3.9")
+    ),
+    `beside: after a single quote left open, a # line` = list(
+      c(global, block_job("echo 'a", "# ' ; PANDOC_VERSION=3.9")),
+      c("3.10", "3.9")
+    ),
+    # A list GitLab never runs as shell is text, not script items.
+    `beside: an artifact path naming it` = list(
+      c(
+        global,
+        "job:",
+        "  script: [true]",
+        "  artifacts:",
+        "    paths: [PANDOC_VERSION.txt]"
+      ),
+      "3.10"
+    ),
+    `beside: a needed job naming it` = list(
+      c(
+        global,
+        "job:",
+        "  script: [true]",
+        "  needs: [\"pandoc PANDOC_VERSION\"]"
+      ),
       "3.10"
     ),
     # A folded item is one line to sh: here the pin is curl's prefix.
@@ -2556,6 +2631,19 @@ self_test <- function() {
     ),
     `beside: a subscripted use` = list(
       c(global, job("echo ${PANDOC_VERSION[0]}")),
+      unread,
+      5L
+    ),
+    # From the review of the allowlist (SEOR-eeswpcpq): a file whose only
+    # mention is disguised, and a name escaped for YAML and then for
+    # `$'...'`.
+    `only a disguised name` = list(
+      c("job:", "  script:", "    - export PANDOC_\"VERSION=3.9\""),
+      unread,
+      3L
+    ),
+    `beside: a name escaped twice` = list(
+      c(global, job("\"export $'PANDOC_\\\\x56ERSION=3.9'\"")),
       unread,
       5L
     ),

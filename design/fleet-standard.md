@@ -636,7 +636,7 @@ What it checks, section by section:
   any value set in a spelling `check-toolchain.R` does not read and stops on,
   such as a block scalar, a `!reference`, a computed or empty value, or, in
   a script, any mention of the name that is not the pin, a use, a bare
-  `export` or a comment, echoed text included
+  `export` or `readonly`, or a comment, echoed text included
   ([ADR 0010](adr/0010-check-toolchain-allows-shell-mentions-it-reads.md)), as its
   `--pandoc-unread` names the lines, each to be rewritten as a plain scalar,
   the expanded form among them where it sits deeper than the global or a
