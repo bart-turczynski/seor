@@ -2383,6 +2383,11 @@ self_test <- function() {
       unread,
       5L
     ),
+    `beside: export, the argument ANSI-C quoted` = list(
+      c(global, job("export $'PANDOC_VERSION=3.9'")),
+      unread,
+      5L
+    ),
     `beside: local, the argument double-quoted` = list(
       c(global, job("local \"PANDOC_VERSION=3.9\"")),
       unread,
