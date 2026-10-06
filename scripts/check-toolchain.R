@@ -366,9 +366,27 @@ need_yaml <- function(pkg = "yaml", minimum = yaml_minimum) {
   }
 }
 
+# need_yaml() for the yaml package, checked once per process: load_ci()
+# runs for every text read.
+yaml_ready <- local({
+  ready <- new.env()
+  ready$ok <- FALSE
+  function() {
+    if (!ready$ok) {
+      need_yaml()
+      ready$ok <- TRUE
+    }
+    invisible()
+  }
+})
+
+# A quoted string in sh: double quotes, where a backslash escapes, or single
+# quotes, where nothing does.
+sh_quoted <- "\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'"
+
 # `lines` with every quoted string blanked, their lengths kept.
 mask_quotes <- function(lines) {
-  m <- gregexpr("\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'", lines, perl = TRUE)
+  m <- gregexpr(sh_quoted, lines, perl = TRUE)
   regmatches(lines, m) <- lapply(
     regmatches(lines, m),
     function(s) strrep("_", nchar(s))
@@ -385,11 +403,7 @@ comment_at <- function(lines) {
 # `line` with each quoted argument to a command blanked: a quoted word after
 # another word, as in `echo "…"`. A quoted value after `=` keeps its text.
 mask_quoted_args <- function(line) {
-  m <- gregexpr(
-    "\\w\\s+\\K(?:\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*')",
-    line,
-    perl = TRUE
-  )
+  m <- gregexpr(paste0("\\w\\s+\\K(?:", sh_quoted, ")"), line, perl = TRUE)
   regmatches(line, m) <- lapply(
     regmatches(line, m),
     function(s) strrep("_", nchar(s))
@@ -467,7 +481,7 @@ yaml_harmless <- "is out of (?:integer|real) range$"
 # unless it is harmless: the yaml package otherwise loads an unknown alias
 # as a string, and a `!!int` it cannot read as NA.
 load_ci <- function(lines) {
-  need_yaml()
+  yaml_ready()
   starts <- unique(c(1L, grep("^---(?:\\s|$)", lines, perl = TRUE)))
   ends <- c(starts[-1L] - 1L, length(lines))
   docs <- vector("list", length(starts))
@@ -634,7 +648,7 @@ sh_head <- paste0(
   "\\s*(?:(?:if|elif|while|until|then|do|else|time(?:\\s+-p)?|!)\\s+)*"
 )
 # And a word: quoted parts and unquoted text.
-sh_word <- "(?:\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|[^\\s;&|<>()\"'])*"
+sh_word <- paste0("(?:", sh_quoted, "|[^\\s;&|<>()\"'])*")
 
 # The settings of the token with `id`, read on a masked line: `assign`, an
 # assignment in the current shell or a command's prefix, whose value is a
@@ -678,7 +692,7 @@ sh_settings <- function(id) {
 
 # A shell word's value: one quoted string loses its quotes.
 sh_unquote <- function(word) {
-  if (grepl("^(?:\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*')$", word, perl = TRUE)) {
+  if (grepl(paste0("^(?:", sh_quoted, ")$"), word, perl = TRUE)) {
     return(substr(word, 2L, nchar(word) - 1L))
   }
   word
