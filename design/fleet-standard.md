@@ -634,8 +634,10 @@ What it checks, section by section:
   `variables:` entry or a shell assignment, quoted or not, with or without a
   trailing comment (GitLab's expanded `value:` form is reported, and so is
   any value set in a spelling `check-toolchain.R` does not read and stops on,
-  such as a block scalar, a `!reference`, a computed or empty value, an
-  `env` prefix or a `local`, `eval`, `for` or `read` setting, as its
+  such as a block scalar, a `!reference`, a computed or empty value, or, in
+  a script, any mention of the name that is not the pin, a use, a bare
+  `export` or a comment, echoed text included
+  ([ADR 0010](adr/0010-check-toolchain-allows-shell-mentions-it-reads.md)), as its
   `--pandoc-unread` names the lines, each to be rewritten as a plain scalar,
   the expanded form among them where it sits deeper than the global or a
   job's own `variables:`, such as in a `rules:` entry, and a file its YAML parser does not load though PyYAML does, such as one
@@ -643,7 +645,7 @@ What it checks, section by section:
   the job sees, and never in a `parallel: matrix` entry, which pins per leg. An
   assignment is one sh would run and keep for the commands after it, plain
   or through `export`, `readonly`, `declare` or `typeset`: not the same text
-  in a comment, an `echo` or a here-document, and not one anywhere in a
+  in a comment (in an `echo` or a here-document it is refused), and not one anywhere in a
   subshell, a pipeline stage or a backgrounded compound command, or in a
   command's prefix (`PANDOC_VERSION=3.10 curl …`). One in a function's body,
   or under `eval`, `sh -c` or `$(...)`, is not judged. The pin is read by
