@@ -714,7 +714,11 @@ read_pandoc <- function(lines) {
 # .gitlab-ci.yml texts separated by a line holding only a form feed, texts
 # and lines numbered from 1: `<text>\t<line>\t<value>` per pin, then
 # `unread\t<text>\t<line>` per line read_pandoc() finds unread, the setting
-# pinned_pandoc() refuses whatever pin it reads (SEOR-mcstkogt), and
+# pinned_pandoc() refuses whatever pin it reads (SEOR-mcstkogt), or in
+# GitLab's expanded form at any depth (check-fleet-standard.py finds that
+# form itself only in the global and top-level `variables:`, and reports its
+# own gap in place of this one there; elsewhere, such as a `rules:` entry's
+# variables, this line is the gap it reports), and
 # `unloadable\t<text>\t<line>\t<message>` for a text that does not load (line
 # 0 when the parser names none). The words keep these apart from a pin's
 # line when both flags are given.
@@ -734,7 +738,11 @@ pandoc_report <- function(lines, assignments = TRUE, unread = TRUE) {
           line <- if (is.na(error$line)) 0L else error$line
           return(sprintf("unloadable\t%d\t%d\t%s", i, line, error$message))
         }
-        sprintf("unread\t%d\t%d", i, reads[[i]]$unread)
+        sprintf(
+          "unread\t%d\t%d",
+          i,
+          sort(union(reads[[i]]$unread, reads[[i]]$expanded))
+        )
       }))
     }
   )
@@ -1690,7 +1698,26 @@ self_test <- function() {
   )
   case(
     "pandoc-report: unread, none",
-    !length(unread_lines(c(global, "\f", read$variables[[1L]], "\f", block)))
+    !length(unread_lines(c(global, "\f", read$variables[[1L]])))
+  )
+  # The expanded form, which pinned_pandoc() stops on, prints its line at
+  # any depth: check-fleet-standard.py finds it itself only in the global
+  # and top-level `variables:`, so a `rules:` entry's is its gap this way.
+  case(
+    "pandoc-report: unread, the expanded form",
+    identical(
+      unread_lines(c(
+        block,
+        "\f",
+        global,
+        "job:",
+        "  rules:",
+        "    - if: $X",
+        "      variables: {PANDOC_VERSION: {value: \"3.9\"}}",
+        "  script: [echo]"
+      )),
+      c("unread\t1\t2", "unread\t2\t6")
+    )
   )
   case(
     "pandoc-report: both, assignments first",
@@ -1731,7 +1758,8 @@ self_test <- function() {
 # check-fleet-standard.py reads the pin this way rather than with a parser of
 # its own, and runs it with every fixture of its self-test at once.
 # --pandoc-unread reads the same and prints `unread\t<text>\t<line>` per line
-# that sets a value in a spelling the reader does not read, and
+# that sets a value in a spelling the reader does not read or in GitLab's
+# expanded form, and
 # `unloadable\t<text>\t<line>\t<message>` for a text that does not load as
 # YAML. With both flags, one run prints both kinds of line, assignments
 # first, from one parse of each text (pandoc_report()).

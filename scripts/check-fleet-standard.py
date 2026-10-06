@@ -2008,7 +2008,9 @@ def expanded_pin_scopes(ci: CI) -> list[str]:
     `variables:`", or the block (a job or a template) whose own `variables:`
     hold it. Read from the parsed YAML: check-toolchain.R reads a plain
     scalar only; its own check stops on this form, and its
-    `--pandoc-assignments` prints no pin for it, nor where it sits."""
+    `--pandoc-assignments` prints no pin for it, nor where it sits. Its
+    `--pandoc-unread` prints the form's line at any depth, so one deeper than
+    these scopes (a `rules:` entry's variables) is the unread gap instead."""
     scopes = []
     blocks = [("the global `variables:`", ci.data)] + [
         (str(name), block) for name, block in ci.data.items() if name not in RESERVED and isinstance(block, dict)]
@@ -3951,6 +3953,14 @@ def self_test() -> list[str]:
                      "check:\n  extends: [.r, .on-main]\n" + variables)
         expect_gap(tag, unread_gap, "punycoder", files, fixture_state(),
                    then=unread_alone(tag, files, variables.splitlines()[1]))
+    # The expanded form deeper than the `variables:` expanded_pin_scopes()
+    # reads, here a `rules:` entry's: check-toolchain.R stops on it, and its
+    # `--pandoc-unread` names the line, so it is that gap, not a pass.
+    tag = "a rules entry's pin in the expanded form beside a global pin"
+    setting = "      variables: {PANDOC_VERSION: {value: \"3.9\"}}"
+    files = dict(global_pin, **{ci: global_pin[ci] + "extra:\n  rules:\n    - if: $EXTRA\n" + setting
+                                + "\n  script: [echo extra]\n"})
+    expect_gap(tag, unread_gap, "punycoder", files, fixture_state(), then=unread_alone(tag, files, setting))
     # check-toolchain.R reads these with a YAML parser now (SEOR-bqroclcz): a
     # job's pin in a flow mapping or behind a quoted key, beside a global pin,
     # is a second value, not an unread one.
