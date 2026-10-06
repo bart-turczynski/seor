@@ -197,8 +197,10 @@ import concurrent.futures
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1113,6 +1115,10 @@ PANDOC_URL_RE = re.compile(r"github\.com/jgm/pandoc/releases/download/([^/\s\"']
 # spellings: read_pandoc_assignments() runs it (SEOR-xhyrogfm). The download must
 # name its version through PANDOC_VERSION, the variable that script reads.
 TOOLCHAIN_R = Path(__file__).resolve().with_name("check-toolchain.R")
+# How it runs: without ~/.Rprofile, whose output would mix into what it
+# prints, but with ~/.Renviron and the site files, as the members' pre-push
+# hooks run it, since a library set there (R_LIBS_USER) may hold its yaml.
+RSCRIPT = ["Rscript", "--no-save", "--no-restore", "--no-init-file"]
 PANDOC_VAR_TOKEN_RE = re.compile(r"\$\{?PANDOC_VERSION\}?")
 PANDOC_LOCAL_RE = re.compile(r"\bpandoc_version\s*\(")
 PANDOC_PIN_READ_RE = re.compile(r"\bPANDOC_VERSION\b")
@@ -1174,7 +1180,7 @@ def read_pandoc_assignments(texts: list[str]) -> PinReads:
     if not todo:
         return {}
     stdin = "\n\f\n".join("\n".join(re.split(r"\r\n|\r|\n", text)) for text in todo) + "\n"
-    command = ["Rscript", "--vanilla", str(TOOLCHAIN_R), "--pandoc-assignments", "--pandoc-unread"]
+    command = [*RSCRIPT, str(TOOLCHAIN_R), "--pandoc-assignments", "--pandoc-unread"]
     try:
         run = subprocess.run(command, input=stdin, capture_output=True, encoding="utf-8", timeout=120, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -4502,6 +4508,23 @@ def self_test() -> list[str]:
 
     run("punycoder", cran, State(), judge=no_state_gaps)
 
+    # The pin reader's Rscript reads the user's .Renviron, where a library
+    # holding yaml may be set, and not the user's .Rprofile, whose output
+    # would mix into what it prints.
+    profile_dir = Path(tempfile.mkdtemp())
+    try:
+        (profile_dir / "Renviron").write_text("SEOR_PROBE=renviron\n", encoding="utf-8")
+        (profile_dir / "Rprofile").write_text('cat("rprofile")\n', encoding="utf-8")
+        env = dict(os.environ, R_ENVIRON_USER=str(profile_dir / "Renviron"),
+                   R_PROFILE_USER=str(profile_dir / "Rprofile"))
+        probe = subprocess.run([*RSCRIPT, "-e", 'cat(Sys.getenv("SEOR_PROBE"))'], capture_output=True,
+                               encoding="utf-8", env=env, timeout=60, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired) as error:
+        probe = str(error)
+    finally:
+        shutil.rmtree(profile_dir, ignore_errors=True)
+    if probe != "renviron":
+        failures.append(f"the pin reader's Rscript flags: expected ~/.Renviron read and ~/.Rprofile not, got {probe!r}")
     # Every row is built: read their pins in one Rscript run, then judge them.
     try:
         pins = read_pandoc_assignments([source.read(".gitlab-ci.yml") or "" for _, source, _, _, _ in queued])

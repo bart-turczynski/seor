@@ -92,8 +92,8 @@
 #
 #   Rscript scripts/check-toolchain.R              # exit 1 on drift
 #   Rscript scripts/check-toolchain.R --self-test  # positive/negative cases
-#   Rscript --vanilla scripts/check-toolchain.R --pandoc-assignments < .gitlab-ci.yml
-#   Rscript --vanilla scripts/check-toolchain.R --pandoc-unread < .gitlab-ci.yml
+#   Rscript scripts/check-toolchain.R --pandoc-assignments < .gitlab-ci.yml
+#   Rscript scripts/check-toolchain.R --pandoc-unread < .gitlab-ci.yml
 
 package_root <- function() {
   args <- commandArgs(trailingOnly = FALSE)
@@ -335,14 +335,31 @@ pandoc_literal_re <- "^[A-Za-z0-9.+-]+$"
 script_keys <- c("script", "before_script", "after_script")
 expanded_keys <- c("value", "description", "expand", "options")
 
-# The yaml package, or a one-line stop naming it. This script is vendored
+# The oldest yaml package this reader runs on: yaml.load() takes
+# `merge.precedence` from 2.2.1 (the package's NEWS), and the handlers and
+# `eval.expr` it also passes are older.
+yaml_minimum <- "2.2.1"
+
+# The yaml package at `minimum` or later, or a one-line stop naming it, so a
+# machine without it is not reported as broken YAML. This script is vendored
 # into every fleet package, and its pre-push hook runs the R on PATH.
-need_yaml <- function(pkg = "yaml") {
-  if (!requireNamespace(pkg, quietly = TRUE)) {
+need_yaml <- function(pkg = "yaml", minimum = yaml_minimum) {
+  installed <- if (requireNamespace(pkg, quietly = TRUE)) {
+    utils::packageVersion(pkg)
+  }
+  if (is.null(installed) || installed < minimum) {
     stop(
       "check-toolchain.R reads .gitlab-ci.yml with the R package ",
       pkg,
-      ", which is not installed. Install it with: ",
+      " ",
+      minimum,
+      " or later, ",
+      if (is.null(installed)) {
+        "which is not installed"
+      } else {
+        paste0("but ", installed, " is installed")
+      },
+      ". Install it with: ",
       sprintf("Rscript -e 'install.packages(\"%s\")'", pkg),
       call. = FALSE
     )
@@ -1881,9 +1898,22 @@ self_test <- function() {
     }
   }
   # Without the yaml package the check stops in one line, naming it.
-  why <- tryCatch(need_yaml("yaml.not.installed"), error = conditionMessage)
+  stops <- function(...) {
+    tryCatch(
+      {
+        need_yaml(...)
+        ""
+      },
+      error = conditionMessage
+    )
+  }
+  why <- stops("yaml.not.installed")
   case("pandoc-yaml-missing", grepl("yaml.not.installed", why, fixed = TRUE))
   case("pandoc-yaml-missing", grepl("install.packages", why, fixed = TRUE))
+  # So does one with a yaml too old for the arguments this reader passes.
+  why <- stops(minimum = "999.0")
+  case("pandoc-yaml-old", grepl("yaml 999.0 or later, but", why, fixed = TRUE))
+  case("pandoc-yaml-old", grepl("install.packages", why, fixed = TRUE))
 
   # check-fleet-standard.py reads the pin through --pandoc-assignments and
   # --pandoc-unread: these texts, separated by a form feed and numbered as
