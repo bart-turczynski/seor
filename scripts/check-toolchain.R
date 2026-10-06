@@ -407,10 +407,14 @@ drop_comments <- function(lines) {
 
 # A PANDOC_VERSION token, not one inside an anchor's or an alias's name
 # (`&pv-PANDOC_VERSION`, `*PANDOC_VERSION`): renamed there, the anchor and
-# its alias would no longer match. A name followed by `=` or `+=` is a shell
-# assignment after `&` or `&&` (`true &&PANDOC_VERSION=3.9 sh i.sh`), not a
-# name.
+# its alias would no longer match. An anchor or an alias starts only a node:
+# at the start of a line, after `- `, `: ` or `? `, or after `[`, `{` or `,`.
+# Elsewhere `&` and `*` are text (`?os=linux&v=$PANDOC_VERSION`,
+# `pandoc*$PANDOC_VERSION.deb`), and the token in them is renamed. A name
+# followed by `=` or `+=` is a shell assignment (`true &&PANDOC_VERSION=3.9`),
+# not a name.
 pandoc_token_re <- paste0(
+  "(?:^\\s*|(?<=[-:?]\\s)\\s*|(?<=[\\[{,])\\s*)",
   "[&*][^\\s,\\[\\]{}]*?(?<!\\w)PANDOC_VERSION(?!\\w|\\+?=)",
   "[^\\s,\\[\\]{}]*(*SKIP)(*FAIL)|(?<!\\w)PANDOC_VERSION(?!\\w)"
 )
@@ -680,20 +684,11 @@ sh_unquote <- function(word) {
   word
 }
 
-# A setting in `eval`'s arguments, quoted or not: an assignment (`=`, `+=`),
-# or a `for`, `select`, `read` or `printf -v` target. A use, `$PANDOC_VERSION`
-# or `${PANDOC_VERSION}`, sets nothing.
-eval_setting_re <- paste0(
-  "(?<![\\w${])",
-  pandoc_tag,
-  "\\d+\\+?=|\\b(?:for|select)\\s+",
-  pandoc_tag,
-  "\\d+\\b|\\bread\\b[^;&|]*?\\s",
-  pandoc_tag,
-  "\\d+\\b|\\bprintf\\b[^;&|]*?-v\\s*",
-  pandoc_tag,
-  "\\d+\\b"
-)
+# A setting in `eval`'s arguments, quoted or not: any PANDOC_VERSION token
+# but a use, `$PANDOC_VERSION` or `${PANDOC_VERSION}`. What eval runs is
+# shell this does not parse, so whatever names the variable (`=`, `+=`, a
+# `read` or `for` target, `unset`, `getopts`) fails closed.
+eval_setting_re <- paste0("(?<![\\w${])", pandoc_tag, "\\d+\\b")
 
 # What one line of a script item sets: the ids it assigns a literal pin
 # (`pins`, `values`) and the ids it sets otherwise (`set`). Quoted arguments
@@ -1667,6 +1662,17 @@ self_test <- function() {
       no_pin,
       4L
     ),
+    # `&` and `*` inside a word start no anchor or alias.
+    `use, after & in a query` = list(
+      job("curl -o p.deb \"https://x.org/dl?os=linux&v=$PANDOC_VERSION\""),
+      no_pin,
+      3L
+    ),
+    `use, after * in a glob` = list(
+      job("dpkg -i pandoc*$PANDOC_VERSION.deb"),
+      no_pin,
+      3L
+    ),
     `use, in a variable's value` = list(
       c("variables:", "  URL: \"https://example.org/${PANDOC_VERSION}\""),
       no_pin,
@@ -1830,6 +1836,16 @@ self_test <- function() {
     ),
     `beside: eval of read` = list(
       c(global, job("eval \"read -r PANDOC_VERSION < v\"")),
+      unread,
+      5L
+    ),
+    `beside: eval of unset` = list(
+      c(global, job("eval \"unset PANDOC_VERSION\"")),
+      unread,
+      5L
+    ),
+    `beside: eval of getopts` = list(
+      c(global, job("eval \"getopts v PANDOC_VERSION\"")),
       unread,
       5L
     ),

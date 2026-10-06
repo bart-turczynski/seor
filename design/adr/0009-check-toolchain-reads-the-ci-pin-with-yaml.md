@@ -79,7 +79,9 @@ it (checked on 2026-10-06).
    line, however it was spelled, aliased or merged. A token inside an
    anchor's or an alias's name (`&a-PANDOC_VERSION`) keeps its text, so the
    two still match, unless `=` or `+=` follows: that is a shell assignment
-   after `&&`. Renamed apart, two PANDOC_VERSION keys in one mapping no
+   after `&&`. An anchor or an alias starts only a node (a line, or after
+   `- `, `: `, `? `, `[`, `{` or `,`); elsewhere `&` and `*` are text, as in
+   `?os=linux&v=$PANDOC_VERSION`, and the token is renamed. Renamed apart, two PANDOC_VERSION keys in one mapping no
    longer collide, so a mapping handler records each mapping's own keys and
    refuses the second as the parser's duplicate key, naming its line. A key
    a `<<` merge brings in is the source mapping's, built first, and no
@@ -96,8 +98,9 @@ it (checked on 2026-10-06).
    plain or through `export`, `readonly`, `declare` or `typeset`. A setting
    under `env` or `local`, a `for`, `select`, `read` or `printf -v` target,
    `+=`, a non-literal value and `${PANDOC_VERSION:=…}` are refused. So is
-   an assignment or such a target under `eval`, quoted or not; a use there
-   (`eval "echo $PANDOC_VERSION"`) sets nothing.
+   any PANDOC_VERSION token under `eval`, quoted or not, but a use
+   (`eval "echo $PANDOC_VERSION"`, which sets nothing): eval runs shell this
+   does not parse, so `unset` or a `getopts` target there fails closed.
 5. **It fails closed.** A file that names PANDOC_VERSION and does not load
    stops the check, with the parser's message. `--pandoc-unread` prints it
    as `unloadable\t<text>\t<line>\t<message>`. `check-fleet-standard.py`

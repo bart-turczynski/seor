@@ -241,8 +241,8 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   as one only in an included file. And it stops on any `PANDOC_VERSION`
   value set in a spelling it does not read, whatever pin it reads elsewhere
   and even when the value matches: a block scalar, a `!reference`, an empty
-  or computed value, an `env`, `local`, `for` or `read` setting, or an
-  assignment under `eval` (a use there, `eval "echo $PANDOC_VERSION"`, sets
+  or computed value, an `env`, `local`, `for` or `read` setting, or any
+  mention under `eval` but a use (`eval "echo $PANDOC_VERSION"` sets
   nothing). A job's `env PANDOC_VERSION=3.9 sh install.sh` beside a global
   `PANDOC_VERSION: "3.10"` would read as 3.10 while that command installs
   3.9. A null value (`PANDOC_VERSION:` bare, `~` or `null`) sets no
