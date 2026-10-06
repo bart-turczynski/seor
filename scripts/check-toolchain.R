@@ -891,33 +891,32 @@ sh_before_stray <- sh_before(sh_stray)
 sh_after <- paste0("^(\\+?)=(", sh_word, ")")
 # A token, its id the first group.
 sh_token <- paste0(pandoc_tag, "(\\d+)")
-# An `eval`, its arguments the match.
-sh_eval <- paste0("(?:", sh_head, "|", sh_stray, ")eval\\s\\K[^;&|]*")
-# A declaration, `export`, `readonly`, `declare`, `typeset`, `local` or
-# `env`, after any assignments, its arguments the match.
-sh_declaration <- paste0(
-  "(?:",
-  sh_head,
-  "|",
-  sh_stray,
-  ")(?:\\w+=",
-  sh_word,
-  "\\s+)*(?:export|readonly|declare|typeset|local|env)\\s\\K[^;&|]*"
+# Where sh runs `cmd` as a command, after any assignments: its arguments
+# the match.
+sh_arguments <- function(cmd) {
+  paste0(
+    "(?:",
+    sh_head,
+    "|",
+    sh_stray,
+    ")(?:\\w+=",
+    sh_word,
+    "\\s+)*",
+    cmd,
+    "\\s\\K[^;&|]*"
+  )
+}
+sh_eval <- sh_arguments("eval")
+sh_let <- sh_arguments("let")
+# A declaration: `export`, `readonly`, `declare`, `typeset`, `local` or
+# `env`.
+sh_declaration <- sh_arguments(
+  "(?:export|readonly|declare|typeset|local|env)"
 )
-# A `let`, after any assignments, its arguments the match.
-sh_let <- paste0(
-  "(?:",
-  sh_head,
-  "|",
-  sh_stray,
-  ")(?:\\w+=",
-  sh_word,
-  "\\s+)*let\\s\\K[^;&|]*"
-)
-# A declaration's argument that sets PANDOC_VERSION however it is quoted:
-# with its quotes removed, the word starts with the token and `=` or `+=`.
-# sh_before reads only the unquoted spelling; `export "PANDOC_VERSION=3.9"`
-# sets it too (SEOR-qakbchzg).
+# A declaration's argument that sets PANDOC_VERSION, quoted or escaped
+# around the token or its `=`: with its quotes removed, the word starts with
+# the token and `=` or `+=`. sh_before reads only the unquoted spelling;
+# `export "PANDOC_VERSION=3.9"` sets it too (SEOR-qakbchzg).
 declaration_setting_re <- paste0(
   "^(?:\\$?[\"']|\\\\)*",
   pandoc_tag,
@@ -994,30 +993,26 @@ sh_read <- function(lines) {
         is(sh_before_stray[["scoped"]])) |
       is(sh_before_head[["target"]]) |
       is(sh_before_stray[["target"]]))
-  args <- function(re, text = lines) {
+  # The text each match in `at` covers on `text`, all lines' in one vector.
+  cut <- function(text, at) {
     unlist(
       Map(
         function(line, at) {
           substring(line, at, at + attr(at, "match.length") - 1L)[at > 0L]
         },
         text,
-        gregexpr(re, masked, perl = TRUE)
+        at
       ),
       use.names = FALSE
     )
   }
+  args <- function(re) cut(lines, gregexpr(re, masked, perl = TRUE))
   # A declaration's arguments split into words on the mask, so a space a
   # quote holds splits none, each word read from the line.
-  declared <- args(sh_declaration)
-  words <- unlist(
-    Map(
-      function(line, at) {
-        substring(line, at, at + attr(at, "match.length") - 1L)[at > 0L]
-      },
-      declared,
-      gregexpr("\\S+", args(sh_declaration, masked), perl = TRUE)
-    ),
-    use.names = FALSE
+  declarations <- gregexpr(sh_declaration, masked, perl = TRUE)
+  words <- cut(
+    cut(lines, declarations),
+    gregexpr("\\S+", cut(masked, declarations), perl = TRUE)
   )
   found$pins <- id[pin]
   found$values <- value[pin]
@@ -2410,6 +2405,11 @@ self_test <- function() {
     ),
     `beside: export after an assignment` = list(
       c(global, job("X=1 export PANDOC_VERSION=3.9")),
+      unread,
+      5L
+    ),
+    `beside: eval after an assignment` = list(
+      c(global, job("X=1 eval PANDOC_VERSION=3.9")),
       unread,
       5L
     ),
