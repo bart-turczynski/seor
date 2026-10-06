@@ -311,13 +311,17 @@ run_stale_check <- function(root) {
 #     GitLab reads it; or
 #   * a shell assignment in a script item where sh reads one as a command:
 #     at the start of a line, after `;`, `&&`, `||`, `|`, `(`, a `{` group or
-#     a `case` pattern's `)`, and after `if`, `elif`, `while`, `until`,
+#     a `case` pattern's `)` (after `case WORD in`, `;;` or `;&`, or
+#     starting a line), and after `if`, `elif`, `while`, `until`,
 #     `then`, `do`, `else`, `time` or `!` there, plain or through `export`,
 #     `readonly`, `declare` or `typeset`, after other assignments or as a
 #     command's prefix: `PANDOC_VERSION=3.10`,
 #     `export R_X=1 PANDOC_VERSION="3.10"`. `echo PANDOC_VERSION=3.9` assigns
 #     nothing, and neither does text in a quoted argument to a command,
-#     `echo "a; PANDOC_VERSION=3.9"`, nor a shell comment. A script item is
+#     `echo "a; PANDOC_VERSION=3.9"`, nor a shell comment. A setting after
+#     any other `)` but a `$(...)`'s is refused, not read: sh starts no
+#     command there, unless in a `case` pattern this does not parse, and
+#     `echo logged in x) PANDOC_VERSION=3.9` is no case. A script item is
 #     a string in a YAML sequence, at any depth, or the value of `script`,
 #     `before_script` or `after_script`, so an anchored list and a
 #     `!reference` target count whether a job uses them or not.
@@ -384,15 +388,18 @@ yaml_ready <- local({
 # quotes, where nothing does.
 sh_quoted <- "\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'"
 
-# `lines` with every quoted string blanked, their lengths kept.
-mask_quotes <- function(lines) {
-  m <- gregexpr(sh_quoted, lines, perl = TRUE)
-  regmatches(lines, m) <- lapply(
-    regmatches(lines, m),
+# `text` with each match of `re` blanked, its length kept.
+blank <- function(text, re) {
+  m <- gregexpr(re, text, perl = TRUE)
+  regmatches(text, m) <- lapply(
+    regmatches(text, m),
     function(s) strrep("_", nchar(s))
   )
-  lines
+  text
 }
+
+# `lines` with every quoted string blanked, their lengths kept.
+mask_quotes <- function(lines) blank(lines, sh_quoted)
 
 # Where each trailing comment starts in `lines`, -1 for none: a `#` that
 # starts a word outside quotes, so `X='a #b'` holds no comment.
@@ -403,11 +410,16 @@ comment_at <- function(lines) {
 # `line` with each quoted argument to a command blanked: a quoted word after
 # another word, as in `echo "…"`. A quoted value after `=` keeps its text.
 mask_quoted_args <- function(line) {
-  m <- gregexpr(paste0("\\w\\s+\\K(?:", sh_quoted, ")"), line, perl = TRUE)
-  regmatches(line, m) <- lapply(
-    regmatches(line, m),
-    function(s) strrep("_", nchar(s))
-  )
+  blank(line, paste0("\\w\\s+\\K(?:", sh_quoted, ")"))
+}
+
+# `line` with each command substitution, `$(...)`, and arithmetic, `$((...))`,
+# blanked, the innermost first, so a `)` left ends neither.
+mask_substitutions <- function(line) {
+  re <- "\\$\\(\\([^()]*\\)\\)|\\$\\([^()]*\\)"
+  while (grepl(re, line, perl = TRUE)) {
+    line <- blank(line, re)
+  }
   line
 }
 
@@ -639,14 +651,43 @@ yaml_setting <- function(value, line, id) {
   list(kind = "pin", value = value)
 }
 
-# sh's command head: the start of a line, `;`, `&`, `|`, `(` or a `{`
-# group, or a `case` pattern's `)` (after `in`, `;;` or `;&`, or starting a
-# line), then any reserved words a command may follow: `if`, `elif`,
-# `while`, `until`, `then`, `do`, `else`, `time` (`-p` too) and `!`.
-sh_head <- paste0(
-  "(?:(?:^|(?<=\\s)in\\s|;;&?|;&)\\s*\\(?[^\\s;&()]+\\)|^|[;&|(]|(?<!\\$)\\{)",
-  "\\s*(?:(?:if|elif|while|until|then|do|else|time(?:\\s+-p)?|!)\\s+)*"
+# The reserved words a command may follow: `if`, `elif`, `while`, `until`,
+# `then`, `do`, `else`, `time` (`-p` too) and `!`.
+sh_reserved <- "(?:(?:if|elif|while|until|then|do|else|time(?:\\s+-p)?|!)\\s+)*"
+# Where sh starts a command outside a `case`: the start of a line, `;`, `&`,
+# `|`, `(` or a `{` group.
+sh_start <- "(?:^|[;&|(]|(?<!\\$)\\{)"
+# A word in a `case` head: quoted, escaped, backquoted and `$(...)` parts
+# (one nested `(...)` deep) and unquoted text.
+sh_case_word <- paste0(
+  "(?:",
+  sh_quoted,
+  "|\\\\.|`[^`]*`|\\$\\((?:[^()]|\\([^()]*\\))*\\)|[^\\s;&|<>()\"'`\\\\])+"
 )
+# A `case` pattern list and its `)`: `a)`, `a|b)`, `a | b)`, `( a )`. One
+# follows `case WORD in` where a command starts, `;;`, `;;&` or `;&`, or
+# starts a line, as in a `case` written over several.
+sh_case_pattern <- paste0(
+  "(?:^|;;&?|;&|",
+  sh_start,
+  "\\s*",
+  sh_reserved,
+  "case\\s+",
+  sh_case_word,
+  "\\s+in\\s)\\s*\\(?\\s*",
+  sh_case_word,
+  "(?:\\s*\\|\\s*",
+  sh_case_word,
+  ")*\\s*\\)"
+)
+# sh's command head: where a command starts, or a `case` pattern's `)`,
+# then any reserved words.
+sh_head <- paste0("(?:", sh_case_pattern, "|", sh_start, ")\\s*", sh_reserved)
+# A `)` that ends neither a `case` pattern sh_head reads nor a `$(...)`, then
+# any reserved words. sh takes no command there but in a pattern's body, so
+# what follows it is a `case` pattern this does not parse, or text sh
+# rejects: a setting after it is refused, never passed.
+sh_stray <- paste0("\\)\\s*", sh_reserved)
 # And a word: quoted parts and unquoted text.
 sh_word <- paste0("(?:", sh_quoted, "|[^\\s;&|<>()\"'])*")
 
@@ -654,12 +695,12 @@ sh_word <- paste0("(?:", sh_quoted, "|[^\\s;&|<>()\"'])*")
 # assignment in the current shell or a command's prefix, whose value is a
 # pin when it is a literal; `other`, a setting never read as a pin: under
 # `local` or `env`, `for`'s or `select`'s loop variable, `read`'s or
-# `printf -v`'s target.
-sh_settings <- function(id) {
+# `printf -v`'s target. Each follows `head`.
+sh_settings <- function(id, head = sh_head) {
   name <- paste0(pandoc_tag, id)
   list(
     assign = paste0(
-      sh_head,
+      head,
       "(?:(?:export|readonly|declare|typeset)(?:\\s+[-+]\\w+)*",
       "(?:\\s+\\w+(?:=",
       sh_word,
@@ -672,7 +713,7 @@ sh_settings <- function(id) {
       ")"
     ),
     other = paste0(
-      sh_head,
+      head,
       "(?:(?:local(?:\\s+[-+]\\w+)*(?:\\s+\\w+(?:=",
       sh_word,
       ")?)*?|env(?:\\s+[^\\s;&|]+)*?)\\s+(?:\\w+=",
@@ -708,7 +749,8 @@ eval_setting_re <- paste0("(?<![\\w${])", pandoc_tag, "\\d+\\b")
 # (`pins`, `values`) and the ids it sets otherwise (`set`). Quoted arguments
 # to commands and a trailing comment (a `#` outside quotes) are blanked
 # first. A setting in `eval`'s arguments and `${PANDOC_VERSION:=...}` are
-# read through quotes: both set the value wherever it is quoted.
+# read through quotes: both set the value wherever it is quoted. Any setting
+# after a stray `)` (sh_stray) is one set otherwise.
 sh_line <- function(line) {
   masked <- mask_quoted_args(line)
   hash <- comment_at(masked)
@@ -716,9 +758,12 @@ sh_line <- function(line) {
     line <- substr(line, 1L, hash - 1L)
     masked <- substr(masked, 1L, hash - 1L)
   }
+  # A `)` that closes a `$(...)` is a word's, so only the others are stray.
+  stray <- mask_substitutions(masked)
   found <- list(pins = integer(), values = character(), set = integer())
   for (id in unique(tagged_ids(line, paste0(pandoc_tag, "\\d+")))) {
     re <- sh_settings(id)
+    after_stray <- sh_settings(id, sh_stray)
     assign <- regmatches(masked, regexec(re$assign, masked, perl = TRUE))[[1L]]
     if (length(assign)) {
       value <- sh_unquote(assign[[3L]])
@@ -728,22 +773,30 @@ sh_line <- function(line) {
       } else {
         found$set <- c(found$set, id)
       }
-    } else if (grepl(re$other, masked, perl = TRUE)) {
+    } else if (
+      grepl(re$other, masked, perl = TRUE) ||
+        grepl(after_stray$assign, stray, perl = TRUE) ||
+        grepl(after_stray$other, stray, perl = TRUE)
+    ) {
       found$set <- c(found$set, id)
     }
   }
-  evals <- gregexpr(paste0(sh_head, "eval\\s[^;&|]*"), masked, perl = TRUE)
-  args <- substring(
-    line,
-    evals[[1L]],
-    evals[[1L]] + attr(evals[[1L]], "match.length") - 1L
-  )
   found$set <- c(
     found$set,
-    tagged_ids(args[evals[[1L]] > 0L], eval_setting_re),
+    eval_ids(line, masked, sh_head),
+    eval_ids(line, stray, sh_stray),
     tagged_ids(line, paste0("\\$\\{", pandoc_tag, "\\d+:?="))
   )
   found
+}
+
+# The ids `eval` sets in `line`, an eval found after `head` on `masked`, the
+# line masked: its arguments are read in `line`, through quotes.
+eval_ids <- function(line, masked, head) {
+  evals <- gregexpr(paste0(head, "eval\\s\\K[^;&|]*"), masked, perl = TRUE)
+  at <- evals[[1L]]
+  args <- substring(line, at, at + attr(at, "match.length") - 1L)
+  tagged_ids(args[at > 0L], eval_setting_re)
 }
 
 # Every PANDOC_VERSION setting in `lines`, a .gitlab-ci.yml text, by line:
@@ -951,7 +1004,8 @@ pinned_pandoc <- function(lines) {
       "list, a mapping, a boolean, an empty or computed value, a number ",
       "YAML typed from a block scalar, an alias or a line below its key, ",
       "`+=`, or a value set by `env`, `local`, `eval`, `for`, `select`, ",
-      "`read`, `printf -v` or `${PANDOC_VERSION:=...}`). Whatever pin it ",
+      "`read`, `printf -v` or `${PANDOC_VERSION:=...}`, or a setting after ",
+      "a `)` that ends no `case` pattern it reads). Whatever pin it ",
       "reads elsewhere, a job that sees this value installs a pandoc this ",
       "check never compares. ",
       pin_fix,
@@ -1330,6 +1384,38 @@ self_test <- function() {
       ),
       c("3.10", "3.9")
     ),
+    # A pattern list may hold spaces around `|` and inside `( ... )`, and a
+    # later one follows `;;` (SEOR-lmfgkesn).
+    `beside: a case pattern list with spaces` = list(
+      c(global, job("case $X in a | b) PANDOC_VERSION=3.9 ;; esac")),
+      c("3.10", "3.9")
+    ),
+    `beside: a parenthesized case pattern with spaces` = list(
+      c(global, job("case $X in ( a ) PANDOC_VERSION=3.9 ;; esac")),
+      c("3.10", "3.9")
+    ),
+    `beside: a parenthesized case pattern starting a line` = list(
+      c(
+        global,
+        block_job("case \"$X\" in", "  ( a ) PANDOC_VERSION=3.9 ;;", "esac")
+      ),
+      c("3.10", "3.9")
+    ),
+    `beside: a later case pattern list` = list(
+      c(global, job("case $X in a) true ;; b | c) PANDOC_VERSION=3.9 ;; esac")),
+      c("3.10", "3.9")
+    ),
+    `beside: quoted and escaped case patterns` = list(
+      c(
+        global,
+        job("case \"$X\" in \"a b\"|c\\ d) PANDOC_VERSION=3.9 ;; esac")
+      ),
+      c("3.10", "3.9")
+    ),
+    `beside: a case on a command's output` = list(
+      c(global, job("case $(uname -s) in Linux) PANDOC_VERSION=3.9 ;; esac")),
+      c("3.10", "3.9")
+    ),
     # A reserved word that is an argument, and a `)` that closes `$(...)`,
     # start no command.
     `beside: echoed if` = list(
@@ -1338,6 +1424,10 @@ self_test <- function() {
     ),
     `beside: after a command substitution` = list(
       c(global, job("echo $(date) PANDOC_VERSION=3.9")),
+      "3.10"
+    ),
+    `beside: after arithmetic` = list(
+      c(global, job("echo $((1 + 2)) PANDOC_VERSION=3.9")),
       "3.10"
     ),
     # A `#` inside quotes starts no comment.
@@ -1880,6 +1970,30 @@ self_test <- function() {
     ),
     `beside: printf -v` = list(
       c(global, job("printf -v PANDOC_VERSION '%s' 3.9")),
+      unread,
+      5L
+    ),
+    # A `)` that ends no `case` pattern this reads, nor a `$(...)`: an `in`
+    # that is an argument starts no pattern, and a `case` word this does not
+    # parse hides one. Either way the setting after it is refused, not read
+    # as a pin nor passed (SEOR-lmfgkesn).
+    `beside: a ) after an echoed in` = list(
+      c(global, job("echo logged in x) PANDOC_VERSION=3.9")),
+      unread,
+      5L
+    ),
+    `beside: a ) after an echoed case` = list(
+      c(global, job("echo case x in a) PANDOC_VERSION=3.9")),
+      unread,
+      5L
+    ),
+    `beside: a case word this does not parse` = list(
+      c(global, job("case $(a $(b $(c))) in x) PANDOC_VERSION=3.9 ;; esac")),
+      unread,
+      5L
+    ),
+    `beside: eval after a stray )` = list(
+      c(global, job("echo logged in x) eval PANDOC_VERSION=3.9")),
       unread,
       5L
     ),
