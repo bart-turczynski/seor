@@ -3969,6 +3969,14 @@ def self_test() -> list[str]:
         expect_gap(f"a job's pin in {case} beside a global pin", two_pins, "punycoder",
                    edit(global_pin, ci, "check:\n  extends: [.r, .on-main]\n",
                         "check:\n  extends: [.r, .on-main]\n" + variables), fixture_state())
+    # A command's prefix after `if` is a pin check-toolchain.R reads, so
+    # beside a global pin it is a second value; `eval` of a use sets nothing.
+    expect_gap("a pin in an `if` condition's prefix beside a global pin", two_pins, "punycoder",
+               edit(global_pin, ci, "    - fossa analyze\n",
+                    "    - if PANDOC_VERSION=3.9 sh install.sh; then :; fi\n    - fossa analyze\n"), fixture_state())
+    expect_clean("`eval` of a use beside a global pin", "punycoder",
+                 edit(global_pin, ci, "    - fossa analyze\n",
+                      "    - eval \"echo $PANDOC_VERSION\"\n    - fossa analyze\n"), fixture_state())
     expect_clean("the only pin behind a quoted key", "punycoder",
                  edit(no_shell_pin, ci, "variables:\n", "variables:\n  \"PANDOC_VERSION\": \"3.10\"\n"),
                  fixture_state())

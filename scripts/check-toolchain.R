@@ -310,16 +310,17 @@ run_stale_check <- function(root) {
 #     `parallel: matrix` entry's. Unquoted, `3.10` is the float 3.1, as
 #     GitLab reads it; or
 #   * a shell assignment in a script item where sh reads one as a command:
-#     at the start of a line, after `;`, `&&`, `||`, `|`, `(`, a `{` group,
-#     `then`, `do`, `else` or `!`, plain or through `export`, `readonly`,
-#     `declare` or `typeset`, after other assignments or as a command's
-#     prefix: `PANDOC_VERSION=3.10`, `export R_X=1 PANDOC_VERSION="3.10"`.
-#     `echo PANDOC_VERSION=3.9` assigns nothing, and neither does text in a
-#     quoted argument to a command, `echo "a; PANDOC_VERSION=3.9"`, nor a
-#     shell comment. A script item is a string in a YAML sequence, at any
-#     depth, or the value of `script`, `before_script` or `after_script`, so
-#     an anchored list and a `!reference` target count whether a job uses
-#     them or not.
+#     at the start of a line, after `;`, `&&`, `||`, `|`, `(`, a `{` group or
+#     a `case` pattern's `)`, and after `if`, `elif`, `while`, `until`,
+#     `then`, `do`, `else`, `time` or `!` there, plain or through `export`,
+#     `readonly`, `declare` or `typeset`, after other assignments or as a
+#     command's prefix: `PANDOC_VERSION=3.10`,
+#     `export R_X=1 PANDOC_VERSION="3.10"`. `echo PANDOC_VERSION=3.9` assigns
+#     nothing, and neither does text in a quoted argument to a command,
+#     `echo "a; PANDOC_VERSION=3.9"`, nor a shell comment. A script item is
+#     a string in a YAML sequence, at any depth, or the value of `script`,
+#     `before_script` or `after_script`, so an anchored list and a
+#     `!reference` target count whether a job uses them or not.
 # A pin is a literal version: letters, digits, `.`, `+` and `-`. Every one
 # in the file counts, whichever job it is in. A shell assignment overrides
 # `variables:` at run time, so which value a job installs depends on where
@@ -348,6 +349,22 @@ need_yaml <- function(pkg = "yaml") {
   }
 }
 
+# `lines` with every quoted string blanked, their lengths kept.
+mask_quotes <- function(lines) {
+  m <- gregexpr("\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'", lines, perl = TRUE)
+  regmatches(lines, m) <- lapply(
+    regmatches(lines, m),
+    function(s) strrep("_", nchar(s))
+  )
+  lines
+}
+
+# Where each trailing comment starts in `lines`, -1 for none: a `#` that
+# starts a word outside quotes, so `X='a #b'` holds no comment.
+comment_at <- function(lines) {
+  regexpr("(?:^|\\s)#", mask_quotes(lines), perl = TRUE)
+}
+
 # `line` with each quoted argument to a command blanked: a quoted word after
 # another word, as in `echo "…"`. A quoted value after `=` keeps its text.
 mask_quoted_args <- function(line) {
@@ -363,9 +380,12 @@ mask_quoted_args <- function(line) {
   line
 }
 
-# `lines` with each trailing comment dropped: a `#` that starts a word.
+# `lines` with each trailing comment dropped.
 drop_comments <- function(lines) {
-  sub("(^|\\s)#.*$", "", lines, perl = TRUE)
+  hash <- comment_at(lines)
+  cut <- hash > 0L
+  lines[cut] <- substr(lines[cut], 1L, hash[cut] - 1L)
+  lines
 }
 
 # A PANDOC_VERSION token, not one inside an anchor's or an alias's name
@@ -422,9 +442,9 @@ yaml_harmless <- "is out of (?:integer|real) range$"
 # after the first in one mapping: renamed, they no longer collide, so the
 # parser cannot refuse them as it refuses any other duplicate key, and
 # GitLab keeps the last. A key a `<<` merge brings in was a key of the
-# mapping it came from first, and is no duplicate. A warning fails the load unless it is harmless: the yaml package
-# otherwise loads an unknown alias as a string, and a `!!int` it cannot
-# read as NA.
+# mapping it came from first, and is no duplicate. A warning fails the load
+# unless it is harmless: the yaml package otherwise loads an unknown alias
+# as a string, and a `!!int` it cannot read as NA.
 load_ci <- function(lines) {
   need_yaml()
   starts <- unique(c(1L, grep("^---(?:\\s|$)", lines, perl = TRUE)))
@@ -584,8 +604,15 @@ yaml_setting <- function(value, line, id) {
   list(kind = "pin", value = value)
 }
 
-# sh's command head, and a word: quoted parts and unquoted text.
-sh_head <- "(?:^|[;&|(]|(?<!\\$)\\{|\\b(?:then|do|else)\\b)\\s*(?:!\\s+)?"
+# sh's command head: the start of a line, `;`, `&`, `|`, `(` or a `{`
+# group, or a `case` pattern's `)` (after `in`, `;;` or `;&`, or starting a
+# line), then any reserved words a command may follow: `if`, `elif`,
+# `while`, `until`, `then`, `do`, `else`, `time` (`-p` too) and `!`.
+sh_head <- paste0(
+  "(?:(?:^|(?<=\\s)in\\s|;;&?|;&)\\s*\\(?[^\\s;&()]+\\)|^|[;&|(]|(?<!\\$)\\{)",
+  "\\s*(?:(?:if|elif|while|until|then|do|else|time(?:\\s+-p)?|!)\\s+)*"
+)
+# And a word: quoted parts and unquoted text.
 sh_word <- "(?:\"(?:[^\"\\\\]|\\\\.)*\"|'[^']*'|[^\\s;&|<>()\"'])*"
 
 # The settings of the token with `id`, read on a masked line: `assign`, an
@@ -636,14 +663,29 @@ sh_unquote <- function(word) {
   word
 }
 
+# A setting in `eval`'s arguments, quoted or not: an assignment (`=`, `+=`),
+# or a `for`, `select`, `read` or `printf -v` target. A use, `$PANDOC_VERSION`
+# or `${PANDOC_VERSION}`, sets nothing.
+eval_setting_re <- paste0(
+  "(?<![\\w${])",
+  pandoc_tag,
+  "\\d+\\+?=|\\b(?:for|select)\\s+",
+  pandoc_tag,
+  "\\d+\\b|\\bread\\b[^;&|]*?\\s",
+  pandoc_tag,
+  "\\d+\\b|\\bprintf\\b[^;&|]*?-v\\s*",
+  pandoc_tag,
+  "\\d+\\b"
+)
+
 # What one line of a script item sets: the ids it assigns a literal pin
 # (`pins`, `values`) and the ids it sets otherwise (`set`). Quoted arguments
-# to commands and a trailing comment are blanked first. `eval`'s arguments
-# and `${PANDOC_VERSION:=...}` are read through quotes: both set the value
-# wherever it is quoted.
+# to commands and a trailing comment (a `#` outside quotes) are blanked
+# first. A setting in `eval`'s arguments and `${PANDOC_VERSION:=...}` are
+# read through quotes: both set the value wherever it is quoted.
 sh_line <- function(line) {
   masked <- mask_quoted_args(line)
-  hash <- regexpr("(?:^|\\s)#", masked, perl = TRUE)
+  hash <- comment_at(masked)
   if (hash > 0L) {
     line <- substr(line, 1L, hash - 1L)
     masked <- substr(masked, 1L, hash - 1L)
@@ -672,7 +714,7 @@ sh_line <- function(line) {
   )
   found$set <- c(
     found$set,
-    tagged_ids(args[evals[[1L]] > 0L], paste0(pandoc_tag, "\\d+")),
+    tagged_ids(args[evals[[1L]] > 0L], eval_setting_re),
     tagged_ids(line, paste0("\\$\\{", pandoc_tag, "\\d+:?="))
   )
   found
@@ -1106,6 +1148,10 @@ self_test <- function() {
   job <- function(..., name = "job") {
     c(paste0(name, ":"), "  script:", paste0("    - ", c(...)))
   }
+  # A job whose one script item is a `- |` block of the lines `...`.
+  block_job <- function(...) {
+    c("job:", "  script:", "    - |", paste0("      ", c(...)))
+  }
   global <- c("variables:", "  PANDOC_VERSION: \"3.10\"")
   use <- "curl -o p.deb \"https://example.org/${PANDOC_VERSION}/p.deb\""
   comments <- c(
@@ -1216,6 +1262,71 @@ self_test <- function() {
     `a negated command's prefix` = list(
       c("job:", "  script:", "    - |", "      ! PANDOC_VERSION=3.9 sh x.sh"),
       "3.9"
+    ),
+    # A command's prefix after a reserved word that starts a command, and
+    # after a `case` pattern's `)`, is one as after any head.
+    `beside: an if condition's prefix` = list(
+      c(global, job("if PANDOC_VERSION=3.9 sh install.sh; then :; fi")),
+      c("3.10", "3.9")
+    ),
+    `beside: an elif condition's prefix` = list(
+      c(
+        global,
+        job("if false; then :; elif PANDOC_VERSION=3.9 sh i.sh; then :; fi")
+      ),
+      c("3.10", "3.9")
+    ),
+    `beside: a while condition's prefix` = list(
+      c(global, job("while PANDOC_VERSION=3.9 sh poll.sh; do sleep 1; done")),
+      c("3.10", "3.9")
+    ),
+    `beside: a negated until condition's prefix` = list(
+      c(global, job("until ! PANDOC_VERSION=3.9 sh poll.sh; do sleep 1; done")),
+      c("3.10", "3.9")
+    ),
+    `beside: time` = list(
+      c(global, job("time PANDOC_VERSION=3.9 sh i.sh")),
+      c("3.10", "3.9")
+    ),
+    `beside: a case pattern` = list(
+      c(global, job("case x in x) PANDOC_VERSION=3.9 ;; esac")),
+      c("3.10", "3.9")
+    ),
+    `beside: a case pattern on its own line` = list(
+      c(
+        global,
+        block_job(
+          "case \"$X\" in",
+          "  a|b) PANDOC_VERSION=3.9 sh i.sh ;;",
+          "  (c) : ;;",
+          "esac"
+        )
+      ),
+      c("3.10", "3.9")
+    ),
+    # A reserved word that is an argument, and a `)` that closes `$(...)`,
+    # start no command.
+    `beside: echoed if` = list(
+      c(global, job("echo if PANDOC_VERSION=3.9")),
+      "3.10"
+    ),
+    `beside: after a command substitution` = list(
+      c(global, job("echo $(date) PANDOC_VERSION=3.9")),
+      "3.10"
+    ),
+    # A `#` inside quotes starts no comment.
+    `beside: a prefix after a quoted #` = list(
+      c(global, block_job("X='a #b' PANDOC_VERSION=3.9 sh i.sh")),
+      c("3.10", "3.9")
+    ),
+    # `eval` of a use sets nothing.
+    `beside: eval of a use` = list(
+      c(global, job("eval \"echo $PANDOC_VERSION\"")),
+      "3.10"
+    ),
+    `beside: eval of a computed use` = list(
+      c(global, job("eval \"$(make-url ${PANDOC_VERSION})\"")),
+      "3.10"
     ),
     # A folded item is one line to sh: here the pin is curl's prefix.
     `a folded item` = list(
@@ -1534,6 +1645,11 @@ self_test <- function() {
       no_pin,
       5L
     ),
+    `use, after a quoted #` = list(
+      block_job("X='a #b' curl -o p.deb \"x/${PANDOC_VERSION}\""),
+      no_pin,
+      4L
+    ),
     `use, in a variable's value` = list(
       c("variables:", "  URL: \"https://example.org/${PANDOC_VERSION}\""),
       no_pin,
@@ -1692,6 +1808,11 @@ self_test <- function() {
     ),
     `beside: eval, quoted` = list(
       c(global, job("eval \"PANDOC_VERSION=3.9\"")),
+      unread,
+      5L
+    ),
+    `beside: eval of read` = list(
+      c(global, job("eval \"read -r PANDOC_VERSION < v\"")),
       unread,
       5L
     ),
