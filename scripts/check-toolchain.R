@@ -323,7 +323,10 @@ run_stale_check <- function(root) {
 #     these. A setting after any other `)`, one no quote, escape or
 #     substitution holds, is refused, not read: sh starts no command there,
 #     unless in a `case` pattern this does not parse, and
-#     `echo logged in x) PANDOC_VERSION=3.9` is no case. A script item is
+#     `echo logged in x) PANDOC_VERSION=3.9` is no case. A declaration's
+#     argument that sets it once its quotes are removed,
+#     `export "PANDOC_VERSION=3.9"`, and a setting in `let`'s arguments
+#     are refused too. A script item is
 #     a string in a YAML sequence, at any depth, or the value of `script`,
 #     `before_script` or `after_script`, so an anchored list and a
 #     `!reference` target count whether a job uses them or not.
@@ -888,8 +891,37 @@ sh_before_stray <- sh_before(sh_stray)
 sh_after <- paste0("^(\\+?)=(", sh_word, ")")
 # A token, its id the first group.
 sh_token <- paste0(pandoc_tag, "(\\d+)")
-# An `eval`, its arguments the match.
-sh_eval <- paste0("(?:", sh_head, "|", sh_stray, ")eval\\s\\K[^;&|]*")
+# Where sh runs `cmd` as a command, after any assignments: its arguments
+# the match.
+sh_arguments <- function(cmd) {
+  paste0(
+    "(?:",
+    sh_head,
+    "|",
+    sh_stray,
+    ")(?:\\w+=",
+    sh_word,
+    "\\s+)*",
+    cmd,
+    "\\s\\K[^;&|]*"
+  )
+}
+sh_eval <- sh_arguments("eval")
+sh_let <- sh_arguments("let")
+# A declaration: `export`, `readonly`, `declare`, `typeset`, `local` or
+# `env`.
+sh_declaration <- sh_arguments(
+  "(?:export|readonly|declare|typeset|local|env)"
+)
+# A declaration's argument that sets PANDOC_VERSION, quoted or escaped
+# around the token or its `=`: with its quotes removed, the word starts with
+# the token and `=` or `+=`. sh_before reads only the unquoted spelling;
+# `export "PANDOC_VERSION=3.9"` sets it too (SEOR-qakbchzg).
+declaration_setting_re <- paste0(
+  "^(?:\\$?[\"']|\\\\)*",
+  pandoc_tag,
+  "\\d+[\"'\\\\]*(?:\\+[\"'\\\\]*)?="
+)
 
 # Shell words' values: one quoted string loses its quotes.
 sh_unquote <- function(words) {
@@ -917,9 +949,10 @@ sh_arithmetic_setting <- paste0(
 # literal pin (`pins`, `values`) and the ids they set otherwise (`set`).
 # Each line is masked (sh_mask()) and its settings found on the mask, a
 # value read from the line where the mask has it. A setting in `eval`'s
-# arguments and `${PANDOC_VERSION:=...}` are read through quotes: both set
-# the value wherever it is quoted, and so is a setting in arithmetic,
-# whose `$((...))` the mask hides. Any setting after a stray `)`
+# or `let`'s arguments and `${PANDOC_VERSION:=...}` are read through
+# quotes: each sets the value wherever it is quoted, and so do a setting in
+# arithmetic, whose `$((...))` the mask hides, and a declaration's argument
+# that is one once its quotes are removed. Any setting after a stray `)`
 # (sh_stray) is one set otherwise. Each pattern runs once over all the
 # lines.
 sh_read <- function(lines) {
@@ -960,19 +993,37 @@ sh_read <- function(lines) {
         is(sh_before_stray[["scoped"]])) |
       is(sh_before_head[["target"]]) |
       is(sh_before_stray[["target"]]))
-  evals <- gregexpr(sh_eval, masked, perl = TRUE)
-  args <- unlist(Map(
-    function(line, at) {
-      substring(line, at, at + attr(at, "match.length") - 1L)[at > 0L]
-    },
-    lines,
-    evals
-  ))
+  # The text each match in `at` covers on `text`, all lines' in one vector.
+  cut <- function(text, at) {
+    unlist(
+      Map(
+        function(line, at) {
+          substring(line, at, at + attr(at, "match.length") - 1L)[at > 0L]
+        },
+        text,
+        at
+      ),
+      use.names = FALSE
+    )
+  }
+  args <- function(re) cut(lines, gregexpr(re, masked, perl = TRUE))
+  # A declaration's arguments split into words on the mask, so a space a
+  # quote holds splits none, each word read from the line.
+  declarations <- gregexpr(sh_declaration, masked, perl = TRUE)
+  words <- cut(
+    cut(lines, declarations),
+    gregexpr("\\S+", cut(masked, declarations), perl = TRUE)
+  )
   found$pins <- id[pin]
   found$values <- value[pin]
   found$set <- c(
     id[(assigned & !pin) | other],
-    tagged_ids(args, eval_setting_re),
+    setdiff(tagged_ids(words, declaration_setting_re), found$pins),
+    tagged_ids(
+      gsub("[\"'\\\\]", "", args(sh_let)),
+      sh_arithmetic_setting
+    ),
+    tagged_ids(args(sh_eval), eval_setting_re),
     tagged_ids(lines, paste0("\\$\\{", pandoc_tag, "\\d+:?=")),
     tagged_ids(attr(masked, "arithmetic"), sh_arithmetic_setting)
   )
@@ -1170,8 +1221,10 @@ pinned_pandoc <- function(lines) {
       " in a spelling check-toolchain.R does not read (a `!reference`, a ",
       "list, a mapping, a boolean, an empty or computed value, a number ",
       "YAML typed from a block scalar, an alias or a line below its key, ",
-      "`+=`, or a value set by `env`, `local`, `eval`, `for`, `select`, ",
-      "`read`, `printf -v` or `${PANDOC_VERSION:=...}`, or a setting after ",
+      "`+=`, or a value set by `env`, `local`, `eval`, `let`, `for`, ",
+      "`select`, `read`, `printf -v` or `${PANDOC_VERSION:=...}`, by a ",
+      "quoted or escaped argument to a declaration such as `export`, or by ",
+      "one after another assignment, or a setting after ",
       "a `)` that ends no `case` pattern it reads). Whatever pin it ",
       "reads elsewhere, a job that sees this value installs a pandoc this ",
       "check never compares. ",
@@ -1679,6 +1732,33 @@ self_test <- function() {
     ),
     `beside: eval of a computed use` = list(
       c(global, job("eval \"$(make-url ${PANDOC_VERSION})\"")),
+      "3.10"
+    ),
+    # Text inside a declaration's quoted value sets another variable, an
+    # echoed declaration sets nothing, and a `let` that reads the variable
+    # sets another (SEOR-qakbchzg).
+    `beside: export of a value holding the text` = list(
+      c(global, job("export X=\"a PANDOC_VERSION=3.9\"")),
+      "3.10"
+    ),
+    `beside: export of a quoted value naming it` = list(
+      c(global, job("export X=\"PANDOC_VERSION=3.9\"")),
+      "3.10"
+    ),
+    `beside: an echoed quoted export` = list(
+      c(global, job("echo export \"PANDOC_VERSION=3.9\"")),
+      "3.10"
+    ),
+    `beside: let of a use` = list(
+      c(global, job("let \"x = PANDOC_VERSION + 1\"")),
+      "3.10"
+    ),
+    `beside: let comparing` = list(
+      c(global, job("let 'x = PANDOC_VERSION == 3'")),
+      "3.10"
+    ),
+    `export, the pin double-quoted` = list(
+      c(global, job("export PANDOC_VERSION=\"3.10\"")),
       "3.10"
     ),
     # A folded item is one line to sh: here the pin is curl's prefix.
@@ -2288,6 +2368,68 @@ self_test <- function() {
     ),
     `beside: eval after a stray )` = list(
       c(global, job("echo logged in x) eval PANDOC_VERSION=3.9")),
+      unread,
+      5L
+    ),
+    # A declaration's quoted argument and `let` set the variable, though no
+    # setting pattern reads them (SEOR-qakbchzg).
+    `beside: export, the argument double-quoted` = list(
+      c(global, job("export \"PANDOC_VERSION=3.9\"")),
+      unread,
+      5L
+    ),
+    `beside: declare -x, the argument single-quoted` = list(
+      c(global, job("declare -x 'PANDOC_VERSION=3.9'")),
+      unread,
+      5L
+    ),
+    `beside: export, the argument ANSI-C quoted` = list(
+      c(global, job("export $'PANDOC_VERSION=3.9'")),
+      unread,
+      5L
+    ),
+    `beside: local, the argument double-quoted` = list(
+      c(global, job("local \"PANDOC_VERSION=3.9\"")),
+      unread,
+      5L
+    ),
+    `beside: readonly, the value quoted with its =` = list(
+      c(global, job("readonly PANDOC_VERSION\"=3.9\"")),
+      unread,
+      5L
+    ),
+    `beside: typeset, the = escaped` = list(
+      c(global, job("typeset PANDOC_VERSION\\=3.9")),
+      unread,
+      5L
+    ),
+    `beside: env, the argument single-quoted` = list(
+      c(global, job("env 'PANDOC_VERSION=3.9' sh install.sh")),
+      unread,
+      5L
+    ),
+    `beside: export after an assignment` = list(
+      c(global, job("X=1 export PANDOC_VERSION=3.9")),
+      unread,
+      5L
+    ),
+    `beside: eval after an assignment` = list(
+      c(global, job("X=1 eval PANDOC_VERSION=3.9")),
+      unread,
+      5L
+    ),
+    `beside: let` = list(
+      c(global, job("let PANDOC_VERSION=3")),
+      unread,
+      5L
+    ),
+    `beside: let appending` = list(
+      c(global, job("let PANDOC_VERSION+=1")),
+      unread,
+      5L
+    ),
+    `beside: let, quoted and spaced` = list(
+      c(global, job("let x=1 'PANDOC_VERSION = 3'")),
       unread,
       5L
     ),
