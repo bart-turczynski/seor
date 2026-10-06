@@ -17,13 +17,19 @@ as the written source.
 
 - A repository's backlog holds work that changes that repository's files, or a
   decision only that repository cares about.
-- seor's backlog holds three kinds of issue:
+- seor's backlog holds four kinds of issue:
   - **Cascades:** an ordering across repositories, one issue per step. Each
     carries only the order, the gate and the IDs of the repository issues
     doing the work.
   - **Fleet sweeps:** the same change in three or more repositories with no
     per-repository judgment. One issue with a per-repository checklist, and no
     copies in the repositories.
+  - **Catch-ups:** one issue per package whose sweep lines wait on its CRAN
+    review, depending on that package's cascade step. Once a sweep's only open
+    lines are held this way, they move to the package's catch-up issue with the
+    sweep's acceptance checks, and the sweep closes. A line that must land
+    before a submission goes to the submission's cascade step instead.
+    Adopted in the groom of 2026-10-06 (SEOR-cxetanvb).
   - **Owner-only settings across repositories:** one `[USER]` issue.
 - fp dependencies cannot cross projects. A repository issue that waits on
   another repository's release carries `[USER]` (label `maintainer-gated`) and
