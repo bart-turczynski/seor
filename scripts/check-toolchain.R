@@ -482,21 +482,28 @@ yaml_sequence <- function(x) {
 # PANDOC_VERSION key refuses as unread, and which is no script item.
 yaml_harmless <- "is out of (?:integer|real) range$"
 
-# Each YAML document in `lines` (a `---` line starts one) parsed, or the
-# first that does not load: list(docs, error, duplicates), the error's line
+# Each YAML document in `tagged$lines` (a `---` line starts one) parsed, or
+# the earliest problem in file order: list(docs, error), the error's line
 # (NA when the parser names none) and message, its line numbers counted from
-# the top of `lines`. `duplicates` holds the id of each PANDOC_VERSION key
-# after the first in one mapping: renamed, they no longer collide, so the
-# parser cannot refuse them as it refuses any other duplicate key, and
-# GitLab keeps the last. A key a `<<` merge brings in was a key of the
-# mapping it came from first, and is no duplicate. A warning fails the load
-# unless it is harmless: the yaml package otherwise loads an unknown alias
-# as a string, and a `!!int` it cannot read as NA.
-load_ci <- function(lines) {
+# the top of the text. The earliest problem is in the first document that
+# has one: of its duplicate PANDOC_VERSION keys and the parser's error, the
+# one on the first line, an error with no line last. A duplicate is a
+# PANDOC_VERSION key after the first in one mapping: renamed, they no
+# longer collide, so the parser cannot refuse them as it refuses any other
+# duplicate key, and GitLab keeps the last. A key a `<<` merge brings in was
+# a key of the mapping it came from first, and is no duplicate. A warning
+# fails the load unless it is harmless: the yaml package otherwise loads an
+# unknown alias as a string, and a `!!int` it cannot read as NA. A `spec:`
+# header document, the first of two and holding only `spec:`, declares an
+# include's inputs, not variables: its keys set nothing, so it is neither
+# returned nor refused for a duplicate key.
+load_ci <- function(tagged) {
   yaml_ready()
+  lines <- tagged$lines
   starts <- unique(c(1L, grep("^---(?:\\s|$)", lines, perl = TRUE)))
   ends <- c(starts[-1L] - 1L, length(lines))
   docs <- vector("list", length(starts))
+  header <- integer()
   keys <- new.env()
   keys$seen <- integer()
   keys$duplicates <- integer()
@@ -510,6 +517,7 @@ load_ci <- function(lines) {
     x
   }
   for (d in seq_along(starts)) {
+    keys$duplicates <- integer()
     text <- lines[seq.int(
       starts[[d]],
       length.out = ends[[d]] - starts[[d]] + 1L
@@ -535,35 +543,58 @@ load_ci <- function(lines) {
       ),
       error = function(e) e
     )
+    if (
+      d == 1L &&
+        length(starts) == 2L &&
+        is.list(doc) &&
+        identical(names(doc), "spec")
+    ) {
+      header <- d
+      next
+    }
+    problems <- data.frame(
+      line = tagged$at[keys$duplicates],
+      message = rep(
+        "Duplicate map key: 'PANDOC_VERSION'",
+        length(keys$duplicates)
+      )
+    )
     if (inherits(doc, "error")) {
-      message <- gsub(
-        paste0(pandoc_tag, "\\d+"),
-        "PANDOC_VERSION",
-        conditionMessage(doc)
-      )
-      message <- trimws(gsub("\\s+", " ", message))
-      # The parser counts lines from the document's start.
-      m <- gregexpr("(?<=line )\\d+", message, perl = TRUE)
-      regmatches(message, m) <- lapply(
-        regmatches(message, m),
-        function(n) as.character(starts[[d]] - 1L + as.integer(n))
-      )
-      at <- regmatches(message, m)[[1L]]
-      # The end of the text is the line after its last.
-      line <- if (length(at)) {
-        min(as.integer(at[[length(at)]]), ends[[d]])
-      } else {
-        NA_integer_
-      }
-      return(list(
-        docs = list(),
-        error = list(line = line, message = message),
-        duplicates = integer()
-      ))
+      problems <- rbind(problems, yaml_error(doc, starts[[d]], ends[[d]]))
+    }
+    if (nrow(problems)) {
+      first <- order(problems$line, na.last = TRUE)[[1L]]
+      return(list(docs = list(), error = as.list(problems[first, ])))
     }
     docs[d] <- list(doc)
   }
-  list(docs = docs, error = NULL, duplicates = keys$duplicates)
+  list(docs = docs[setdiff(seq_along(docs), header)], error = NULL)
+}
+
+# What the parser's error `e` on the document from line `start` to `end`
+# says: its line (NA when the parser names none) and message, the message's
+# line numbers counted from the top of the text, as one row.
+yaml_error <- function(e, start, end) {
+  message <- gsub(
+    paste0(pandoc_tag, "\\d+"),
+    "PANDOC_VERSION",
+    conditionMessage(e)
+  )
+  message <- trimws(gsub("\\s+", " ", message))
+  # The parser counts lines from the document's start.
+  m <- gregexpr("(?<=line )\\d+", message, perl = TRUE)
+  regmatches(message, m) <- lapply(
+    regmatches(message, m),
+    function(n) as.character(start - 1L + as.integer(n))
+  )
+  at <- regmatches(message, m)[[1L]]
+  # The end of the text is the line after its last.
+  line <- if (length(at)) {
+    min(as.integer(at[[length(at)]]), end)
+  } else {
+    NA_integer_
+  }
+  data.frame(line = line, message = message)
 }
 
 # What a parsed document holds for the reader: `keys`, each PANDOC_VERSION
@@ -818,28 +849,12 @@ read_pandoc <- function(lines) {
     return(read)
   }
   tagged <- tag_pandoc(lines)
-  loaded <- load_ci(tagged$lines)
-  if (length(loaded$duplicates)) {
-    loaded$error <- list(
-      line = tagged$at[[min(loaded$duplicates)]],
-      message = "Duplicate map key: 'PANDOC_VERSION'"
-    )
-  }
+  loaded <- load_ci(tagged)
   if (!is.null(loaded$error)) {
     read$error <- loaded$error
     return(read)
   }
-  docs <- loaded$docs
-  # A `spec:` header document declares an include's inputs, not variables:
-  # its keys set nothing (the file is that header, `---`, then the config).
-  if (
-    length(docs) == 2L &&
-      is.list(docs[[1L]]) &&
-      identical(names(docs[[1L]]), "spec")
-  ) {
-    docs <- docs[-1L]
-  }
-  nodes <- lapply(docs, ci_nodes)
+  nodes <- lapply(loaded$docs, ci_nodes)
   pins <- integer()
   values <- character()
   set <- integer()
@@ -1569,6 +1584,19 @@ self_test <- function() {
       ),
       "3.10"
     ),
+    # Nor is a duplicate input it declares refused (SEOR-lmfgkesn).
+    `a header document declaring an input twice` = list(
+      c(
+        "spec:",
+        "  inputs:",
+        "    PANDOC_VERSION: {default: \"3.9\"}",
+        "    PANDOC_VERSION: {default: \"3.10\"}",
+        "---",
+        global,
+        job(use)
+      ),
+      "3.10"
+    ),
     # A number out of R's range loads as NA with a warning that changes
     # nothing read here, so it is no load error.
     `numbers out of range elsewhere` = list(
@@ -2010,6 +2038,33 @@ self_test <- function() {
       c("variables:", "  PANDOC_VERSION: \"3.10\"", "  PANDOC_VERSION:"),
       "does not load as YAML",
       3L
+    ),
+    # Of several problems, the earliest in file order is named: here a
+    # duplicate before a document, or a line, the parser cannot load. A
+    # duplicate in the config after a `spec:` header still counts
+    # (SEOR-lmfgkesn).
+    `a duplicate key, then a document that does not load` = list(
+      c(global, "  PANDOC_VERSION: \"3.9\"", "---", "x: [1"),
+      "does not load as YAML",
+      3L
+    ),
+    `a duplicate key before a parser error` = list(
+      c(global, "  PANDOC_VERSION: \"3.9\"", "x: [1"),
+      "does not load as YAML",
+      3L
+    ),
+    `a duplicate key after a header` = list(
+      c(
+        "spec:",
+        "  inputs:",
+        "    PANDOC_VERSION: {default: \"3.9\"}",
+        "    PANDOC_VERSION: {default: \"3.10\"}",
+        "---",
+        global,
+        "  PANDOC_VERSION: \"3.9\""
+      ),
+      "does not load as YAML",
+      8L
     ),
     `a duplicate key` = list(
       c(global, "job: 1", "job: 2"),
