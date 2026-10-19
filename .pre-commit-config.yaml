@@ -4,7 +4,7 @@
 # single argv element, so no shell quoting is involved.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: check-added-large-files
         args: ['--maxkb=5120']
@@ -19,7 +19,7 @@ repos:
   # Air owns layout; the local `verify` lintr gate below owns logic lints.
   # Only Air >= 0.8.2 can be pinned as a pre-commit rev.
   - repo: https://github.com/posit-dev/air-pre-commit
-    rev: 0.8.2
+    rev: 0.12.0
     hooks:
       - id: air-format
   # The `spelling` hook below reads DESCRIPTION, roxygen, vignettes, README
