@@ -47,7 +47,7 @@ default:
 # --------------------------------------------------------------------------
 
 .r:
-  image: rocker/r-ver:4.5.1
+  image: rocker/r-ver:4.6.1
   variables:
     # The image sets LANG, but CI runners hand jobs a controlled environment
     # that drops it, so R falls back to the C locale. Any UTF-8 byte in a file
@@ -83,7 +83,9 @@ default:
     R_LIBS_USER: "$CI_PROJECT_DIR/.r-lib"
     PKG_CACHE_DIR: "$CI_PROJECT_DIR/.pak-cache"
     # rocker/r-ver bakes a *frozen* p3m snapshot into Rprofile.site at image
-    # build time: 4.5.1 pins 2025-10-30, 4.4.3 pins 2025-04-10. Three of
+    # build time: 4.5.1 pins 2025-10-30, 4.4.3 pins 2025-04-10. 4.6.1, the
+    # current release, still names p3m `latest` (checked 2026-10-19), and is
+    # frozen the same way once the next R ships. Three of
     # seor's members reached CRAN after both dates — rurl on 2026-06-19, pslr
     # and punycoder on 2026-07-19 — so pak resolves the package's own Imports
     # against a repository that cannot see them and dies with "Can't find
@@ -115,7 +117,7 @@ default:
     #
     # The prefix is load-bearing, not decoration. Every job here extends `.r`,
     # but `full-check` is a parallel matrix over R release, oldrel and devel
-    # and `floor-check` runs R 4.1 while the rest run 4.5.1, so without it jobs
+    # and `floor-check` runs R 4.1 while the rest run 4.6.1, so without it jobs
     # on different R versions would share one entry and hand each other binaries built by the
     # wrong interpreter. raddr hit exactly that between its release and devel
     # jobs and went red on `libxml2.so.2: cannot open shared object file`
@@ -429,7 +431,7 @@ verify:
 citation-version:
   extends: .on-main
   stage: verify
-  image: python:3.13-alpine
+  image: python:3.14-alpine
   script:
     - python3 scripts/check-citation.py --self-test
     - python3 scripts/check-citation.py
@@ -844,7 +846,7 @@ security-audit:
 # passed rather than inferred.
 fossa:
   stage: maintenance
-  image: debian:bookworm-slim
+  image: debian:trixie-slim
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
