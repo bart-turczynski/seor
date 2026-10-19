@@ -4,7 +4,9 @@
 *.log
 .DS_Store
 
+# Fiberplane local issue tracking
 .fp/
+
 _scratch/
 
 # Machine output: logs, build junk, agent working files. Deletable at any

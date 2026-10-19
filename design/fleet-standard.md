@@ -221,7 +221,7 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   check, `coverage` and `pages` jobs render with it too. Not in `default:`:
   the install needs Debian, `dpkg` and `curl`, and `default:` hands it to
   every job, including ones on other images (seor's `citation-version` runs
-  on `python:3.13-alpine`).
+  on `python:3.14-alpine`).
 - The version is recorded once, as the `PANDOC_VERSION` CI variable. A
   second assignment with another value, in any job, is a defect even where it
   would win: a shell assignment overrides `variables:` at run time, so which

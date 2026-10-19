@@ -2034,7 +2034,7 @@ def check_pandoc_pin(on_push: list[Job], ci: CI, report: Report, pins: PinReads 
     (in practice the template the R jobs extend), not through `default:`: the
     install block needs Debian, dpkg and curl, and `default:` hands it to every
     job, including those on other images (seor's citation-version runs on
-    python:3.13-alpine).
+    python:3.14-alpine).
 
     The pin is what check-toolchain.R reads (read_pandoc_assignments()): one
     value in all of .gitlab-ci.yml, written as a plain scalar or a shell
