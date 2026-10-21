@@ -107,7 +107,7 @@ from pathlib import Path
 # One line out means every copy is in sync. Re-bless it in every copy in the
 # same change, never in one. It is a different digest from check-citation.py's
 # on purpose: the two scripts are re-blessed independently (ADR 0006).
-IMPLEMENTATION_DIGEST = "8c4827fe96776196"
+IMPLEMENTATION_DIGEST = "873c7ef89644e906"
 
 
 SOURCES = ("package-json", "git-tag")
@@ -249,9 +249,10 @@ def cff_value(raw: str) -> str | None:
 
     YAML starts a comment at a `#` preceded by whitespace, so an unquoted
     `1.2.3 # current release` is `1.2.3`, while `10.5281/zenodo.1#x` keeps its
-    `#`. Inside quotes `#` is text. A quoted value followed by anything but a
-    comment is not this reader's shape; it is returned whole, quotes stripped
-    from its ends, so the comparison fails rather than guesses.
+    `#`. Inside quotes `#` is text. A quoted value that never closes, or is
+    followed by anything but a comment, is not this reader's shape; it is
+    returned unchanged, quotes and all, so the comparison fails rather than
+    guesses.
     """
     if raw.startswith("#"):
         return None
@@ -261,7 +262,7 @@ def cff_value(raw: str) -> str | None:
             rest = raw[close + 1 :]
             if not rest or CFF_COMMENT.match(rest):
                 return raw[1:close]
-        return raw.strip("\"'")
+        return raw
     return CFF_COMMENT.split(raw, maxsplit=1)[0]
 
 
@@ -709,6 +710,11 @@ def self_test() -> list[str]:
         ('version: "1.2.3 # not a comment"', "version", "1.2.3 # not a comment"),
         ("version: '1.2.3 #4' # comment", "version", "1.2.3 #4"),
         ("doi: 10.5281/zenodo.1#x", "doi", "10.5281/zenodo.1#x"),
+        # A malformed quoted scalar comes back as written, so it never equals
+        # a release: unclosed, closed by the other quote, or closed twice.
+        ('version: "1.2.3', "version", '"1.2.3'),
+        ("version: '1.2.3\"", "version", "'1.2.3\""),
+        ('version: "1.2.3""', "version", '"1.2.3""'),
     )
     for line, key, value in reader_cases:
         counts["reader"] += 1
@@ -758,6 +764,9 @@ def self_test() -> list[str]:
     # what it is FOR -- that it ignores prose and catches code -- rather than
     # only asserting that this copy matches today, which main() already does.
     # Built by position, not by replacing a phrase, as in check-citation.py.
+    # Each edit is compared with the digest this file has now, not the one it
+    # records: --self-test runs before a drifted edit is blessed, and only
+    # vendor-untouched should fail then.
     lines = here.splitlines(keepends=True)
     end = module_docstring_end(here)
     found = implementation_digest(here)
@@ -771,9 +780,9 @@ def self_test() -> list[str]:
     else:
         inserted = ["Inserted by the self-test.\n"]
         prose = "".join(lines[: end - 1] + inserted + lines[end - 1 :])
-        if implementation_digest(prose) != IMPLEMENTATION_DIGEST:
+        if implementation_digest(prose) != found:
             failures.append("vendor-prose: a docstring edit moved the digest")
-    if implementation_digest(here + "\n_ = None\n") == IMPLEMENTATION_DIGEST:
+    if implementation_digest(here + "\n_ = None\n") == found:
         failures.append("vendor-logic: a code edit left the digest alone")
     reblessed = here.replace(
         'IMPLEMENTATION_DIGEST = "' + IMPLEMENTATION_DIGEST + '"',
@@ -781,7 +790,7 @@ def self_test() -> list[str]:
     )
     if reblessed == here:
         failures.append("vendor-rebless: constant not found")
-    elif implementation_digest(reblessed) != IMPLEMENTATION_DIGEST:
+    elif implementation_digest(reblessed) != found:
         failures.append("vendor-rebless: the digest hashes its own value")
 
     if not failures:
