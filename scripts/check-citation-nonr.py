@@ -103,7 +103,7 @@ from pathlib import Path
 # One line out means every copy is in sync. Re-bless it in every copy in the
 # same change, never in one. It is a different digest from check-citation.py's
 # on purpose: the two scripts are re-blessed independently (ADR 0006).
-IMPLEMENTATION_DIGEST = "73ffec92ee64fe3b"
+IMPLEMENTATION_DIGEST = "0c03073001dbef7f"
 
 
 SOURCES = ("package-json", "git-tag")
@@ -435,7 +435,7 @@ def self_test() -> list[str]:
     the report names them all in one run.
     """
     failures: list[str] = []
-    counts = {"positive": 0, "negative": 0}
+    counts = {"positive": 0, "negative": 0, "reader": 0, "cli": 0}
 
     def run(tag: str, source: str, **kwargs) -> list[str]:
         with tempfile.TemporaryDirectory() as tmp:
@@ -630,11 +630,87 @@ def self_test() -> list[str]:
         **_released("1.0.0"),
     )
 
+    # --- the CFF reader: YAML comments (SEOR-wjpiqjro) ---
+    # POSITIVE: a trailing comment is valid YAML and is not part of the version.
+    expect_clean(
+        "cff-trailing-comment",
+        "package-json",
+        package_json="1.2.3",
+        cff=(
+            "cff-version: 1.2.0 # schema\nversion: 1.2.3 # current release\n"
+            'date-released: "2026-09-29" # tagged that day\n'
+            "doi: 10.5281/zenodo.1\t# concept DOI\n"
+        ),
+        zenodo={"version": "1.2.3"},
+    )
+    # NEGATIVE: a key followed only by a comment holds no version.
+    expect_flagged(
+        "cff-comment-only",
+        "does not understand",
+        "package-json",
+        package_json="1.2.3",
+        cff="cff-version: 1.2.0\nversion: # set at release\n",
+        zenodo={"version": "1.2.3"},
+    )
+    # What the reader returns, field by field: YAML ends an unquoted scalar at
+    # a `#` preceded by whitespace, and nowhere else; inside quotes `#` is text.
+    reader_cases = (
+        ("version: 1.2.3 # current release", "version", "1.2.3"),
+        ('date-released: "2026-09-29" # tagged', "date-released", "2026-09-29"),
+        ("date-released: 2026-09-29 # tagged", "date-released", "2026-09-29"),
+        ("doi: 10.5281/zenodo.1\t# concept DOI", "doi", "10.5281/zenodo.1"),
+        ('version: "1.2.3 # not a comment"', "version", "1.2.3 # not a comment"),
+        ("version: '1.2.3 #4' # comment", "version", "1.2.3 #4"),
+        ("doi: 10.5281/zenodo.1#x", "doi", "10.5281/zenodo.1#x"),
+    )
+    for line, key, value in reader_cases:
+        counts["reader"] += 1
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "CITATION.cff"
+            path.write_text(f"cff-version: 1.2.0\n{line}\n", encoding="utf-8")
+            got = read_cff(path)[0].get(key)
+        if got != value:
+            failures.append(f"reader {line!r}: expected {value!r}, got {got!r}")
+
+    here = Path(__file__).resolve().read_text(encoding="utf-8")
+
+    # --- the command line of a drifted copy (SEOR-wjpiqjro) ---
+    # A copy whose digest has drifted still answers --help, and still fails
+    # the gate itself. Not --self-test: the copy would run this case again.
+    drifted_source = re.sub(
+        r'^IMPLEMENTATION_DIGEST = ".*"$',
+        'IMPLEMENTATION_DIGEST = "0000000000000000"',
+        here,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        drifted = Path(tmp) / "scripts" / "check-citation-nonr.py"
+        drifted.parent.mkdir()
+        drifted.write_text(drifted_source, encoding="utf-8")
+        for args, code, stream, needle in (
+            (["--help"], 0, "stdout", "usage:"),
+            (["--source", "git-tag"], 1, "stderr", "vendored copy drifted"),
+        ):
+            counts["cli"] += 1
+            result = subprocess.run(  # noqa: S603
+                [sys.executable, str(drifted), *args],
+                capture_output=True,
+                text=True,
+                check=False,
+                env=git_env(),
+            )
+            if result.returncode != code or needle not in getattr(result, stream):
+                failures.append(
+                    f"drifted {' '.join(args)}: expected exit {code} and "
+                    f"{needle!r} on {stream}, got exit {result.returncode}, "
+                    f"stdout {result.stdout!r}, stderr {result.stderr!r}"
+                )
+
     # The vendored-copy digest (see IMPLEMENTATION_DIGEST). These cases prove
     # what it is FOR -- that it ignores prose and catches code -- rather than
     # only asserting that this copy matches today, which main() already does.
     # Built by position, not by replacing a phrase, as in check-citation.py.
-    here = Path(__file__).resolve().read_text(encoding="utf-8")
     lines = here.splitlines(keepends=True)
     end = module_docstring_end(here)
     if implementation_digest(here) != IMPLEMENTATION_DIGEST:
@@ -660,7 +736,8 @@ def self_test() -> list[str]:
     if not failures:
         print(
             f"check-citation-nonr self-test: PASS ({counts['positive']} positive "
-            f"+ {counts['negative']} negative cases, 4 vendor-digest cases)"
+            f"+ {counts['negative']} negative cases, {counts['reader']} reader "
+            f"cases, {counts['cli']} command-line cases, 4 vendor-digest cases)"
         )
     return failures
 
