@@ -56,7 +56,7 @@ packages, and it has no analysis functions of its own.
 ### What is out of scope
 
 - A vulnerability in a member package (`rurl`, `punycoder`, `pslr`, `raddr`,
-  `sitemapr`, `pagerankr`, `robotstxtr`). Report it to that package; each one
+  `sitemapr`, `pagerankr`, `robotstxtr`, `ssrfr`). Report it to that package; each one
   carries its own `SECURITY.md`. If you are unsure which package is affected,
   report it here and it will be forwarded.
 - A vulnerability in a third-party dependency of a member. The scheduled

@@ -25,6 +25,11 @@
 # available version clears them and no local action could make the old scope
 # pass. SEOR-sxvcbuia carries the full measurement.
 #
+# That absence ended on 2026-10-22 (SEOR-qhpzspww): `ssrfr` imports `curl`,
+# and `robotstxtr` reaches it through `httr2`. Both are off CRAN, so this audit
+# still sees them as leaves (helper-security.R); once either is published,
+# expect the curl advisories above to need disposition rows.
+#
 # A package's security posture is what it makes users install, so the audit
 # calls `audit_description()` directly with the narrower `fields`.
 # `expect_secure()` sets a CRAN mirror internally and `audit_description()`

@@ -63,7 +63,7 @@ pak::pak("gitlab::bart-turczynski/seor")
 
 Some members compile C or C++ code from source. `punycoder` uses
 `libidn2` when it is present at build time, and `robotstxtr` needs a
-C++17 compiler.
+C++17 compiler. `ssrfr` needs `libcurl` 7.73.0 or later.
 
 ## Usage
 
@@ -90,7 +90,8 @@ Each member has its own site, and an `llms.txt` there for agents.
 | `raddr` | IP address parsing and classification | yes | [site](https://bart-turczynski.gitlab.io/raddr/) | [llms.txt](https://bart-turczynski.gitlab.io/raddr/llms.txt) |
 | `sitemapr` | XML sitemap parsing | no | [site](https://bart-turczynski.gitlab.io/sitemapr/) | [llms.txt](https://bart-turczynski.gitlab.io/sitemapr/llms.txt) |
 | `pagerankr` | PageRank estimation | yes | [site](https://bart-turczynski.gitlab.io/pagerankr/) | [llms.txt](https://bart-turczynski.gitlab.io/pagerankr/llms.txt) |
-| `robotstxtr` | `robots.txt` parsing (optional: attached once installed) | no | [site](https://bart-turczynski.gitlab.io/robotstxtr/) | [llms.txt](https://bart-turczynski.gitlab.io/robotstxtr/llms.txt) |
+| `robotstxtr` | `robots.txt` parsing | no | [site](https://bart-turczynski.gitlab.io/robotstxtr/) | [llms.txt](https://bart-turczynski.gitlab.io/robotstxtr/llms.txt) |
+| `ssrfr` | Server-side request forgery guard for fetches | no | [site](https://bart-turczynski.gitlab.io/ssrfr/) | [llms.txt](https://bart-turczynski.gitlab.io/ssrfr/llms.txt) |
 
 ## Learn more
 

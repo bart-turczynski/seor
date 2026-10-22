@@ -75,12 +75,6 @@
     },
     {
       "@type": "SoftwareApplication",
-      "identifier": "robotstxtr",
-      "name": "robotstxtr",
-      "sameAs": "https://gitlab.com/bart-turczynski/robotstxtr"
-    },
-    {
-      "@type": "SoftwareApplication",
       "identifier": "rosv",
       "name": "rosv",
       "provider": {
@@ -162,6 +156,12 @@
     },
     "6": {
       "@type": "SoftwareApplication",
+      "identifier": "robotstxtr",
+      "name": "robotstxtr",
+      "sameAs": "https://gitlab.com/bart-turczynski/robotstxtr"
+    },
+    "7": {
+      "@type": "SoftwareApplication",
       "identifier": "rurl",
       "name": "rurl",
       "provider": {
@@ -172,13 +172,19 @@
       },
       "sameAs": "https://CRAN.R-project.org/package=rurl"
     },
-    "7": {
+    "8": {
       "@type": "SoftwareApplication",
       "identifier": "sitemapr",
       "name": "sitemapr",
       "sameAs": "https://gitlab.com/bart-turczynski/sitemapr"
     },
-    "8": {
+    "9": {
+      "@type": "SoftwareApplication",
+      "identifier": "ssrfr",
+      "name": "ssrfr",
+      "sameAs": "https://gitlab.com/bart-turczynski/ssrfr"
+    },
+    "10": {
       "@type": "SoftwareApplication",
       "identifier": "utils",
       "name": "utils"
