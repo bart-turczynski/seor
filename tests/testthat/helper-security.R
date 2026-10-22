@@ -12,8 +12,8 @@
 #
 # That clean result is an artifact of who is on CRAN, not of seor being
 # unexposed. `oysteR::audit_description()` expands the dependency closure from
-# CRAN metadata, and `sitemapr` and `robotstxtr` are not on CRAN -- so their
-# own subtrees are invisible to the audit and are reported as single leaf
+# CRAN metadata, and `sitemapr`, `robotstxtr` and `ssrfr` are not on CRAN -- so
+# their own subtrees are invisible to the audit and are reported as single leaf
 # components (measured: `sitemapr 0.0.0.9000`, zero vulnerabilities).
 # `pagerankr` was one such leaf at that measurement; it reached CRAN on
 # 2026-09-28, so its subtree (`igraph`, `Matrix` and their imports) is now

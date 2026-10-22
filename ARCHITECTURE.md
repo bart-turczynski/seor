@@ -99,9 +99,6 @@ dependencies and (2) attach them all on `library(seor)`.
   search path rather than re-exporting its functions, so every member stays a
   fully independent, standalone package usable without the umbrella. This
   matches `tidyverse`.
-- **Optional members degrade quietly.** `robotstxtr` is declared under
-  `Suggests` and attached only when already installed, so the suite still loads
-  without it.
 - **`R CMD check` reports one expected NOTE** — "Namespaces in Imports field not
   imported from" — because members are attached at runtime rather than
   `importFrom`'d. This is inherent to the metapackage pattern (`tidyverse` gets
@@ -129,22 +126,25 @@ dependencies and (2) attach them all on `library(seor)`.
 ## Membership and CRAN status
 
 The `On CRAN` column governs the `Declared in` column: a member on CRAN is
-declared in `Imports:`/`Suggests:` only, and a member off CRAN is additionally
-declared in `Remotes:`. When a member is published, its `Remotes:` line goes.
+declared in `Imports:` only, and a member off CRAN is additionally declared in
+`Remotes:`. When a member is published, its `Remotes:` line goes. Every member
+is core: `library(seor)` installs and attaches all of them (owner, 2026-10-21;
+`ssrfr` joined on 2026-10-22).
 
-| Package     | Role            | On CRAN | Declared in        |
-|-------------|-----------------|:-------:|--------------------|
-| `rurl`      | core            |   yes   | Imports            |
-| `punycoder` | core            |   yes   | Imports            |
-| `pslr`      | core            |   yes   | Imports            |
-| `raddr`     | core            |   yes   | Imports            |
-| `sitemapr`  | core            |   no    | Imports + Remotes  |
-| `pagerankr` | core            |   yes   | Imports            |
-| `robotstxtr`| planned/optional|   no    | Suggests + Remotes |
+| Package      | Role | On CRAN | Declared in       |
+|--------------|------|:-------:|-------------------|
+| `rurl`       | core |   yes   | Imports           |
+| `punycoder`  | core |   yes   | Imports           |
+| `pslr`       | core |   yes   | Imports           |
+| `raddr`      | core |   yes   | Imports           |
+| `sitemapr`   | core |   no    | Imports + Remotes |
+| `pagerankr`  | core |   yes   | Imports           |
+| `robotstxtr` | core |   no    | Imports + Remotes |
+| `ssrfr`      | core |   no    | Imports + Remotes |
 
 **Key constraint:** a metapackage cannot be submitted to CRAN while any hard
-dependency is off CRAN. Until `sitemapr` (and, for the optional member,
-`robotstxtr`) is published, `seor` stays forge-only. `Remotes:` must be
+dependency is off CRAN. Until `sitemapr`, `robotstxtr` and `ssrfr` are
+published, `seor` stays forge-only. `Remotes:` must be
 absent from a CRAN tarball, so the last entries go at the first submission.
 
 ## Name history

@@ -398,8 +398,8 @@ workflow:
 # development tooling rather than package dependencies. Without the extra line
 # the job reaches the verify chain with no linter installed and dies on
 # "there is no package called 'lintr'".
-# seor is a metapackage whose members `sitemapr` and `robotstxtr` are not yet
-# on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always reports an
+# seor is a metapackage whose members `sitemapr`, `robotstxtr` and `ssrfr` are
+# not yet on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always reports an
 # ERROR: non-mainstream strong dependencies, the `Remotes:` field, and the
 # archived `seoR` name clash. That is a true statement about CRAN readiness and
 # a permanent one until the members are published, so running it as a per-push
@@ -486,8 +486,7 @@ coverage:
   stage: check
   script:
     # covr::package_coverage() installs the package to measure it, so seor's
-    # own Imports have to be present first -- pagerankr, pslr, punycoder, rurl
-    # and sitemapr -- and whichever of those are not on CRAN yet resolve
+    # own Imports have to be present first -- the members -- and whichever of those are not on CRAN yet resolve
     # through `Remotes:` instead of CRAN. That invariant is stated here rather
     # than a count on purpose: the count falls every time a member reaches
     # CRAN, and the hard-coded one this comment used to carry was already
@@ -573,8 +572,8 @@ full-check:
 # The deep-check leg at the declared R floor, `Depends: R (>= 4.1.0)`.
 #
 # seor attaches every member, so its floor is the highest in the fleet
-# (design/fleet-standard.md): pslr, punycoder, sitemapr and robotstxtr declare
-# R 4.1. 4.1 is also the oldest minor with an arm64 rocker/r-ver image, which
+# (design/fleet-standard.md): pslr, punycoder, sitemapr, robotstxtr and ssrfr
+# declare R 4.1. 4.1 is also the oldest minor with an arm64 rocker/r-ver image, which
 # this project's runner needs. punycoder's `floor-check` is the model; a
 # separate job rather than a full-check row, because old R needs old-enough
 # dependencies:
@@ -586,16 +585,24 @@ full-check:
 #   (pagerankr 0.1.0 on 2026-09-28), and raddr needs rlang >= 1.1.7 and
 #   vctrs >= 0.7.0 (January 2026). 2026-09-30 is the oldest date carrying all of
 #   them; every dependency there still declares R 4.1 or older.
-# - sitemapr is not on CRAN, so it comes from the r-universe, after the
-#   CRAN members and their dependencies are in place.
+# - sitemapr, robotstxtr and ssrfr are not on CRAN, so they come from the
+#   r-universe, after the CRAN members and their dependencies are in place.
+# - ssrfr needs the R curl package >= 7.0.0, and every R curl since 7.0.0
+#   wants libcurl >= 7.73; this focal image ships 7.68.0. curl's configure
+#   then fetches a static libcurl (8.14.1) with the `curl` binary, which the
+#   `.r` apt line installs; without it the build fails on
+#   `CURLINFO_EFFECTIVE_METHOD undeclared`. That static libcurl meets ssrfr's
+#   `SystemRequirements: libcurl (>= 7.73.0)`. ssrfr's own floor-check is the
+#   model (its pipeline 2909642350). FLOOR_SNAPSHOT postdates curl 7.0.0, and
+#   the install step fails loudly if the curl it got is older.
 # - punycoder and rurl come from the r-universe too, first: their R 4.1 fixes
 #   are on main but not yet on CRAN. CRAN punycoder 1.3.0 doesn't build on
 #   Ubuntu 20.04's libidn2 2.2 (punycoder !68 added the >= 2.3.5 configure
 #   check), and CRAN rurl 3.1.0 zero-pads IPv6 hex on R < 4.2 (rurl !164).
 #   Back to the snapshot once both releases reach CRAN.
 # - Only what the check needs is installed: the members, the test Suggests and
-#   rcmdcheck. oysteR, rosv and robotstxtr serve the audits or are optional
-#   (the attach test skips them), so _R_CHECK_FORCE_SUGGESTS_=false lets
+#   rcmdcheck. oysteR and rosv serve the audits, whose tests skip without
+#   them, so _R_CHECK_FORCE_SUGGESTS_=false lets
 #   --as-cran report them as a NOTE instead of stopping.
 # - Vignettes are neither built nor checked, and there is no manual, as in
 #   punycoder: the vignette attaches the same members the tests do.
@@ -622,10 +629,12 @@ floor-check:
       install.packages(c("pagerankr", "pslr", "raddr",
       "testthat", "knitr", "rmarkdown", "rcmdcheck"),
       repos = snap, Ncpus = 4L);
-      install.packages("sitemapr", repos = c(univ, snap), Ncpus = 4L);
-      need <- c("pagerankr", "pslr", "punycoder", "raddr", "rurl", "sitemapr", "testthat", "rcmdcheck");
-      stopifnot(all(vapply(need, requireNamespace, NA, quietly = TRUE)));
-      print(R.version.string)'
+      install.packages(c("sitemapr", "robotstxtr", "ssrfr"), repos = c(univ, snap), Ncpus = 4L);
+      stopifnot(packageVersion("curl") >= "7.0.0");
+      need <- c("pagerankr", "pslr", "punycoder", "raddr", "robotstxtr", "rurl", "sitemapr", "ssrfr", "testthat", "rcmdcheck");
+      ok <- vapply(need, requireNamespace, NA, quietly = TRUE);
+      if (!all(ok)) stop("not available: ", paste(need[!ok], collapse = ", "));
+      print(R.version.string); print(curl::curl_version()$version)'
     # rcmdcheck reads a check that halted partway as 0/0/0 and returns
     # normally, so the guard also fails on R CMD check's own exit status
     # (SEOR-maavnxdm). CRAN incoming stays off, as everywhere in seor

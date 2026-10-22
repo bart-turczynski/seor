@@ -29,19 +29,21 @@ Imports:
     pslr,
     punycoder,
     raddr,
+    robotstxtr,
     rurl,
     sitemapr,
+    ssrfr,
     utils
 Suggests:
     knitr,
     oysteR,
     rmarkdown,
-    robotstxtr,
     rosv,
     testthat (>= 3.0.0)
 Remotes:
     gitlab::bart-turczynski/robotstxtr,
-    gitlab::bart-turczynski/sitemapr
+    gitlab::bart-turczynski/sitemapr,
+    gitlab::bart-turczynski/ssrfr
 Config/testthat/edition: 3
 VignetteBuilder: knitr
 Config/roxygen2/version: 8.0.0

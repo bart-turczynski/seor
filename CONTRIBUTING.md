@@ -33,8 +33,7 @@ Follow the fleet checklist,
 seor's deltas:
 
 - **Step 1: every member is on CRAN first.** A metapackage cannot be
-  submitted while any member it declares is off CRAN. That includes
-  `robotstxtr`, although it is only in `Suggests:`. When a member is
+  submitted while any member it declares is off CRAN. When a member is
   published, its `Remotes:` line goes and the "Membership and CRAN status"
   table in `ARCHITECTURE.md` changes with it. The first submission drops
   `Remotes:` entirely.

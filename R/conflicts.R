@@ -30,7 +30,7 @@ seor_conflicts <- function() {
 
   conflicted <- Filter(function(o) length(o) > 1, owners)
   involving_seor <- Filter(
-    function(o) any(o %in% seor_packages(include_optional = TRUE)),
+    function(o) any(o %in% seor_packages()),
     conflicted
   )
 

@@ -41,6 +41,7 @@
 <dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/pagerankr"/>
 <dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/sitemapr"/>
 <dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/robotstxtr"/>
+<dcterms:hasPart rdf:resource="https://gitlab.com/bart-turczynski/ssrfr"/>
 <cc:license rdf:resource="https://opensource.org/license/mit"/>
 <cc:attributionName>Bart Turczynski</cc:attributionName>
 <cc:attributionURL rdf:resource="https://gitlab.com/bart-turczynski/seor"/>
@@ -75,7 +76,7 @@
 <xmpRights:Owner><rdf:Bag><rdf:li>Bart Turczynski</rdf:li></rdf:Bag></xmpRights:Owner>
 <xmpMM:DocumentID>uuid:d22ab455-addb-5be1-9e7a-abe5e480b649</xmpMM:DocumentID>
 <xmpMM:OriginalDocumentID>uuid:d22ab455-addb-5be1-9e7a-abe5e480b649</xmpMM:OriginalDocumentID>
-<xmpMM:InstanceID>uuid:996081a3-0d97-55d8-8ef4-fcf227a0fd25</xmpMM:InstanceID>
+<xmpMM:InstanceID>uuid:5b0ba988-ca9b-5b16-b00f-45b56eda7403</xmpMM:InstanceID>
 <photoshop:Headline>seor: SEO library for R</photoshop:Headline>
 <photoshop:Credit>Bart Turczynski</photoshop:Credit>
 <photoshop:Source>Bart Turczynski</photoshop:Source>

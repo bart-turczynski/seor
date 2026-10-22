@@ -1,18 +1,38 @@
-test_that("seor_packages() returns the core members", {
-  expect_setequal(
-    seor_packages(),
-    c("rurl", "punycoder", "pslr", "raddr", "sitemapr", "pagerankr")
+test_that("seor_packages() returns every member", {
+  members <- c(
+    "rurl",
+    "punycoder",
+    "pslr",
+    "raddr",
+    "sitemapr",
+    "pagerankr",
+    "robotstxtr",
+    "ssrfr"
   )
+  expect_setequal(seor_packages(), members)
 })
 
-test_that("include_optional only adds robotstxtr when it is installed", {
-  pkgs <- seor_packages(include_optional = TRUE)
-  expect_true(all(seor_packages() %in% pkgs))
-  if (requireNamespace("robotstxtr", quietly = TRUE)) {
-    expect_true("robotstxtr" %in% pkgs)
-  } else {
-    expect_false("robotstxtr" %in% pkgs)
+test_that("include_optional no longer changes the member set", {
+  expect_identical(seor_packages(include_optional = TRUE), seor_packages())
+  expect_identical(seor_packages(include_optional = FALSE), seor_packages())
+})
+
+test_that("every member is a hard dependency in DESCRIPTION", {
+  desc <- read.dcf(
+    system.file("DESCRIPTION", package = "seor"),
+    fields = c("Imports", "Suggests")
+  )
+  deps <- function(field) {
+    x <- desc[, field]
+    if (is.na(x)) {
+      return(character())
+    }
+    x <- trimws(strsplit(x, ",", fixed = TRUE)[[1]])
+    sub("[[:space:]]*\\(.*$", "", x)
   }
+  # Every hard dependency but base R's utils is a member, and attached.
+  expect_setequal(seor_packages(), setdiff(deps("Imports"), "utils"))
+  expect_length(intersect(seor_packages(), deps("Suggests")), 0L)
 })
 
 test_that("the attach banner names every package with a version", {

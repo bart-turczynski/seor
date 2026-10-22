@@ -1,24 +1,21 @@
-# The core members of the seor suite. These are attached when a user runs
+# The members of the seor suite. These are attached when a user runs
 # library(seor). Keep this list in sync with Imports: in DESCRIPTION.
-#
-# robotstxtr is a planned member: it is declared under Suggests (not yet on
-# CRAN) and is only attached opportunistically once it is installed, so the
-# suite does not fail to load without it.
 core <- c(
   "rurl", # URL parsing and manipulation
   "punycoder", # punycode / internationalized-domain conversion
   "pslr", # public suffix list lookups
   "raddr", # IP address parsing and classification
   "sitemapr", # XML sitemap parsing
-  "pagerankr" # PageRank estimation
+  "pagerankr", # PageRank estimation
+  "robotstxtr", # robots.txt parsing
+  "ssrfr" # server-side request forgery guard for outbound requests
 )
-
-optional <- "robotstxtr"
 
 #' The member packages of the seor suite
 #'
-#' @param include_optional Whether to append planned members (currently
-#'   `robotstxtr`) that are only attached when already installed.
+#' @param include_optional Ignored. Every member is a hard dependency, so
+#'   there are no optional members left to include; the argument stays so
+#'   existing calls keep working.
 #'
 #' @return A character vector of package names.
 #'
@@ -27,18 +24,13 @@ optional <- "robotstxtr"
 #'
 #' @export
 seor_packages <- function(include_optional = FALSE) {
-  if (include_optional) {
-    c(core, optional[vapply(optional, is_installed, logical(1))])
-  } else {
-    core
-  }
+  core
 }
 
 .onAttach <- function(libname, pkgname) {
-  attach_now <- c(core, optional[vapply(optional, is_installed, logical(1))])
-  needed <- attach_now[!is_attached(attach_now)]
+  needed <- core[!is_attached(core)]
 
-  packageStartupMessage(seor_attach_message(attach_now))
+  packageStartupMessage(seor_attach_message(core))
 
   # package_hooks_linter forbids altering the search path from .onAttach(),
   # which is sound for an ordinary package and is the one thing a metapackage
@@ -55,10 +47,6 @@ seor_packages <- function(include_optional = FALSE) {
 
 is_attached <- function(pkg) {
   paste0("package:", pkg) %in% search()
-}
-
-is_installed <- function(pkg) {
-  requireNamespace(pkg, quietly = TRUE)
 }
 
 # Build the tidyverse-style attach banner: one line per member with its version.

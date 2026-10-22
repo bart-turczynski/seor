@@ -7,8 +7,9 @@
 seor_packages(include_optional = FALSE)
 }
 \arguments{
-\item{include_optional}{Whether to append planned members (currently
-\code{robotstxtr}) that are only attached when already installed.}
+\item{include_optional}{Ignored. Every member is a hard dependency, so
+there are no optional members left to include; the argument stays so
+existing calls keep working.}
 }
 \value{
 A character vector of package names.
