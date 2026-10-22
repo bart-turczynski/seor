@@ -630,9 +630,10 @@ floor-check:
       "testthat", "knitr", "rmarkdown", "rcmdcheck"),
       repos = snap, Ncpus = 4L);
       install.packages(c("sitemapr", "robotstxtr", "ssrfr"), repos = c(univ, snap), Ncpus = 4L);
-      need <- c("pagerankr", "pslr", "punycoder", "raddr", "robotstxtr", "rurl", "sitemapr", "ssrfr", "testthat", "rcmdcheck");
-      stopifnot(all(vapply(need, requireNamespace, NA, quietly = TRUE)));
       stopifnot(packageVersion("curl") >= "7.0.0");
+      need <- c("pagerankr", "pslr", "punycoder", "raddr", "robotstxtr", "rurl", "sitemapr", "ssrfr", "testthat", "rcmdcheck");
+      ok <- vapply(need, requireNamespace, NA, quietly = TRUE);
+      if (!all(ok)) stop("not available: ", paste(need[!ok], collapse = ", "));
       print(R.version.string); print(curl::curl_version()$version)'
     # rcmdcheck reads a check that halted partway as 0/0/0 and returns
     # normally, so the guard also fails on R CMD check's own exit status

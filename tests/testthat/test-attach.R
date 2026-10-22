@@ -1,15 +1,14 @@
-members <- c(
-  "rurl",
-  "punycoder",
-  "pslr",
-  "raddr",
-  "sitemapr",
-  "pagerankr",
-  "robotstxtr",
-  "ssrfr"
-)
-
 test_that("seor_packages() returns every member", {
+  members <- c(
+    "rurl",
+    "punycoder",
+    "pslr",
+    "raddr",
+    "sitemapr",
+    "pagerankr",
+    "robotstxtr",
+    "ssrfr"
+  )
   expect_setequal(seor_packages(), members)
 })
 
@@ -31,8 +30,9 @@ test_that("every member is a hard dependency in DESCRIPTION", {
     x <- trimws(strsplit(x, ",", fixed = TRUE)[[1]])
     sub("[[:space:]]*\\(.*$", "", x)
   }
-  expect_true(all(members %in% deps("Imports")))
-  expect_false(any(members %in% deps("Suggests")))
+  # Every hard dependency but base R's utils is a member, and attached.
+  expect_setequal(seor_packages(), setdiff(deps("Imports"), "utils"))
+  expect_length(intersect(seor_packages(), deps("Suggests")), 0L)
 })
 
 test_that("the attach banner names every package with a version", {
