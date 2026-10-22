@@ -3612,8 +3612,8 @@ def self_test() -> list[str]:
     no_subject = dict(cran, **{svg: re.sub(r"<dc:subject>.*?</dc:subject>\n", "", cran[svg])})
     expect_gap("a logo.svg without keywords", "logo.svg has no keywords", "punycoder", no_subject, fixture_state())
     expect_gap("a DESCRIPTION logo-metadata.py refuses", "logo-metadata.py --check cannot judge the logo files "
-               "(logo-metadata: DESCRIPTION tags ssrfr 'SEO'", "ssrfr",
-               edit(fixture_repo("ssrfr"), "DESCRIPTION", "idn,", "idn, SEO,"), fixture_state())
+               "(logo-metadata: DESCRIPTION: the tag '東京' is not Latin-1", "punycoder",
+               edit(cran, "DESCRIPTION", "idn,", "idn, 東京,"), fixture_state())
     one_bag = dict(cran, **{svg: re.sub(r"<dc:subject>.*?</dc:subject>\n", "", cran[svg], count=1)})
     expect_gap("a logo.svg with one dc:subject bag", "(1 dc:subject bag(s) as logo-metadata.py writes them, not 2)",
                "punycoder", one_bag, fixture_state())

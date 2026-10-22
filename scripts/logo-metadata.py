@@ -107,9 +107,9 @@ PACKAGES = {
 }
 HUB = "seor"
 REPO_FILES = ("logo.svg", "logo.png")
-# seor's members: DESCRIPTION Imports plus robotstxtr in Suggests (ARCHITECTURE.md).
-# ssrfr is a fleet package but not a seor member.
-MEMBERS = ("rurl", "punycoder", "pslr", "raddr", "pagerankr", "sitemapr", "robotstxtr")
+# seor's members: the members in its DESCRIPTION Imports (ARCHITECTURE.md).
+# ssrfr joined them on 2026-10-22 (owner, SEOR-qhpzspww).
+MEMBERS = ("rurl", "punycoder", "pslr", "raddr", "pagerankr", "sitemapr", "robotstxtr", "ssrfr")
 KEYWORD_FIELD = "X-schema.org-keywords"
 KEYWORD_PREFIX = ("R", "rstats", "R package")  # names the language; see the docstring
 
@@ -146,8 +146,10 @@ def parse_dcf(text: str, where: str) -> dict[str, str]:
 
 
 def check_seo(pkg: str, tags: list[str], where: str) -> None:
-    """The tag "seo" marks seor and its members only (owner, 2026-10-05: ssrfr
-    is not an SEO tool). One way only: a member need not carry it."""
+    """The tag "seo" marks seor and its members only (owner, 2026-10-05). One
+    way only: a member need not carry it. Every package in PACKAGES is seor or
+    a member since ssrfr joined (2026-10-22), so the rule guards a package
+    added to PACKAGES without joining seor."""
     found = [t for t in tags if t.casefold() == "seo"]
     if pkg != HUB and pkg not in MEMBERS and found:
         sys.exit(f"logo-metadata: {where} tags {pkg} {found[0]!r}, but {pkg} is neither {HUB} nor a {HUB} member; "
@@ -750,10 +752,13 @@ def self_test() -> int:
     expect("seo on seor", "seo" in kw("seor", "seo, metapackage"))
     expect("member without seo", kw("rurl", "url") == [*KEYWORD_PREFIX, "url"])
     expect("member with seo", "seo" in kw("pagerankr", "pagerank, seo"))
+    expect("ssrfr is a member", "seo" in kw("ssrfr", "ssrf, seo"))
+    # No fleet package is outside seor any more, so a made-up name stands in.
     for tag in ("seo", "SEO", "Seo"):
         expect(f"{tag} on a non-member refused",
-               exits_with(lambda: kw("ssrfr", f"ssrf, {tag}"), f"{tag!r}, but ssrfr is neither seor nor a seor member"))
-    expect("a tag merely containing seo", "technical-seo" in kw("ssrfr", "ssrf, technical-seo"))
+               exits_with(lambda: kw("notamember", f"x, {tag}"),
+                          f"{tag!r}, but notamember is neither seor nor a seor member"))
+    expect("a tag merely containing seo", "technical-seo" in kw("notamember", "x, technical-seo"))
 
     # Keyword output, read back from rendered files.
     want = [*KEYWORD_PREFIX, "seo", "search-engine-optimization", "metapackage", "url-parsing", "idna",
@@ -817,8 +822,8 @@ def self_test() -> int:
            exits_with(lambda: judge(stale, desc.encode("utf-8") + b"Note: caf\xe9\n"),
                       "logo-metadata: DESCRIPTION is not UTF-8;"))
     expect("check_logos: a DESCRIPTION it refuses",
-           exits_with(lambda: judge(stale, description("ssrfr", "ssrf, SEO"), "ssrfr"),
-                      "logo-metadata: DESCRIPTION tags ssrfr 'SEO'"))
+           exits_with(lambda: judge(stale, description("seor", "seo, 東京")),
+                      "logo-metadata: DESCRIPTION: the tag '東京' is not Latin-1"))
 
     # check_logos() is pure: it creates, writes and removes no file or
     # directory. An audit hook (it cannot be removed, so it is switched off
@@ -842,7 +847,7 @@ def self_test() -> int:
         _check_logos.cache_clear()
         judge(stale)
         judge(dict(stale, **{"logo.png": b"x\n"}))
-        exits_with(lambda: judge(stale, description("ssrfr", "ssrf, SEO"), "ssrfr"), "SEO")
+        exits_with(lambda: judge(stale, description("seor", "seo, 東京")), "Latin-1")
     finally:
         watching[0] = False
     expect(f"check_logos creates no files ({'; '.join(touched)})", not touched)
