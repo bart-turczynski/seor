@@ -179,9 +179,10 @@ license) may follow. A section repeating the reference index, such as a table
 of every exported function, adds nothing: `llms.txt` already appends that
 index.
 
-**Not in the README.** Maintainer content goes to `ARCHITECTURE.md`,
-`design/` or a vignette, not to `CONTRIBUTING.md` (see "Files every package
-carries" for what that file holds). The checker treats these headings,
+**Not in the README.** Contributor setup (installing dependencies, the
+verify command) goes to `CONTRIBUTING.md` (see "Files every package carries"
+for what that file holds); other maintainer content goes to
+`ARCHITECTURE.md`, `design/` or a vignette. The checker treats these headings,
 at any level, as maintainer content: Setup, Development, Verification,
 Project or Repository layout or structure, Current state, Status and
 Dependencies. A "Dependencies" section that a user needs belongs inside

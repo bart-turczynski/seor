@@ -24,11 +24,14 @@ The `env =` argument disables only the CRAN incoming-feasibility step. seor is a
 metapackage with members that are not yet on CRAN, so that step always reports an
 ERROR (non-mainstream dependencies, the `Remotes:` field, the archived `seoR` name
 clash) — a permanent, known state rather than a regression. Every other
-`--as-cran` check still runs. Re-enable it for the first CRAN submission.
+`--as-cran` check still runs. For the first CRAN submission, run the incoming
+check separately (step 5 in the release deltas below); leave the gate's
+setting alone.
 
-See the project README for the source and test layout.
-Durable project context lives in `ARCHITECTURE.md` and `design/`: the CRAN
-release deltas in `design/release-deltas.md`, and what to do when CI jobs sit
-in `pending` in `design/stuck-pending-runbook.md`.
+The source and test layout, and durable project context, live in
+`ARCHITECTURE.md` and `design/`: the CRAN release deltas in
+[`design/release-deltas.md`](https://gitlab.com/bart-turczynski/seor/-/blob/main/design/release-deltas.md),
+and what to do when CI jobs sit in `pending` in
+[`design/stuck-pending-runbook.md`](https://gitlab.com/bart-turczynski/seor/-/blob/main/design/stuck-pending-runbook.md).
 
 Keep local-only planning state in `_scratch/`. Do not commit `_scratch/`, `.fp/`, secrets, dependency folders, build outputs, or generated caches.
