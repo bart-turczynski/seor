@@ -21,7 +21,7 @@ Useful links:
   \item \url{https://bart-turczynski.gitlab.io/seor/}
   \item \url{https://gitlab.com/bart-turczynski/seor}
   \item \url{https://bart-turczynski.r-universe.dev/seor}
-  \item Report bugs at \url{https://gitlab.com/bart-turczynski/seor/-/issues}
+  \item Report bugs at \url{https://gitlab.com/bart-turczynski/seor/-/work_items}
 }
 
 }

@@ -49,6 +49,10 @@ dependencies and (2) attach them all on `library(seor)`.
   `check-design.py` owns design-doc hygiene; `check-citation.py` owns the
   agreement between `CITATION.cff`, `.zenodo.json` and `DESCRIPTION`. Both are
   offline and stdlib-only, so they also run as cheap CI jobs.
+  `check-bugreports.py`, also offline and stdlib-only, holds `BugReports:`,
+  the package help page and every tracker link on `/-/work_items`, and
+  `check-urls.R` fetches every declared URL with no exemption
+  ([ADR 0011](design/adr/0011-bugreports-names-work-items.md)).
   `docs-drift.sh` runs `check-docs-drift.R`, which fails when `man/`,
   `NAMESPACE` or `DESCRIPTION` differ from what the pinned roxygen2
   regenerates, on a `git archive` export of the pushed commit. CI's

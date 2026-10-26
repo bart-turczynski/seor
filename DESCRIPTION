@@ -14,7 +14,7 @@ Description: The 'seor' suite bundles a set of focused R packages for search
 URL: https://bart-turczynski.gitlab.io/seor/,
     https://gitlab.com/bart-turczynski/seor,
     https://bart-turczynski.r-universe.dev/seor
-BugReports: https://gitlab.com/bart-turczynski/seor/-/issues
+BugReports: https://gitlab.com/bart-turczynski/seor/-/work_items
 X-schema.org-keywords: seo, search-engine-optimization, metapackage,
     url-parsing, idna, public-suffix-list, ip-address, xml-sitemap, pagerank,
     robots-txt
@@ -46,4 +46,4 @@ Remotes:
     gitlab::bart-turczynski/ssrfr
 Config/testthat/edition: 3
 VignetteBuilder: knitr
-Config/roxygen2/version: 8.0.0
+Config/roxygen2/version: 8.1.1

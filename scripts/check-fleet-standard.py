@@ -180,7 +180,7 @@ scripts are not followed: the citation scripts a job names quote
 So a gate is "present" when its call appears in that text; a script that takes
 the call but skips it at run time reads as present. Not checked: whether a tag
 pipeline fails on "already on CRAN", whether the URL check fails on zero URLs
-and exempts only the BugReports 404, how security-audit treats missing OSS
+and has no exemption (ADR 0011), how security-audit treats missing OSS
 Index credentials, the GitLab project badges, and that no employer is named as
 copyright holder or funder. Those stay review items.
 

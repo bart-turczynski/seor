@@ -50,8 +50,8 @@ Who runs each step:
    `check-toolchain` hook flags a direct dependency older than CRAN's. Two
    NOTE items are expected
    fleet-wide: "New submission" (first release only) and the `BugReports:`
-   `/-/issues` 404 (SEOR-ocbtrrnl). `cran-comments.md` explains every item
-   that is not fixed.
+   "which should likely be" suggestion for `/-/work_items` (ADR 0011).
+   `cran-comments.md` explains every item that is not fixed.
 
    Run it against `https://cloud.r-project.org`, not a Posit mirror. For a
    package already on CRAN, "checking CRAN incoming feasibility" reads

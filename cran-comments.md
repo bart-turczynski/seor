@@ -12,16 +12,14 @@ the freed name (CRAN treats `seor` and `seoR` as the same name).
 
 ## BugReports
 
-`BugReports:` is `https://gitlab.com/bart-turczynski/seor/-/issues`, the form
-the incoming check asks for. GitLab now serves that address as a 404 to a
-signed-out, non-browser client, so the URL check reports it as possibly
-invalid; a browser is redirected to the tracker at `/-/work_items`. The
-alternative, declaring `/-/work_items`, draws the incoming NOTE instead: a
-sibling package's first 1.2.1 upload (pslr) was archived at the pretest for
-it, and its resubmission with `/-/issues` was accepted, as rurl 3.0.1 and
-raddr 0.1.2 were. So the field keeps `/-/issues`, and every file a person
-reads points at `/-/work_items` (SEOR-ocbtrrnl). Expect the 404 NOTE and keep
-this paragraph in the submission comments.
+`BugReports:` is `https://gitlab.com/bart-turczynski/seor/-/work_items`. The
+incoming check suggests an `/issues` path instead ("which should likely
+be ..."). On gitlab.com, `/-/issues` answers 404 to a non-browser client,
+`tools::check_url_db()` included, while `/-/work_items` answers 200. On
+2026-10-23 Uwe Ligges called this NOTE a bug in the check for GitLab and
+invited the `/-/work_items` form on the pslr 1.2.2 submission, which CRAN
+then published. Quote the local check's wording of the NOTE here when
+submitting, and keep this paragraph in the submission comments (ADR 0011).
 
 ## R CMD check results
 

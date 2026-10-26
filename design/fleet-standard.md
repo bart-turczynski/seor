@@ -411,8 +411,8 @@ says how each repository spells it). Most also run `check-citation` and
 Added by this standard: a URL check shaped like sitemapr's `urls` stage in
 `tools/verify.R`. It fetches every URL the package declares and fails on a
 dead one, because `--as-cran` reports a dead link only as a NOTE. It fails when
-it checked zero URLs, and the only exemption is the `BugReports:` `/-/issues`
-URL answering exactly 404 (SEOR-ocbtrrnl).
+it checked zero URLs, and nothing is exempt: `BugReports:` names `/-/work_items`
+(ADR 0011).
 
 Also added: `check-toolchain`'s pandoc check, which compares the local pandoc
 with the CI pin (see the pandoc rule under "CI on every push to `main`").
