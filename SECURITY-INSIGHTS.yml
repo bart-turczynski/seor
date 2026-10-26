@@ -20,7 +20,7 @@ project:
   documentation:
     quickstart-guide: https://bart-turczynski.gitlab.io/seor/
     detailed-guide: https://bart-turczynski.gitlab.io/seor/reference/index.html
-    release-process: https://gitlab.com/bart-turczynski/seor/-/blob/main/CONTRIBUTING.md
+    release-process: https://gitlab.com/bart-turczynski/seor/-/blob/main/design/release-deltas.md
   repositories:
     - name: seor
       url: https://gitlab.com/bart-turczynski/seor

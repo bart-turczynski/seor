@@ -3,10 +3,11 @@
 The release procedure for every R package in the fleet (SEOR-ygfaewuo). Run
 the steps in order.
 
-**Deltas live in each package's `CONTRIBUTING.md`.** Its "CRAN release
-checklist" section links here and lists only that package's extra or
-different steps. Read it before starting; where it disagrees with this file,
-it wins.
+**Deltas live in the package's `design/release-deltas.md`**, or, until a
+package has one, in the "CRAN release checklist" section of its
+`CONTRIBUTING.md` (SEOR-ogreubsr moves them). They link here and list only
+that package's extra or different steps. Read them before starting; where
+they disagree with this file, they win.
 
 Who runs each step:
 
