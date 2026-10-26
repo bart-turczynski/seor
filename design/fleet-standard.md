@@ -179,8 +179,9 @@ license) may follow. A section repeating the reference index, such as a table
 of every exported function, adds nothing: `llms.txt` already appends that
 index.
 
-**Not in the README.** Maintainer content goes to `CONTRIBUTING.md`,
-`ARCHITECTURE.md`, `design/` or a vignette. The checker treats these headings,
+**Not in the README.** Maintainer content goes to `ARCHITECTURE.md`,
+`design/` or a vignette, not to `CONTRIBUTING.md` (see "Files every package
+carries" for what that file holds). The checker treats these headings,
 at any level, as maintainer content: Setup, Development, Verification,
 Project or Repository layout or structure, Current state, Status and
 Dependencies. A "Dependencies" section that a user needs belongs inside
@@ -457,6 +458,20 @@ changed. robotstxtr's fork `dev/check-docs-drift.R` and sitemapr's in-place
   requests (the GitHub copy is a read-only mirror), new code needs tests, a
   `NEWS.md` bullet per user-facing change, and the verify command must pass.
   The OpenSSF `contribution` criterion reads that paragraph.
+
+  `CONTRIBUTING.md` is for someone sending one merge request, and holds only:
+  - those two opening paragraphs;
+  - how to install the dependencies;
+  - the verify command, and what it covers or deliberately skips;
+  - what not to commit;
+  - a pointer to `ARCHITECTURE.md` and `design/`.
+
+  Everything else goes elsewhere: CI settings, gate internals, lint sets,
+  dependency scanning, renaming procedures, runbooks and design notes go to
+  the package's `ARCHITECTURE.md` or `design/`. The package's CRAN release
+  deltas go to `design/release-deltas.md`. Text that repeats a fleet document
+  in seor becomes a link to it. Move text when cutting a `CONTRIBUTING.md`;
+  never delete it.
 - `SECURITY.md`: ssrfr's, the package name swapped in (email
   `bartek@turczynski.pl`, or a confidential GitLab issue). The same text in
   every package; the OpenSSF vulnerability-reporting criteria read it.

@@ -26,7 +26,11 @@ mkdocs/sphinx/docusaurus, handwritten publisher docs in a browser extension.
 - [`github-mirror.md`](github-mirror.md) — playbook for the read-only GitHub
   mirror.
 - [`release-checklist.md`](release-checklist.md) — the fleet CRAN release
-  checklist; each package's `CONTRIBUTING.md` adds its own deltas.
+  checklist; each package's `design/release-deltas.md` adds its own deltas.
+- [`release-deltas.md`](release-deltas.md) — seor's own deltas to that
+  checklist.
+- [`stuck-pending-runbook.md`](stuck-pending-runbook.md) — what to do when
+  fleet CI jobs sit in `pending` because the self-hosted runner is down.
 
 See also [`../ARCHITECTURE.md`](../ARCHITECTURE.md) for the structural map.
 

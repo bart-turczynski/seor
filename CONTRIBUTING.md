@@ -26,59 +26,9 @@ ERROR (non-mainstream dependencies, the `Remotes:` field, the archived `seoR` na
 clash) — a permanent, known state rather than a regression. Every other
 `--as-cran` check still runs. Re-enable it for the first CRAN submission.
 
-## CRAN release checklist
-
-Follow the fleet checklist,
-[seor `design/release-checklist.md`](https://gitlab.com/bart-turczynski/seor/-/blob/main/design/release-checklist.md).
-seor's deltas:
-
-- **Step 1: every member is on CRAN first.** A metapackage cannot be
-  submitted while any member it declares is off CRAN. When a member is
-  published, its `Remotes:` line goes and the "Membership and CRAN status"
-  table in `ARCHITECTURE.md` changes with it. The first submission drops
-  `Remotes:` entirely.
-- **Step 5: turn incoming on.** The verify gate sets
-  `_R_CHECK_CRAN_INCOMING_=false` on purpose
-  ([ADR 0004](https://gitlab.com/bart-turczynski/seor/-/blob/main/design/adr/0004-cran-incoming-runs-everywhere-except-seor.md)),
-  so a green gate says nothing about incoming feasibility. Run step 5's
-  check, with both incoming variables `true`, rather than the gate command.
-  Leave the gate's setting alone: dropping it is ADR 0004's revisit
-  condition, not a release step.
-- **Step 4: keep the name-reuse and `BugReports:` sections** of
-  `cran-comments.md`. CRAN treats `seor` and the archived `seoR` as the same
-  name.
-- **Step 14:** seor's first release is its first Zenodo archive
-  (SEOR-dvbdsvuq).
-
-## Stuck-pending runbook
-
-CI for seor and its members runs on self-hosted Docker runners on the
-maintainer's Mac, not on GitLab.com shared runners. When the Mac sleeps, or
-`gitlab-runner` or Docker stops, jobs sit in `pending` and eventually fail
-with `failure_reason: stuck_pending_no_matching_runners`, `runner: None` and
-a long `queued_duration`. **That is infrastructure, not a code failure.**
-Don't debug the code; bring the runner back and retry. To confirm from the
-API, `glab api projects/:id/jobs/<job_id>` shows that `failure_reason` and
-`"runner": null`; a job that ran and failed names its runner. Why the fleet
-runs this way:
-[ADR 0003](https://gitlab.com/bart-turczynski/seor/-/blob/main/design/adr/0003-fleet-ci-runs-on-self-hosted-runners.md).
-
-The `runner-heartbeat` Worker checks every 15 minutes. When a fleet job has
-been pending for more than 20 minutes, it opens a `stuck-runner` issue in
-`bart-turczynski/runner-heartbeat`, and that issue is the alert. To recover:
-
-1. Wake the Mac and start Docker Desktop if it isn't running
-   (`docker info` should succeed).
-2. Start the runner: `brew services start gitlab-runner`. Confirm that it is
-   polling: `glab api "projects/:id/runners?type=project_type"` should show
-   the project's `*-local-docker` runner `online`.
-3. Pending jobs are usually picked up within a minute. Retry the ones that
-   already failed: `glab ci retry <job-id>`, or
-   `glab api --method POST "projects/:id/pipelines/<pipeline-id>/retry"` for
-   a whole pipeline.
-4. Close the `stuck-runner` issue. No new alert opens while one is open.
-
 See the project README for the source and test layout.
-Durable project context lives in `ARCHITECTURE.md` and `design/`.
+Durable project context lives in `ARCHITECTURE.md` and `design/`: the CRAN
+release deltas in `design/release-deltas.md`, and what to do when CI jobs sit
+in `pending` in `design/stuck-pending-runbook.md`.
 
 Keep local-only planning state in `_scratch/`. Do not commit `_scratch/`, `.fp/`, secrets, dependency folders, build outputs, or generated caches.
