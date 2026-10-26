@@ -758,10 +758,9 @@ pages:
 #
 # Nothing below pushes to the repository or needs a write token either. The
 # `renovate` job (and its renovate.json) was removed on 2026-09-24 by owner
-# decision (SEOR-tzxuisnf), and so was the `codemeta` job: codemetar derives
-# `issueTracker` from BugReports' `/-/issues`, while the fleet's committed
-# codemeta.json points humans at `/-/work_items` (SEOR-ocbtrrnl), so any
-# regenerate-and-compare job is red forever. codemeta.json is hand-maintained.
+# decision (SEOR-tzxuisnf), and so was the `codemeta` job. codemeta.json is
+# hand-maintained; check-bugreports holds its `issueTracker` equal to
+# BugReports' `/-/work_items` (ADR 0011).
 # --------------------------------------------------------------------------
 
 # Dependency vulnerability audit against the OSV database (https://osv.dev) via
