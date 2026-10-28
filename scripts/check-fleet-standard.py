@@ -66,7 +66,9 @@ WHAT IT CHECKS, by section of the standard.
 * Files. The list in "Files every package carries", plus: LICENSE names Bart
   Turczynski as holder, LICENSE.md is the full MIT text, SECURITY.md and
   CODE_OF_CONDUCT.md name the public contact, and SECURITY.md is more than a
-  stub (fewer than 10 non-blank lines is a stub).
+  stub (fewer than 10 non-blank lines is a stub). An agent file (AGENTS.md,
+  AGENTS_LANG.md or CLAUDE.md) carries the NEWS rule: it names NEWS and says
+  "one terse line" (check_news_rule(), SEOR-mjrpwnqz), a loose test.
 * DESCRIPTION. Bart Turczynski with roles aut, cre and cph, the ORCID comment
   and the public email; `URL:` in the standard's order (trailing slashes
   ignored); `Language: en-US`; a declared R floor; `X-schema.org-keywords`
@@ -130,7 +132,12 @@ WHAT IT CHECKS, by section of the standard.
   (SEOR-nwfmerhu). That the two belong together, and that it diffs, is a
   review item. scripts/check-docs-drift.R is there and matches seor's copy,
   line endings aside: one canonical copy, vendored byte for byte
-  (check_docs_drift_copy(), SEOR-lyciowif).
+  (check_docs_drift_copy(), SEOR-lyciowif). And the NEWS terseness check:
+  a hook that runs at pre-push (its `stages`, else `default_stages`, else
+  every stage, as pre-commit decides) has an `entry` and `args` that run
+  scripts/check-news.py on NEWS.md, or call an R or shell script that does;
+  its `--self-test` alone does not count (check_news_hook(), the `news-terse`
+  hook, SEOR-mjrpwnqz). The port is not compared with seor's copy.
 * Schedules. A `deep-check` and a `dependency-audit` schedule, each active,
   on `main`, with `SCHEDULE_KIND` set on the schedule itself; no schedule
   without a `SCHEDULE_KIND` or off `main`.
@@ -2908,6 +2915,7 @@ def check_local_gate(source, report: Report) -> None:
     if text is None:
         report.gap("local gate", "no .pre-commit-config.yaml")
         return
+    check_news_hook(text, source, report)
     body = strip_comment_lines(text)
     # R and shell only: a Python script that merely names check_url_db (this
     # one, check-bugreports.py's docstring) runs no URL check.
@@ -2938,6 +2946,97 @@ def check_local_gate(source, report: Report) -> None:
     if not any(reads_ci_pin(path, chunk) for path, chunk in [(".pre-commit-config.yaml", body)] + named):
         report.gap("local gate", "no check that compares the local rmarkdown::pandoc_version() with the CI pin "
                                  f"(PANDOC_VERSION, {PANDOC_PIN})")
+
+
+AGENT_FILES = ("AGENTS.md", "AGENTS_LANG.md", "CLAUDE.md")
+NEWS_RULE_RE = re.compile(r"\bone\s+terse\s+line\b", re.I)
+NEWS_CHECK_RE = re.compile(r"\bcheck-news\.py\b")
+NEWS_FILE_RE = re.compile(r"\bNEWS\.md\b")
+# pre-commit's stage names for the pre-push hook; `push` is the legacy one.
+PRE_PUSH_STAGES = {"pre-push", "push"}
+
+
+def check_news_rule(source, report: Report) -> None:
+    """The NEWS rule (design/fleet-standard.md, "NEWS.md bullets",
+    SEOR-mjrpwnqz): an agent file says a NEWS.md bullet is "one terse line".
+    The test is loose: some agent file names NEWS anywhere and says "one
+    terse line" anywhere, not necessarily of NEWS. An agent file that cannot
+    be read is skipped; when none of the others carries the rule, the run is
+    then incomplete rather than a gap. The pre-push hook half is
+    check_news_hook(), run from check_local_gate()."""
+    texts, unread = [], False
+    for path in AGENT_FILES:
+        try:
+            text = source.read(path)
+        except ProbeError as error:
+            report.skip("files", f"could not read {path} ({error})", incomplete=True)
+            unread = True
+            continue
+        if text is not None:
+            texts.append(text)
+    if not unread and not any("NEWS" in text and NEWS_RULE_RE.search(text) for text in texts):
+        report.gap("files", f"no agent file ({', '.join(AGENT_FILES)}) carries the NEWS rule: a NEWS.md bullet is "
+                            "one terse line, user-facing changes only, no housekeeping")
+
+
+def runs_news_check(text: str) -> bool:
+    """A line of `text`, outside comment lines, runs check-news.py on NEWS.md:
+    it names both, and not `--self-test`."""
+    return any(NEWS_CHECK_RE.search(line) and NEWS_FILE_RE.search(line) and "--self-test" not in line
+               for line in strip_comment_lines(text).splitlines())
+
+
+def pre_push_hooks(config: str) -> list[dict]:
+    """The hooks of a .pre-commit-config.yaml that pre-commit runs at pre-push,
+    as it decides: a hook's own `stages`, else the config's `default_stages`,
+    else every stage. ValueError when the config is not that shape; a YAML
+    error propagates."""
+    document = yaml.safe_load(config)
+    if not isinstance(document, dict):
+        raise ValueError("not a mapping")
+    default = document.get("default_stages")
+    hooks = []
+    for repo in document.get("repos") or []:
+        if not isinstance(repo, dict):
+            raise ValueError("a `repos` entry is not a mapping")
+        for hook in repo.get("hooks") or []:
+            if not isinstance(hook, dict):
+                raise ValueError("a `hooks` entry is not a mapping")
+            stages = hook.get("stages", default)
+            if isinstance(stages, str):
+                stages = [stages]
+            if stages is None or PRE_PUSH_STAGES & {str(stage) for stage in stages}:
+                hooks.append(hook)
+    return hooks
+
+
+def check_news_hook(config: str, source, report: Report) -> None:
+    """The NEWS check in the pre-push gate (SEOR-mjrpwnqz): a hook that runs at
+    pre-push (pre_push_hooks()) whose `entry` and `args` run check-news.py on
+    NEWS.md, or call an R or shell script, followed three levels deep, that
+    does. Its self-test alone, a hook on another stage, or check-news.py named
+    only in a `name:` or a comment is no check. A remote repository's hook
+    carries no `entry` here, so it never counts."""
+    try:
+        hooks = pre_push_hooks(config)
+    except (yaml.YAMLError, ValueError) as error:
+        report.skip("local gate", f"could not read the hooks of .pre-commit-config.yaml ({error})", incomplete=True)
+        return
+    for hook in hooks:
+        args = hook.get("args") or []
+        command = " ".join(str(part) for part in [hook.get("entry") or "", *(args if isinstance(args, list) else [args])])
+        if runs_news_check(command):
+            return
+        try:
+            scripts = [s for path, s in inline_scripts(command, source, depth=3)
+                       if Path(path).suffix in ("", ".R", ".r", ".sh")]
+        except ProbeError as error:
+            report.skip("local gate", f"could not read a script the pre-push gate runs ({error})", incomplete=True)
+            return
+        if any(runs_news_check(script) for script in scripts):
+            return
+    report.gap("local gate", "no NEWS terseness check in the pre-push gate: a `news-terse` hook running "
+                             "scripts/check-news.py NEWS.md at pre-push, ported from seor's")
 
 
 @cache
@@ -2996,6 +3095,7 @@ def check_repo(pkg: str, source, state: State,
     floor = check_description(pkg, source, state, report)
     check_ci(pkg, source, state, floor, report, pins)
     check_local_gate(source, report)
+    check_news_rule(source, report)
     check_docs_drift_copy(source, report)
     check_toolchain_copy(source, report)
     check_schedules(state, report)
@@ -3172,11 +3272,18 @@ repos:
         entry: Rscript scripts/check-toolchain.R
         language: system
         stages: [pre-push]
+      - id: news-terse
+        entry: python3 scripts/check-news.py NEWS.md
+        language: system
+        stages: [pre-push]
       - id: verify
         entry: Rscript tools/verify.R
         language: system
         stages: [pre-push]
 """
+
+FIXTURE_NEWS_RULE = ("### NEWS\n\nA `NEWS.md` bullet goes only to a change a package user notices. One terse\n"
+                     "line, no rationale prose, one issue reference.\n")
 
 def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str | None = "10.5281/zenodo.111") -> dict:
     urls = [f"https://{OWNER}.gitlab.io/{pkg}/", f"https://gitlab.com/{OWNER}/{pkg}",
@@ -3200,6 +3307,7 @@ def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True, doi: str 
         ".gitlab-ci.yml": FIXTURE_CI,
         "tools/gates.R": FIXTURE_GATES_R,
         ".pre-commit-config.yaml": FIXTURE_PRECOMMIT,
+        "AGENTS_LANG.md": FIXTURE_NEWS_RULE,
         "tools/verify.R": "db <- tools:::url_db_from_package_sources('.')\nbad <- tools:::check_url_db(db)\n"
                           "system2(\"git\", c(\"archive\", \"-o\", tarball, ref))\nroxygen2::roxygenise(export)\n",
         # The vendored copy every member carries: seor's own, byte for byte.
@@ -4451,6 +4559,74 @@ def self_test() -> list[str]:
     expect_gap("no scripts/check-docs-drift.R", docs_drift_missing, "punycoder",
                {k: v for k, v in cran.items() if k != docs_drift}, fixture_state(),
                then=one_gap(docs_drift_missing))
+    # The NEWS rule (SEOR-mjrpwnqz): an agent file carries it, and the
+    # pre-push gate runs check-news.py. Each missing half is its one gap.
+    no_news_rule = "carries the NEWS rule"
+    no_news_hook = "no NEWS terseness check in the pre-push gate"
+    expect_gap("no agent file carries the NEWS rule", no_news_rule, "punycoder",
+               {k: v for k, v in cran.items() if k != "AGENTS_LANG.md"}, fixture_state(), then=one_gap(no_news_rule))
+    expect_gap("an agent file without the NEWS rule", no_news_rule, "punycoder",
+               dict(cran, **{"AGENTS_LANG.md": "### NEWS\n\nAdd a NEWS.md bullet per change.\n"}), fixture_state(),
+               then=one_gap(no_news_rule))
+    expect_clean("the NEWS rule in AGENTS.md instead", "punycoder",
+                 dict({k: v for k, v in cran.items() if k != "AGENTS_LANG.md"}, **{"AGENTS.md": FIXTURE_NEWS_RULE}),
+                 fixture_state())
+    expect_gap("no news-terse hook", no_news_hook, "punycoder",
+               edit(cran, ".pre-commit-config.yaml", "python3 scripts/check-news.py NEWS.md", "true"), fixture_state(),
+               then=one_gap(no_news_hook))
+    expect_gap("check-news.py named only in a comment", no_news_hook, "punycoder",
+               edit(cran, ".pre-commit-config.yaml", "      - id: news-terse\n        entry: python3 scripts/check-news.py NEWS.md\n",
+                    "      # scripts/check-news.py is not wired yet\n      - id: news-terse\n        entry: true\n"),
+               fixture_state(), then=one_gap(no_news_hook))
+    expect_clean("check-news.py run from the verify script", "punycoder",
+                 dict(edit(cran, ".pre-commit-config.yaml", "python3 scripts/check-news.py NEWS.md", "true"),
+                      **{"tools/verify.R": cran["tools/verify.R"] + "system2(\"python3\", c(\"scripts/check-news.py\", \"NEWS.md\"))\n"}),
+                 fixture_state())
+    # The hook runs the check on NEWS.md, at pre-push.
+    news_hook = "        entry: python3 scripts/check-news.py NEWS.md\n        language: system\n        stages: [pre-push]\n"
+    expect_gap("only check-news.py's self-test ported", no_news_hook, "punycoder",
+               edit(cran, ".pre-commit-config.yaml", news_hook, news_hook.replace("NEWS.md", "--self-test")),
+               fixture_state(), then=one_gap(no_news_hook))
+    expect_gap("the news-terse hook on the pre-commit stage", no_news_hook, "punycoder",
+               edit(cran, ".pre-commit-config.yaml", news_hook, news_hook.replace("pre-push", "pre-commit")),
+               fixture_state(), then=one_gap(no_news_hook))
+    expect_gap("check-news.py named only in the hook's name", no_news_hook, "punycoder",
+               edit(cran, ".pre-commit-config.yaml", news_hook,
+                    "        name: python3 scripts/check-news.py NEWS.md\n        entry: 'true'\n"
+                    "        language: system\n        stages: [pre-push]\n"),
+               fixture_state(), then=one_gap(no_news_hook))
+    expect_gap("a verify script that runs only check-news.py's self-test", no_news_hook, "punycoder",
+               dict(edit(cran, ".pre-commit-config.yaml", "python3 scripts/check-news.py NEWS.md", "true"),
+                    **{"tools/verify.R": cran["tools/verify.R"]
+                       + "system2(\"python3\", c(\"scripts/check-news.py\", \"--self-test\"))  # NEWS.md\n"}),
+               fixture_state(), then=one_gap(no_news_hook))
+    expect_clean("the news-terse hook inherits pre-push from default_stages", "punycoder",
+                 dict(cran, **{".pre-commit-config.yaml": "default_stages: [pre-push]\n" + cran[".pre-commit-config.yaml"]
+                               .replace(news_hook, news_hook.replace("        stages: [pre-push]\n", ""))}),
+                 fixture_state())
+    expect_gap("the news-terse hook inherits pre-commit from default_stages", no_news_hook, "punycoder",
+               dict(cran, **{".pre-commit-config.yaml": "default_stages: [pre-commit]\n" + cran[".pre-commit-config.yaml"]
+                             .replace(news_hook, news_hook.replace("        stages: [pre-push]\n", ""))}),
+               fixture_state(), then=one_gap(no_news_hook))
+    expect_clean("the news-terse hook with NEWS.md in args", "punycoder",
+                 edit(cran, ".pre-commit-config.yaml", news_hook,
+                      news_hook.replace(" NEWS.md\n", "\n        args: [NEWS.md]\n")), fixture_state())
+
+    # An agent file that cannot be read is skipped: the hook half is still judged.
+    class UnreadableAgents(DictSource):
+        def read(self, path: str) -> str | None:
+            if path == "AGENTS.md":
+                raise ProbeError("reading AGENTS.md: 503")
+            return super().read(path)
+
+    def hook_judged(report: Report) -> None:
+        if (not any(no_news_hook in t for _, t in report.gaps)
+                or not any("could not read AGENTS.md" in t for _, t in report.unjudged)):
+            failures.append(f"an unreadable agent file: expected the hook gap and the skip, got "
+                            f"{report.gaps} / {report.unjudged}")
+
+    run("punycoder", UnreadableAgents(edit(cran, ".pre-commit-config.yaml", "python3 scripts/check-news.py NEWS.md",
+                                           "true")), fixture_state(), judge=hook_judged)
     no_local_pandoc = "no check that compares the local rmarkdown::pandoc_version() with the CI pin (PANDOC_VERSION, 3.10)"
     expect_gap("local pandoc check missing", no_local_pandoc, "punycoder",
                dict(cran, **{"scripts/check-toolchain.R": "# pandoc_version() is only mentioned here\nx <- 1\n"}),

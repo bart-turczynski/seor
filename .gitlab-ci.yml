@@ -444,6 +444,10 @@ citation-version:
     # offline, stdlib-only shape, the pre-push hooks' twin.
     - python3 scripts/logo-metadata.py --self-test
     - python3 scripts/logo-metadata.py --check seor man/figures
+    # NEWS.md bullets are one terse line (SEOR-mjrpwnqz): the same offline,
+    # stdlib-only shape, the `news-terse` pre-push hooks' twin.
+    - python3 scripts/check-news.py --self-test
+    - python3 scripts/check-news.py NEWS.md
 
 # The cheap gates in one job, per design/adr/0005: README drift, spelling and
 # news-version, run by scripts/gates.sh, which runs every gate and then names
