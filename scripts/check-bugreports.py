@@ -1,6 +1,9 @@
 # check-bugreports v2 (seor adaptation of pslr's v2, PSLR-cvhksjst). v2 requires
 # /-/work_items in DESCRIPTION too, the opposite of v1 and of the other
 # packages' copies until SEOR-sptibjph reaches them: never re-port from those.
+# seor's copy also carries the SEOR-jjblyiyd hardening (own tracker address,
+# missing files, empty BugReports:, http:// and subgroup links, no seor-only
+# paths, the package block's @seealso); the members' ports predate it.
 """BugReports / tracker-link gate.
 
 WHY THIS EXISTS. CRAN runs two checks over a GitLab `BugReports:` URL and,
@@ -23,16 +26,18 @@ https://gitlab.com/bart-turczynski/pslr/-/work_items and we will let it pass
 and fix our checks." So every file, DESCRIPTION included, now names
 `/-/work_items`, and none names `/-/issues` (SEOR-sptibjph, ADR 0011).
 
-`man/seor-package.Rd`'s "Report bugs at" link is not a separate decision:
-`R/seor-package.R` uses roxygen2's `"_PACKAGE"` sentinel, which generates a
+The package man page's "Report bugs at" link is not a separate decision.
+`man/<pkg>-package.Rd` (`<pkg>` is `DESCRIPTION`'s `Package:`) is generated
+from the R/ file holding roxygen2's `"_PACKAGE"` sentinel, which writes a
 "Useful links" section verbatim from `DESCRIPTION`'s own `URL:`/`BugReports:`
 fields. If that link is present it MUST agree with `DESCRIPTION`, or
 `devtools::document()` was not re-run.
 
 roxygen2 emits that generated section only when the package doc has no
-`@seealso` of its own. `R/seor-package.R` declares none, so
+`@seealso` of its own. seor's `R/seor-package.R` declares none, so
 `man/seor-package.Rd` carries the line and it is compared. Its absence is
-accepted only while an `@seealso` suppresses it (pslr's shape).
+accepted only while an `@seealso` in the `"_PACKAGE"` block itself
+suppresses it (pslr's shape).
 
 WHAT IT CHECKS.
 
@@ -40,11 +45,14 @@ WHAT IT CHECKS.
    optionally with a trailing slash, of the gitlab.com repository that
    `DESCRIPTION`'s `URL:` names, and `codemeta.json`'s `"issueTracker"`
    is the same address.
-2. `man/seor-package.Rd`'s "Report bugs at" link, when present, is
-   IDENTICAL to `DESCRIPTION`'s `BugReports:` value; when absent,
-   `R/seor-package.R` declares the `@seealso` that suppresses it.
-3. Every file that carries the tracker link names `/-/work_items`, and none
-   of them carries a `/-/issues` link:
+2. `man/<pkg>-package.Rd`'s "Report bugs at" link, when present, is
+   IDENTICAL to `DESCRIPTION`'s `BugReports:` value; when absent, the
+   `"_PACKAGE"` file declares the `@seealso` that suppresses it.
+3. Every file that carries the tracker link exists, names this package's own
+   `/-/work_items` address (the repository `BugReports:` and `URL:` agree
+   on; another project's tracker may appear beside it, never instead), and
+   none of them carries a `/-/issues` link (over `http://` or `https://`,
+   in a subgroup or not):
      - codemeta.json (`"issueTracker"`)
      - .bestpractices.json
      - CONTRIBUTING.md (where to report a bug)
@@ -83,15 +91,22 @@ import sys
 import tempfile
 from pathlib import Path
 
-ISSUES_RE = re.compile(
-    r"https://gitlab\.com/[\w.-]+/[\w.-]+/-/issues(?![\w-])"
-)
-WORK_ITEMS_RE = re.compile(r"https://gitlab\.com/[\w.-]+/[\w.-]+/-/work_items\b")
+# A gitlab.com project path: a namespace, any subgroups, then the project.
+# A GitLab path segment cannot start with "-", so "/-/" ends the path.
+_SEGMENT = r"[\w.][\w.-]*"
+_PROJECT = rf"gitlab\.com/{_SEGMENT}(?:/{_SEGMENT})+"
+
+# Over http:// too: it redirects to the same 404ing https:// address. Hosts
+# are case-insensitive and www.gitlab.com redirects to gitlab.com; the
+# legacy path without "/-/" redirects to /-/issues.
+ISSUES_RE = re.compile(rf"https?://(?:www\.)?{_PROJECT}/(?:-/)?issues(?![\w-])", re.IGNORECASE)
+# Group 1 is the repository the tracker belongs to.
+WORK_ITEMS_RE = re.compile(rf"(https://{_PROJECT})/-/work_items\b")
 
 # DESCRIPTION's BugReports: value, in full, must match this.
-BUGREPORTS_RE = re.compile(r"^(https://gitlab\.com/[\w.-]+/[\w.-]+)/-/work_items/?$")
+BUGREPORTS_RE = re.compile(rf"^(https://{_PROJECT})/-/work_items/?$")
 # A gitlab.com repository address in DESCRIPTION's URL: field.
-REPO_URL_RE = re.compile(r"(https://gitlab\.com/[\w.-]+/[\w.-]+?)/?(?=[\s,]|$)")
+REPO_URL_RE = re.compile(rf"(https://gitlab\.com/{_SEGMENT}(?:/{_SEGMENT})+?)/?(?=[\s,]|$)")
 ISSUE_TRACKER_RE = re.compile(r'"issueTracker"\s*:\s*"([^"]*)"')
 
 # Files beside DESCRIPTION that carry the tracker link; each must name
@@ -115,8 +130,18 @@ NO_ISSUES_GLOBS = (
     ".gitlab/**/*",
 )
 
-PACKAGE_RD = Path("man") / "seor-package.Rd"
-PACKAGE_R = Path("R") / "seor-package.R"
+# The line roxygen2 documents as the package itself, a trailing comment
+# (`"_PACKAGE" # nolint`) allowed.
+PACKAGE_SENTINEL_RE = re.compile(r"""^\s*["']_PACKAGE["']\s*(?:#.*)?$""", re.MULTILINE)
+
+
+def _repo_key(repo: str) -> str:
+    """A repository address as compared: case-folded, without a trailing
+    "/" or ".git"."""
+    repo = repo.rstrip("/")
+    if repo.lower().endswith(".git"):
+        repo = repo[: -len(".git")]
+    return repo.casefold()
 
 
 def read_dcf(path: Path) -> dict[str, str]:
@@ -140,6 +165,36 @@ def read_dcf(path: Path) -> dict[str, str]:
     return fields
 
 
+def package_doc_source(root: Path) -> tuple[Path, str] | None:
+    """The R/ file holding the "_PACKAGE" sentinel (R/<pkg>-package.R by
+    usethis's convention, but any file name works for roxygen2), with its
+    text as read, a byte that is not UTF-8 replaced."""
+    for path in sorted((root / "R").glob("*.[Rr]")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if PACKAGE_SENTINEL_RE.search(text):
+            return path, text
+    return None
+
+
+def package_block(text: str) -> str:
+    """The roxygen block documenting "_PACKAGE": the #' lines above the
+    sentinel, climbing over blank lines and plain # comments and stopping at
+    the first code line. Only an @seealso there suppresses the generated
+    "Report bugs at" line; one on another object's block does not."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if PACKAGE_SENTINEL_RE.match(line):
+            start = index
+            while start > 0:
+                above = lines[start - 1].strip()
+                if above and not above.startswith("#"):
+                    break
+                start -= 1
+            block = (line.lstrip() for line in lines[start:index])
+            return "\n".join(line for line in block if line.startswith("#'"))
+    return ""
+
+
 def check_repo(root: Path) -> list[str]:
     """Findings for one repository; empty when every tracker link agrees."""
     errors: list[str] = []
@@ -148,19 +203,38 @@ def check_repo(root: Path) -> list[str]:
     if not description.exists():
         return ["DESCRIPTION is missing; nothing to check BugReports against"]
     desc = read_dcf(description)
+    # No BugReports: field is a separate question, not drift here; the checks
+    # that compare against it are skipped, the /-/issues ban still runs.
     bugreports = desc.get("BugReports", "")
-    if not bugreports:
-        return []  # No BugReports: field is a separate question, not drift here.
 
+    # The package's own repository: BugReports:'s, when URL: names it too;
+    # otherwise whatever gitlab.com repository URL: names. Repositories are
+    # compared by _repo_key(); `own` maps each key to the address shown.
+    url_repos = {_repo_key(repo): repo.rstrip("/") for repo in REPO_URL_RE.findall(desc.get("URL", ""))}
     match = BUGREPORTS_RE.match(bugreports)
-    if match is None:
+    bug_repo = _repo_key(match.group(1)) if match is not None else None
+    if bug_repo in url_repos:
+        own = {bug_repo: match.group(1)}
+    else:
+        own = url_repos
+    own_label = ", ".join(f"{repo}/-/work_items" for repo in sorted(own.values())) or "none in URL:"
+
+    if not own:
+        errors.append(
+            "DESCRIPTION's URL: names no gitlab.com repository that BugReports: "
+            "agrees with, so this package's own tracker can't be derived and no "
+            "file's /-/work_items link can be checked against it. Add the "
+            "repository to URL:."
+        )
+
+    if bugreports and match is None:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', which is not a "
             f"gitlab.com /-/work_items address. /-/issues 404s for CRAN's URL "
             f"check, and CRAN accepts /-/work_items (Uwe Ligges, 2026-10-23; "
             f"SEOR-sptibjph)."
         )
-    elif match.group(1) not in REPO_URL_RE.findall(desc.get("URL", "")):
+    elif match is not None and bug_repo not in url_repos:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', but URL: names no "
             f"repository '{match.group(1)}'. The tracker must be this "
@@ -168,7 +242,7 @@ def check_repo(root: Path) -> list[str]:
         )
 
     codemeta = root / "codemeta.json"
-    if codemeta.exists():
+    if bugreports and codemeta.exists():
         tracker = ISSUE_TRACKER_RE.search(codemeta.read_text(encoding="utf-8"))
         if tracker is None or tracker.group(1).rstrip("/") != bugreports.rstrip("/"):
             found = tracker.group(1) if tracker else "nothing"
@@ -178,24 +252,34 @@ def check_repo(root: Path) -> list[str]:
                 f"maintained; make it name the same address."
             )
 
-    man_path = root / PACKAGE_RD
-    if man_path.exists():
+    package = desc.get("Package", "")
+    man_rel = f"man/{package}-package.Rd"
+    man_path = root / man_rel
+    if package and man_path.exists():
         text = man_path.read_text(encoding="utf-8")
         match = re.search(r"Report bugs at \\url\{([^}]*)\}", text)
-        pkg_r = root / PACKAGE_R
-        has_seealso = pkg_r.exists() and re.search(
-            r"^#'\s*@seealso\b", pkg_r.read_text(encoding="utf-8"), re.MULTILINE
+        pkg_doc = package_doc_source(root)
+        has_seealso = pkg_doc is not None and re.search(
+            r"^#'\s*@seealso\b", package_block(pkg_doc[1]), re.MULTILINE
         )
-        if match is None and not has_seealso:
+        # roxygen2 generates the line only from a BugReports: value.
+        if match is None and bugreports and pkg_doc is None:
             errors.append(
-                "man/seor-package.Rd has no 'Report bugs at' link, and "
-                "R/seor-package.R declares no @seealso that "
-                "suppresses it -- the man page is stale. Re-run "
-                "devtools::document()."
+                f"{man_rel} has no 'Report bugs at' link, and no R/ file "
+                f"holds the \"_PACKAGE\" sentinel whose @seealso could "
+                f"suppress it -- document the package with \"_PACKAGE\" and "
+                f"re-run devtools::document()."
+            )
+        elif match is None and bugreports and not has_seealso:
+            errors.append(
+                f"{man_rel} has no 'Report bugs at' link, and "
+                f"{pkg_doc[0].relative_to(root).as_posix()} declares no "
+                f"@seealso that suppresses it -- the man page is stale. Re-run "
+                f"devtools::document()."
             )
         elif match is not None and match.group(1) != bugreports:
             errors.append(
-                f"man/seor-package.Rd's 'Report bugs at' link is "
+                f"{man_rel}'s 'Report bugs at' link is "
                 f"'{match.group(1)}', but DESCRIPTION's BugReports: is "
                 f"'{bugreports}'. This link is generated verbatim from "
                 f"DESCRIPTION by roxygen2's \"_PACKAGE\" sentinel -- re-run "
@@ -204,7 +288,11 @@ def check_repo(root: Path) -> list[str]:
 
     for name in HUMAN_FACING_FILES:
         path = root / name
-        if not path.exists():
+        if not path.is_file():
+            errors.append(
+                f"{name} is missing; it must exist and name this package's "
+                f"own tracker ({own_label})."
+            )
             continue
         text = path.read_text(encoding="utf-8")
         if ISSUES_RE.search(text):
@@ -212,10 +300,15 @@ def check_repo(root: Path) -> list[str]:
                 f"{name} still links a /-/issues form, which 404s for a "
                 f"non-browser client. Repoint it at /-/work_items."
             )
-        if not WORK_ITEMS_RE.search(text):
+        # Another project's tracker may appear beside this package's own,
+        # never instead of it. With no own tracker known, that is reported
+        # once above, not here per file.
+        trackers = {_repo_key(repo) for repo in WORK_ITEMS_RE.findall(text)}
+        if own and not trackers & own.keys():
             errors.append(
                 f"{name} does not name the project's /-/work_items tracker "
-                f"link anywhere -- expected the tracker URL."
+                f"link ({own_label}) anywhere -- expected this package's own "
+                f"tracker URL."
             )
 
     # A file already checked above is not reported a second time by the
@@ -237,6 +330,15 @@ def check_repo(root: Path) -> list[str]:
 
 
 # --- self-test (positive + negative coverage, executable) --------------------
+#
+# The fixture is package-neutral: it names its own package ("fixture" unless a
+# case says otherwise) and writes that package's own man/<pkg>-package.Rd and
+# R/<pkg>-package.R, so a copy ported to another package tests the shape it
+# runs on, not seor's.
+
+# Cases that pin a known gap still open in check_repo(). A listed case must
+# fail; one that passes fails the self-test, so a fix has to drop its tag.
+XFAIL: frozenset[str] = frozenset()
 
 
 def _fixture(
@@ -244,25 +346,52 @@ def _fixture(
     bugreports: str,
     man_url: str | None,
     human: dict[str, str],
-    seealso: bool = True,
+    seealso: str = "package",
     url: str = "https://gitlab.com/bart-turczynski/fixture",
+    package: str = "fixture",
+    r_encoding: str = "utf-8",
 ) -> Path:
+    """A throwaway package; `seealso` picks the R/<pkg>-package.R shape.
+
+    "package" puts an @seealso in the "_PACKAGE" block (it suppresses the
+    generated "Report bugs at" line), "other" puts one only in another
+    object's block (it suppresses nothing), "none" declares no @seealso.
+    "package-blank" and "package-comment" separate the block from the
+    sentinel by a blank line or a plain # comment, "package-trailing-comment"
+    puts a # comment after the sentinel, "package-accented" carries a
+    non-ASCII character (write it with `r_encoding` "latin-1" to get a byte
+    that is not UTF-8), and "no-sentinel" documents no "_PACKAGE" at all.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "DESCRIPTION").write_text(
-        f"Package: fixture\nVersion: 0.1.0\nURL: {url}\nBugReports: {bugreports}\n",
+        f"Package: {package}\nVersion: 0.1.0\nURL: {url}\nBugReports: {bugreports}\n",
         encoding="utf-8",
     )
+    # Spelled out here, not taken from check_repo()'s own path logic, so the
+    # fixture states the roxygen2 file-name convention independently.
     man_dir = directory / "man"
     man_dir.mkdir(parents=True, exist_ok=True)
     if man_url is not None:
         rd = f"\\seealso{{\nReport bugs at \\url{{{man_url}}}\n}}\n"
     else:
-        rd = "\\seealso{\nMember list: seor_packages().\n}\n"
-    (directory / PACKAGE_RD).write_text(rd, encoding="utf-8")
+        rd = "\\seealso{\nThe package website.\n}\n"
+    (man_dir / f"{package}-package.Rd").write_text(rd, encoding="utf-8")
     r_dir = directory / "R"
     r_dir.mkdir(parents=True, exist_ok=True)
-    tag = "#' @seealso\n#' Member list: [seor_packages()].\n" if seealso else ""
-    (directory / PACKAGE_R).write_text(f"{tag}\"_PACKAGE\"\n", encoding="utf-8")
+    package_block = {
+        "package": "#' The package.\n#'\n#' @seealso The package website.\n\"_PACKAGE\"\n",
+        "other": (
+            "#' The package.\n\"_PACKAGE\"\n\n"
+            "#' A helper.\n#' @seealso [base::print()]\nhelper <- function() NULL\n"
+        ),
+        "none": "#' The package.\n\"_PACKAGE\"\n",
+        "package-blank": "#' The package.\n#'\n#' @seealso The package website.\n\n\"_PACKAGE\"\n",
+        "package-comment": "#' The package.\n#'\n#' @seealso The package website.\n# nolint\n\"_PACKAGE\"\n",
+        "package-trailing-comment": "#' The package.\n#'\n#' @seealso The package website.\n\"_PACKAGE\" # nolint\n",
+        "package-accented": "#' The package, by Café Ltd.\n#'\n#' @seealso The package website.\n\"_PACKAGE\"\n",
+        "no-sentinel": "#' A helper.\nhelper <- function() NULL\n",
+    }[seealso]
+    (r_dir / f"{package}-package.R").write_text(package_block, encoding=r_encoding)
     for name, content in human.items():
         path = directory / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -274,20 +403,36 @@ def self_test() -> None:
     org = "https://gitlab.com/bart-turczynski/fixture"
     issues = f"{org}/-/issues"
     work_items = f"{org}/-/work_items"
+    foreign = "https://gitlab.com/someone/else/-/work_items"
+
+    failures: list[str] = []
+    xpassed: list[str] = []
+    ran: set[str] = set()
+    counts = {"positive": 0, "negative": 0, "xfail": 0}
 
     def run(tag: str, **kwargs) -> list[str]:
+        ran.add(tag)
         with tempfile.TemporaryDirectory() as tmp:
             return check_repo(_fixture(Path(tmp) / tag, **kwargs))
 
+    def record(tag: str, ok: bool, detail: str) -> None:
+        if tag in XFAIL:
+            if ok:
+                xpassed.append(tag)
+            else:
+                counts["xfail"] += 1
+        elif not ok:
+            failures.append(f"{tag}: {detail}")
+
     def expect_clean(tag: str, **kwargs) -> None:
+        counts["positive"] += 1
         found = run(tag, **kwargs)
-        if found:
-            raise SystemExit(f"self-test FAILED ({tag}): {found}")
+        record(tag, not found, f"expected clean, got {found}")
 
     def expect_flagged(tag: str, needle: str, **kwargs) -> None:
+        counts["negative"] += 1
         found = run(tag, **kwargs)
-        if not any(needle in f for f in found):
-            raise SystemExit(f"self-test FAILED ({tag}): expected {needle!r}, got {found}")
+        record(tag, any(needle in f for f in found), f"expected {needle!r}, got {found}")
 
     human_target = {
         "codemeta.json": f'{{"issueTracker": "{work_items}"}}',
@@ -298,12 +443,21 @@ def self_test() -> None:
         "README.md": "Install from CRAN.",
     }
 
-    # POSITIVE: every tracker link names /-/work_items (seor's shape: the
-    # generated "Report bugs at" line is present).
+    def with_file(name: str, text: str | None) -> dict[str, str]:
+        """human_target with one file replaced, or dropped when `text` is None."""
+        human = dict(human_target)
+        if text is None:
+            del human[name]
+        else:
+            human[name] = text
+        return human
+
+    # POSITIVE: every tracker link names /-/work_items (the "Report bugs at"
+    # line generated into the package's man page is present).
     expect_clean("all-work-items", bugreports=work_items, man_url=work_items, human=human_target)
 
-    # POSITIVE: pslr's shape -- no "Report bugs at" line because the
-    # package doc's own @seealso suppresses the generated section.
+    # POSITIVE: no "Report bugs at" line because the package doc's own
+    # @seealso suppresses the generated section.
     expect_clean("man-suppressed-by-seealso", bugreports=work_items, man_url=None, human=human_target)
 
     # POSITIVE: a trailing slash is the same address.
@@ -315,7 +469,78 @@ def self_test() -> None:
         bugreports=work_items,
         man_url=work_items,
         human=human_target,
-        url="https://gitlab.com/bart-turczynski/fixture/",
+        url=f"{org}/",
+    )
+
+    # POSITIVE: a file may name another project's tracker beside this
+    # package's own (a metapackage pointing at a member's, say).
+    expect_clean(
+        "own-plus-foreign-work-items",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file("CONTRIBUTING.md", f"Report bugs at <{work_items}>; member bugs at <{foreign}>."),
+    )
+
+    # POSITIVE: a package whose repository sits in a GitLab subgroup.
+    sub = "https://gitlab.com/some-group/sub.group/fixture"
+    expect_clean(
+        "subgroup-package",
+        bugreports=f"{sub}/-/work_items",
+        man_url=f"{sub}/-/work_items",
+        human={name: text.replace(org, sub) for name, text in human_target.items()},
+        url=sub,
+    )
+
+    # POSITIVE: no BugReports: at all is a separate question, not drift here;
+    # the own address then comes from URL:. With no @seealso either, the man
+    # page rightly has no "Report bugs at" line: roxygen2 writes none.
+    expect_clean("empty-bugreports-clean", bugreports="", man_url=None, human=human_target, seealso="none")
+
+    # POSITIVE: the same checks hold for a package of any name.
+    expect_clean(
+        "other-package-name",
+        bugreports=work_items,
+        man_url=work_items,
+        human=human_target,
+        package="otherpkg",
+    )
+
+    # POSITIVE: the package block's @seealso still counts across a blank line
+    # or a plain # comment before the sentinel, and with a comment after it.
+    for shape in ("package-blank", "package-comment", "package-trailing-comment"):
+        expect_clean(f"seealso-{shape}", bugreports=work_items, man_url=None, human=human_target, seealso=shape)
+
+    # POSITIVE: an R/ file with a byte that is not UTF-8 (Latin-1 here).
+    expect_clean(
+        "latin1-package-file",
+        bugreports=work_items,
+        man_url=None,
+        human=human_target,
+        seealso="package-accented",
+        r_encoding="latin-1",
+    )
+
+    # POSITIVE: URL: names the repository with an owner in another case, a
+    # .git suffix and a trailing slash; it is still this package's own.
+    expect_clean(
+        "url-case-dotgit",
+        bugreports=work_items,
+        man_url=work_items,
+        human=human_target,
+        url="https://gitlab.com/Bart-Turczynski/fixture.git/",
+    )
+
+    # POSITIVE: an /issues path on another host, and a mixed-case host on the
+    # /-/work_items form, are not /-/issues links.
+    expect_clean(
+        "issues-elsewhere-clean",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file(
+            "README.md",
+            "Upstream bugs: <https://github.com/someone/else/issues/new>; ours: "
+            "<https://GitLab.com/bart-turczynski/fixture/-/work_items>.",
+        ),
     )
 
     # NEGATIVE: the line is absent and nothing suppresses it any more.
@@ -325,28 +550,59 @@ def self_test() -> None:
         bugreports=work_items,
         man_url=None,
         human=human_target,
-        seealso=False,
+        seealso="none",
+    )
+
+    # NEGATIVE: an @seealso in another object's block suppresses nothing in
+    # the package's own man page.
+    expect_flagged(
+        "seealso-in-other-block",
+        "declares no @seealso",
+        bugreports=work_items,
+        man_url=None,
+        human=human_target,
+        seealso="other",
+    )
+
+    # NEGATIVE: no R/ file holds the "_PACKAGE" sentinel at all.
+    expect_flagged(
+        "no-sentinel",
+        'no R/ file holds the "_PACKAGE" sentinel',
+        bugreports=work_items,
+        man_url=None,
+        human=human_target,
+        seealso="no-sentinel",
+    )
+
+    # NEGATIVE: no BugReports: and no gitlab.com repository in URL:, so the
+    # package's own tracker is unknown; any project's must not pass for it.
+    expect_flagged(
+        "own-tracker-underivable",
+        "own tracker can't be derived",
+        bugreports="",
+        man_url=None,
+        human=human_target,
+        seealso="none",
+        url="https://example.org/fixture",
     )
 
     # NEGATIVE: a tracker copied from another package.
     expect_flagged(
         "foreign-tracker",
         "URL: names no repository",
-        bugreports="https://gitlab.com/someone/else/-/work_items",
+        bugreports=foreign,
         man_url=None,
         human=human_target,
     )
 
     # NEGATIVE: codemeta.json names another /-/work_items address than
     # DESCRIPTION's.
-    drifted = dict(human_target)
-    drifted["codemeta.json"] = '{"issueTracker": "https://gitlab.com/someone/else/-/work_items"}'
     expect_flagged(
         "codemeta-differs",
         "codemeta.json issueTracker is",
         bugreports=work_items,
         man_url=None,
-        human=drifted,
+        human=with_file("codemeta.json", f'{{"issueTracker": "{foreign}"}}'),
     )
 
     # NEGATIVE: DESCRIPTION back on /-/issues, the form that drew the 1.2.2
@@ -378,82 +634,124 @@ def self_test() -> None:
         human=human_target,
     )
 
+    # NEGATIVE: the same, in a package not named "fixture": the man page
+    # checked is that package's own.
+    expect_flagged(
+        "other-package-name-man-stale",
+        "man/otherpkg-package.Rd's 'Report bugs at' link",
+        bugreports=work_items,
+        man_url=issues,
+        human=human_target,
+        package="otherpkg",
+    )
+
     # NEGATIVE: a human-facing file reverted to /-/issues (the "prove it
     # bites" case this gate exists for).
-    reverted = dict(human_target)
-    reverted["CONTRIBUTING.md"] = f"Report bugs at <{issues}/new>."
     expect_flagged(
         "contributing-reverted",
         "still links a /-/issues form",
         bugreports=work_items,
         man_url=work_items,
-        human=reverted,
+        human=with_file("CONTRIBUTING.md", f"Report bugs at <{issues}/new>."),
     )
 
     # NEGATIVE: a human-facing file never names /-/work_items at all.
-    missing = dict(human_target)
-    missing["codemeta.json"] = '{"issueTracker": ""}'
     expect_flagged(
         "codemeta-missing-work-items",
         "does not name the project's /-/work_items",
         bugreports=work_items,
         man_url=work_items,
-        human=missing,
+        human=with_file("codemeta.json", '{"issueTracker": ""}'),
+    )
+
+    # NEGATIVE: a human-facing file names only another project's tracker.
+    expect_flagged(
+        "contributing-foreign-work-items",
+        f"CONTRIBUTING.md does not name the project's /-/work_items tracker link ({work_items})",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file("CONTRIBUTING.md", f"Report bugs at <{foreign}>."),
+    )
+
+    # NEGATIVE: a required human-facing file is missing.
+    expect_flagged(
+        "contributing-missing",
+        "CONTRIBUTING.md is missing",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file("CONTRIBUTING.md", None),
     )
 
     # NEGATIVE: SECURITY.md keeps its /-/work_items link but gains a
     # /-/issues one beside it.
-    security = dict(human_target)
-    security["SECURITY.md"] += f" Or [a confidential issue]({issues}/new)."
     expect_flagged(
         "security-issues-link",
         "SECURITY.md still links a /-/issues form",
         bugreports=work_items,
         man_url=work_items,
-        human=security,
+        human=with_file("SECURITY.md", human_target["SECURITY.md"] + f" Or [a confidential issue]({issues}/new)."),
+    )
+
+    # NEGATIVE: with no BugReports:, the /-/issues ban still runs.
+    expect_flagged(
+        "empty-bugreports-issues-link",
+        "README.md links a /-/issues form",
+        bugreports="",
+        man_url=None,
+        human=with_file("README.md", f"Report problems at <{issues}>."),
     )
 
     # NEGATIVE: a surface with no tracker link today (a vignette) gains a
     # /-/issues link.
-    vignette = dict(human_target)
-    vignette["vignettes/getting-started.Rmd"] = f"Report problems at <{issues}>."
     expect_flagged(
         "vignette-issues-link",
         "vignettes/getting-started.Rmd links a /-/issues form",
         bugreports=work_items,
         man_url=work_items,
-        human=vignette,
+        human={**human_target, "vignettes/getting-started.Rmd": f"Report problems at <{issues}>."},
     )
 
-    # NEGATIVE: the link in backticks, before a full stop, and to one issue;
-    # the old lookahead missed all three.
+    # NEGATIVE: the link in backticks, before a full stop, to one issue, over
+    # plain http://, in a GitLab subgroup, on a mixed-case or www. host, and
+    # on the legacy path without "/-/"; earlier patterns missed each.
     for tag, text in (
         ("backticks", f"See `{issues}`."),
         ("full-stop", f"Report problems at {issues}."),
         ("one-issue", f"Fixed in {issues}/42 already."),
+        ("http", f"Report problems at <{issues.replace('https://', 'http://')}>."),
+        ("subgroup", "Report problems at <https://gitlab.com/some-group/sub.group/fixture/-/issues>."),
+        ("mixed-case-host", "Report problems at <https://GitLab.com/bart-turczynski/fixture/-/issues>."),
+        ("www-host", "Report problems at <https://www.gitlab.com/bart-turczynski/fixture/-/issues>."),
+        ("legacy-path", "Report problems at <https://gitlab.com/bart-turczynski/fixture/issues/new>."),
     ):
-        inline = dict(human_target)
-        inline["README.md"] = text
         expect_flagged(
             f"issues-link-{tag}",
             "README.md links a /-/issues form",
             bugreports=work_items,
             man_url=work_items,
-            human=inline,
+            human=with_file("README.md", text),
         )
 
     # NEGATIVE: a GitLab template under .gitlab/ gains a /-/issues link.
-    template = dict(human_target)
-    template[".gitlab/issue_templates/Bug.md"] = f"Search {issues} first."
     expect_flagged(
         "gitlab-template-issues-link",
         ".gitlab/issue_templates/Bug.md links a /-/issues form",
         bugreports=work_items,
         man_url=work_items,
-        human=template,
+        human={**human_target, ".gitlab/issue_templates/Bug.md": f"Search {issues} first."},
     )
 
-    print("check-bugreports self-test: PASS (4 positive + 14 negative cases)")
+    unknown = sorted(XFAIL - ran)
+    if failures or xpassed or unknown:
+        lines = [f"  - {failure}" for failure in failures]
+        lines += [f"  - {tag}: passes but is listed in XFAIL; drop it" for tag in xpassed]
+        lines += [f"  - {tag}: listed in XFAIL but names no case; drop it" for tag in unknown]
+        raise SystemExit("check-bugreports self-test FAILED:\n" + "\n".join(lines))
+    pending = f", {counts['xfail']} expected failures pending" if counts["xfail"] else ""
+    print(
+        f"check-bugreports self-test: PASS ({counts['positive']} positive + "
+        f"{counts['negative']} negative cases{pending})"
+    )
 
 
 def main() -> int:
