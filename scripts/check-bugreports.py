@@ -46,7 +46,8 @@ WHAT IT CHECKS.
 3. Every file that carries the tracker link exists, names this package's own
    `/-/work_items` address (the repository `BugReports:` and `URL:` agree
    on; another project's tracker may appear beside it, never instead), and
-   none of them carries a `/-/issues` link:
+   none of them carries a `/-/issues` link (over `http://` or `https://`,
+   in a subgroup or not):
      - codemeta.json (`"issueTracker"`)
      - .bestpractices.json
      - CONTRIBUTING.md (where to report a bug)
@@ -85,16 +86,20 @@ import sys
 import tempfile
 from pathlib import Path
 
-ISSUES_RE = re.compile(
-    r"https://gitlab\.com/[\w.-]+/[\w.-]+/-/issues(?![\w-])"
-)
+# A gitlab.com project path: a namespace, any subgroups, then the project.
+# A GitLab path segment cannot start with "-", so "/-/" ends the path.
+_SEGMENT = r"[\w.][\w.-]*"
+_PROJECT = rf"gitlab\.com/{_SEGMENT}(?:/{_SEGMENT})+"
+
+# Over http:// too: it redirects to the same 404ing https:// address.
+ISSUES_RE = re.compile(rf"https?://{_PROJECT}/-/issues(?![\w-])")
 # Group 1 is the repository the tracker belongs to.
-WORK_ITEMS_RE = re.compile(r"(https://gitlab\.com/[\w.-]+/[\w.-]+)/-/work_items\b")
+WORK_ITEMS_RE = re.compile(rf"(https://{_PROJECT})/-/work_items\b")
 
 # DESCRIPTION's BugReports: value, in full, must match this.
-BUGREPORTS_RE = re.compile(r"^(https://gitlab\.com/[\w.-]+/[\w.-]+)/-/work_items/?$")
+BUGREPORTS_RE = re.compile(rf"^(https://{_PROJECT})/-/work_items/?$")
 # A gitlab.com repository address in DESCRIPTION's URL: field.
-REPO_URL_RE = re.compile(r"(https://gitlab\.com/[\w.-]+/[\w.-]+?)/?(?=[\s,]|$)")
+REPO_URL_RE = re.compile(rf"(https://gitlab\.com/{_SEGMENT}(?:/{_SEGMENT})+?)/?(?=[\s,]|$)")
 ISSUE_TRACKER_RE = re.compile(r'"issueTracker"\s*:\s*"([^"]*)"')
 
 # Files beside DESCRIPTION that carry the tracker link; each must name
@@ -267,10 +272,6 @@ def check_repo(root: Path) -> list[str]:
 # Cases that pin a known gap still open in check_repo(). A listed case must
 # fail; one that passes fails the self-test, so a fix has to drop its tag.
 XFAIL: frozenset[str] = frozenset({
-    # Gap 4: http:// and GitLab subgroup paths.
-    "issues-link-http",
-    "issues-link-subgroup",
-    "subgroup-package",
     # Gap 5: the man page and R file are seor's, whatever the package.
     "man-missing-without-seealso",
     "man-stale",
