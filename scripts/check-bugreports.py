@@ -23,14 +23,15 @@ https://gitlab.com/bart-turczynski/pslr/-/work_items and we will let it pass
 and fix our checks." So every file, DESCRIPTION included, now names
 `/-/work_items`, and none names `/-/issues` (SEOR-sptibjph, ADR 0011).
 
-`man/seor-package.Rd`'s "Report bugs at" link is not a separate decision:
-`R/seor-package.R` uses roxygen2's `"_PACKAGE"` sentinel, which generates a
+The package man page's "Report bugs at" link is not a separate decision.
+`man/<pkg>-package.Rd` (`<pkg>` is `DESCRIPTION`'s `Package:`) is generated
+from the R/ file holding roxygen2's `"_PACKAGE"` sentinel, which writes a
 "Useful links" section verbatim from `DESCRIPTION`'s own `URL:`/`BugReports:`
 fields. If that link is present it MUST agree with `DESCRIPTION`, or
 `devtools::document()` was not re-run.
 
 roxygen2 emits that generated section only when the package doc has no
-`@seealso` of its own. `R/seor-package.R` declares none, so
+`@seealso` of its own. seor's `R/seor-package.R` declares none, so
 `man/seor-package.Rd` carries the line and it is compared. Its absence is
 accepted only while an `@seealso` suppresses it (pslr's shape).
 
@@ -40,9 +41,9 @@ WHAT IT CHECKS.
    optionally with a trailing slash, of the gitlab.com repository that
    `DESCRIPTION`'s `URL:` names, and `codemeta.json`'s `"issueTracker"`
    is the same address.
-2. `man/seor-package.Rd`'s "Report bugs at" link, when present, is
-   IDENTICAL to `DESCRIPTION`'s `BugReports:` value; when absent,
-   `R/seor-package.R` declares the `@seealso` that suppresses it.
+2. `man/<pkg>-package.Rd`'s "Report bugs at" link, when present, is
+   IDENTICAL to `DESCRIPTION`'s `BugReports:` value; when absent, the
+   `"_PACKAGE"` file declares the `@seealso` that suppresses it.
 3. Every file that carries the tracker link exists, names this package's own
    `/-/work_items` address (the repository `BugReports:` and `URL:` agree
    on; another project's tracker may appear beside it, never instead), and
@@ -123,8 +124,8 @@ NO_ISSUES_GLOBS = (
     ".gitlab/**/*",
 )
 
-PACKAGE_RD = Path("man") / "seor-package.Rd"
-PACKAGE_R = Path("R") / "seor-package.R"
+# The line roxygen2 documents as the package itself.
+PACKAGE_SENTINEL_RE = re.compile(r"""^\s*["']_PACKAGE["']\s*$""", re.MULTILINE)
 
 
 def read_dcf(path: Path) -> dict[str, str]:
@@ -146,6 +147,15 @@ def read_dcf(path: Path) -> dict[str, str]:
         key = name.strip()
         fields[key] = value.strip()
     return fields
+
+
+def package_doc_source(root: Path) -> Path | None:
+    """The R/ file holding the "_PACKAGE" sentinel (R/<pkg>-package.R by
+    usethis's convention, but any file name works for roxygen2)."""
+    for path in sorted((root / "R").glob("*.[Rr]")):
+        if PACKAGE_SENTINEL_RE.search(path.read_text(encoding="utf-8", errors="replace")):
+            return path
+    return None
 
 
 def check_repo(root: Path) -> list[str]:
@@ -195,25 +205,28 @@ def check_repo(root: Path) -> list[str]:
                 f"maintained; make it name the same address."
             )
 
-    man_path = root / PACKAGE_RD
-    if man_path.exists():
+    package = desc.get("Package", "")
+    man_rel = f"man/{package}-package.Rd"
+    man_path = root / man_rel
+    if package and man_path.exists():
         text = man_path.read_text(encoding="utf-8")
         match = re.search(r"Report bugs at \\url\{([^}]*)\}", text)
-        pkg_r = root / PACKAGE_R
-        has_seealso = pkg_r.exists() and re.search(
+        pkg_r = package_doc_source(root)
+        r_rel = pkg_r.relative_to(root).as_posix() if pkg_r else 'no R/ file with "_PACKAGE"'
+        has_seealso = pkg_r is not None and re.search(
             r"^#'\s*@seealso\b", pkg_r.read_text(encoding="utf-8"), re.MULTILINE
         )
         # roxygen2 generates the line only from a BugReports: value.
         if match is None and bugreports and not has_seealso:
             errors.append(
-                "man/seor-package.Rd has no 'Report bugs at' link, and "
-                "R/seor-package.R declares no @seealso that "
-                "suppresses it -- the man page is stale. Re-run "
-                "devtools::document()."
+                f"{man_rel} has no 'Report bugs at' link, and "
+                f"{r_rel} declares no @seealso that "
+                f"suppresses it -- the man page is stale. Re-run "
+                f"devtools::document()."
             )
         elif match is not None and match.group(1) != bugreports:
             errors.append(
-                f"man/seor-package.Rd's 'Report bugs at' link is "
+                f"{man_rel}'s 'Report bugs at' link is "
                 f"'{match.group(1)}', but DESCRIPTION's BugReports: is "
                 f"'{bugreports}'. This link is generated verbatim from "
                 f"DESCRIPTION by roxygen2's \"_PACKAGE\" sentinel -- re-run "
@@ -272,10 +285,6 @@ def check_repo(root: Path) -> list[str]:
 # Cases that pin a known gap still open in check_repo(). A listed case must
 # fail; one that passes fails the self-test, so a fix has to drop its tag.
 XFAIL: frozenset[str] = frozenset({
-    # Gap 5: the man page and R file are seor's, whatever the package.
-    "man-missing-without-seealso",
-    "man-stale",
-    "other-package-name-man-stale",
     # Gap 6: any @seealso counts, not only the package block's.
     "seealso-in-other-block",
 })
