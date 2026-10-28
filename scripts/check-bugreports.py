@@ -151,9 +151,9 @@ def check_repo(root: Path) -> list[str]:
     if not description.exists():
         return ["DESCRIPTION is missing; nothing to check BugReports against"]
     desc = read_dcf(description)
+    # No BugReports: field is a separate question, not drift here; the checks
+    # that compare against it are skipped, the /-/issues ban still runs.
     bugreports = desc.get("BugReports", "")
-    if not bugreports:
-        return []  # No BugReports: field is a separate question, not drift here.
 
     # The package's own repository: BugReports:'s, when URL: names it too;
     # otherwise whatever gitlab.com repository URL: names.
@@ -165,14 +165,14 @@ def check_repo(root: Path) -> list[str]:
         own = set(url_repos)
     own_label = ", ".join(f"{repo}/-/work_items" for repo in sorted(own)) or "none in URL:"
 
-    if match is None:
+    if bugreports and match is None:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', which is not a "
             f"gitlab.com /-/work_items address. /-/issues 404s for CRAN's URL "
             f"check, and CRAN accepts /-/work_items (Uwe Ligges, 2026-10-23; "
             f"SEOR-sptibjph)."
         )
-    elif match.group(1) not in url_repos:
+    elif match is not None and match.group(1) not in url_repos:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', but URL: names no "
             f"repository '{match.group(1)}'. The tracker must be this "
@@ -180,7 +180,7 @@ def check_repo(root: Path) -> list[str]:
         )
 
     codemeta = root / "codemeta.json"
-    if codemeta.exists():
+    if bugreports and codemeta.exists():
         tracker = ISSUE_TRACKER_RE.search(codemeta.read_text(encoding="utf-8"))
         if tracker is None or tracker.group(1).rstrip("/") != bugreports.rstrip("/"):
             found = tracker.group(1) if tracker else "nothing"
@@ -198,7 +198,8 @@ def check_repo(root: Path) -> list[str]:
         has_seealso = pkg_r.exists() and re.search(
             r"^#'\s*@seealso\b", pkg_r.read_text(encoding="utf-8"), re.MULTILINE
         )
-        if match is None and not has_seealso:
+        # roxygen2 generates the line only from a BugReports: value.
+        if match is None and bugreports and not has_seealso:
             errors.append(
                 "man/seor-package.Rd has no 'Report bugs at' link, and "
                 "R/seor-package.R declares no @seealso that "
@@ -266,8 +267,6 @@ def check_repo(root: Path) -> list[str]:
 # Cases that pin a known gap still open in check_repo(). A listed case must
 # fail; one that passes fails the self-test, so a fix has to drop its tag.
 XFAIL: frozenset[str] = frozenset({
-    # Gap 3: an empty BugReports: returns before the /-/issues ban.
-    "empty-bugreports-issues-link",
     # Gap 4: http:// and GitLab subgroup paths.
     "issues-link-http",
     "issues-link-subgroup",
