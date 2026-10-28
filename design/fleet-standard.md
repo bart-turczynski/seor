@@ -497,7 +497,8 @@ upgrade touches them. It is not a design log (SEOR-mjrpwnqz).
   its reference.
 - Where a standard decides the change, cite the clause in a few words, such
   as "(RFC 3986 §2.2)". The reasoning goes in the issue or the ADR.
-- One issue or MR reference, in parentheses, at the end.
+- At most one issue or MR reference, in parentheses, at the end, where one
+  exists.
 - No bullet for housekeeping: logos, image metadata, badges, alt text, README
   cosmetics, repository metadata (`codemeta.json`, `CITATION.cff`,
   keywords), CI, gates, lint sets, spelling sweeps or agent files. No
@@ -505,10 +506,11 @@ upgrade touches them. It is not a design log (SEOR-mjrpwnqz).
 
 The check is `scripts/check-news.py NEWS.md`, the `news-terse` pre-push hook.
 seor's copy is the reference that every package ports: it takes the path,
-and nothing in it is specific to seor. It refuses a bullet that spans two
-source lines, runs past the word limit or opens on a housekeeping subject
-without naming a function, and it refuses any `Internal` heading. Version
-headings stay the `news-version` gate's.
+and nothing in it is specific to seor. It refuses a top-level list item
+(bullet or numbered) that spans two source lines, runs past the word limit,
+ends in more than one reference, holds nothing but its reference, or opens
+on a housekeeping subject without naming a function, and it refuses any
+`Internal` heading. Version headings stay the `news-version` gate's.
 
 Each package's agent files (`AGENTS.md`, `AGENTS_LANG.md` or `CLAUDE.md`)
 carry the rule in their own words, including the phrase "one terse line".
@@ -728,9 +730,11 @@ What it checks, section by section:
   that chain runs roxygen2 (`roxygenise` or `roxygenize`) and some script
   runs `git archive`. That the two belong together, and that it diffs, is a
   review item. `scripts/check-docs-drift.R` is there and matches seor's
-  copy (line endings aside); a missing copy is a gap too. The config,
-  outside comments, or a script its hooks call names `scripts/check-news.py`;
-  the port is not compared with seor's copy.
+  copy (line endings aside); a missing copy is a gap too. A hook that runs
+  at pre-push (its own `stages`, else `default_stages`, else every stage)
+  runs `scripts/check-news.py` on `NEWS.md`, in its `entry` and `args` or in
+  an R or shell script it calls; the self-test alone does not count, and the
+  port is not compared with seor's copy.
 - **Schedules.** One active `deep-check` and one `dependency-audit` schedule,
   on `main`, with `SCHEDULE_KIND` set on each schedule.
 

@@ -126,8 +126,8 @@ unexpected (e.g. misspelled) arguments — for instance with
 ### NEWS and generated files
 
 - A `NEWS.md` bullet is one terse line, only for a change a package user acts
-  on or notices, with one issue or MR reference; no housekeeping and no
-  `## Internal` section. The full rule is the fleet standard's
+  on or notices, with at most one issue or MR reference; no housekeeping and
+  no `## Internal` section. The full rule is the fleet standard's
   ("`NEWS.md` bullets" in `design/fleet-standard.md`), and the `news-terse`
   pre-push hook (`scripts/check-news.py NEWS.md`) refuses a bullet that
   breaks it.

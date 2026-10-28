@@ -18,5 +18,5 @@
 * Bart Turczynski is the copyright holder in `DESCRIPTION`, `LICENSE` and `LICENSE.md` (SEOR-kqcbgsfc).
 * `remotes::install_gitlab("bart-turczynski/seor")` works in a clean library: `Remotes:` lists every non-CRAN dependency (SEOR-yaqhqkov).
 * `remotes::install_gitlab("bart-turczynski/seor")` installs the CRAN releases of `rurl`, `pslr` and `punycoder`, not their development builds (SEOR-hqvzcfnc).
-* The documentation site is `https://bart-turczynski.gitlab.io/seor/`; the earlier address `https://seor-272402.gitlab.io` no longer resolves (SEOR-cmoyxzky, SEOR-hcmtspmv).
+* The documentation site is `https://bart-turczynski.gitlab.io/seor/`; the earlier address `https://seor-272402.gitlab.io` no longer resolves (SEOR-hcmtspmv).
 * seor now appears in r-universe search (SEOR-zfamoutf).
