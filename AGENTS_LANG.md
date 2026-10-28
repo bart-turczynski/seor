@@ -125,14 +125,12 @@ unexpected (e.g. misspelled) arguments — for instance with
 
 ### NEWS and generated files
 
-- A `NEWS.md` bullet goes only to a change a package user would act on or
-  notice: behavior, API, dependencies, R or system requirements, installation.
-  One terse line, no wrapping, no rationale prose, and one issue or MR
-  reference in parentheses.
-- No bullet for logos, image metadata, badges, alt text, README cosmetics,
-  repository metadata (`codemeta.json`, `CITATION.cff`, keywords), CI, gates,
-  lint sets, spelling sweeps, agent files or other housekeeping, and no
-  `## Internal` section to hold them.
+- A `NEWS.md` bullet is one terse line, only for a change a package user acts
+  on or notices, with one issue or MR reference; no housekeeping and no
+  `## Internal` section. The full rule is the fleet standard's
+  ("`NEWS.md` bullets" in `design/fleet-standard.md`), and the `news-terse`
+  pre-push hook (`scripts/check-news.py NEWS.md`) refuses a bullet that
+  breaks it.
 - The `news-version` gate (`scripts/gates.sh`) passes when the top `NEWS.md`
   heading reads "(development version)" or names the `DESCRIPTION`
   `Version`; the release checklist renames it at release.

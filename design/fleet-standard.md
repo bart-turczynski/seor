@@ -450,6 +450,8 @@ changes to their `.Rbuildignore`d tooling paths only, so nothing that ships
 changed. robotstxtr's fork `dev/check-docs-drift.R` and sitemapr's in-place
 `tools/check-docs.R` are gone (SEOR-lyciowif, SEOR-zxyztpbr).
 
+Also added: `news-terse`, the NEWS check (see "`NEWS.md` bullets" below).
+
 ## Files every package carries
 
 - `README.Rmd`, knitted into `README.md`.
@@ -482,8 +484,35 @@ changed. robotstxtr's fork `dev/check-docs-drift.R` and sitemapr's in-place
 - `inst/CITATION`, `CITATION.cff`, `.zenodo.json` and `codemeta.json`.
 - A root `ARCHITECTURE.md`. It may point into `docs/`.
 - `.gitlab/issue_templates/` and `.gitlab/merge_request_templates/`.
-- `NEWS.md`, its bullets per the NEWS rule in seor's `AGENTS_LANG.md`: only
-  changes a package user notices, one terse line each, no housekeeping.
+- `NEWS.md`, its bullets per "`NEWS.md` bullets" below.
+
+## `NEWS.md` bullets
+
+A NEWS file lists the key, critical changes for someone deciding whether an
+upgrade touches them. It is not a design log (SEOR-mjrpwnqz).
+
+- A bullet goes only to a change a package user acts on or notices:
+  behavior, API, dependencies, R or system requirements, installation.
+- One terse line: the bullet's source is one line, at most 32 words besides
+  its reference.
+- Where a standard decides the change, cite the clause in a few words, such
+  as "(RFC 3986 §2.2)". The reasoning goes in the issue or the ADR.
+- One issue or MR reference, in parentheses, at the end.
+- No bullet for housekeeping: logos, image metadata, badges, alt text, README
+  cosmetics, repository metadata (`codemeta.json`, `CITATION.cff`,
+  keywords), CI, gates, lint sets, spelling sweeps or agent files. No
+  `## Internal` section to hold them.
+
+The check is `scripts/check-news.py NEWS.md`, the `news-terse` pre-push hook.
+seor's copy is the reference that every package ports: it takes the path,
+and nothing in it is specific to seor. It refuses a bullet that spans two
+source lines, runs past the word limit or opens on a housekeeping subject
+without naming a function, and it refuses any `Internal` heading. Version
+headings stay the `news-version` gate's.
+
+Each package's agent files (`AGENTS.md`, `AGENTS_LANG.md` or `CLAUDE.md`)
+carry the rule in their own words, including the phrase "one terse line".
+Without the rule there, an agent writes the bullet the check then refuses.
 
 ## `DESCRIPTION`
 
@@ -631,7 +660,8 @@ What it checks, section by section:
   missing and extra tags (SEOR-uwpnkqnb). The artwork is not judged.
 - **Files.** The list above. `LICENSE` names Bart Turczynski, `LICENSE.md` is
   the MIT text, `SECURITY.md` and `CODE_OF_CONDUCT.md` name the public email,
-  and a `SECURITY.md` under ten non-blank lines counts as a stub.
+  and a `SECURITY.md` under ten non-blank lines counts as a stub. One agent
+  file names NEWS and says "one terse line".
 - **`DESCRIPTION`.** The aut, cre and cph roles, the ORCID, the email, `URL:`
   in order, `Language: en-US`, a declared R floor, and
   `X-schema.org-keywords` with at least five tokens besides the four
@@ -698,7 +728,9 @@ What it checks, section by section:
   that chain runs roxygen2 (`roxygenise` or `roxygenize`) and some script
   runs `git archive`. That the two belong together, and that it diffs, is a
   review item. `scripts/check-docs-drift.R` is there and matches seor's
-  copy (line endings aside); a missing copy is a gap too.
+  copy (line endings aside); a missing copy is a gap too. The config,
+  outside comments, or a script its hooks call names `scripts/check-news.py`;
+  the port is not compared with seor's copy.
 - **Schedules.** One active `deep-check` and one `dependency-audit` schedule,
   on `main`, with `SCHEDULE_KIND` set on each schedule.
 
