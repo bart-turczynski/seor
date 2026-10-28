@@ -96,8 +96,10 @@ from pathlib import Path
 _SEGMENT = r"[\w.][\w.-]*"
 _PROJECT = rf"gitlab\.com/{_SEGMENT}(?:/{_SEGMENT})+"
 
-# Over http:// too: it redirects to the same 404ing https:// address.
-ISSUES_RE = re.compile(rf"https?://{_PROJECT}/-/issues(?![\w-])")
+# Over http:// too: it redirects to the same 404ing https:// address. Hosts
+# are case-insensitive and www.gitlab.com redirects to gitlab.com; the
+# legacy path without "/-/" redirects to /-/issues.
+ISSUES_RE = re.compile(rf"https?://(?:www\.)?{_PROJECT}/(?:-/)?issues(?![\w-])", re.IGNORECASE)
 # Group 1 is the repository the tracker belongs to.
 WORK_ITEMS_RE = re.compile(rf"(https://{_PROJECT})/-/work_items\b")
 
@@ -128,8 +130,18 @@ NO_ISSUES_GLOBS = (
     ".gitlab/**/*",
 )
 
-# The line roxygen2 documents as the package itself.
-PACKAGE_SENTINEL_RE = re.compile(r"""^\s*["']_PACKAGE["']\s*$""", re.MULTILINE)
+# The line roxygen2 documents as the package itself, a trailing comment
+# (`"_PACKAGE" # nolint`) allowed.
+PACKAGE_SENTINEL_RE = re.compile(r"""^\s*["']_PACKAGE["']\s*(?:#.*)?$""", re.MULTILINE)
+
+
+def _repo_key(repo: str) -> str:
+    """A repository address as compared: case-folded, without a trailing
+    "/" or ".git"."""
+    repo = repo.rstrip("/")
+    if repo.lower().endswith(".git"):
+        repo = repo[: -len(".git")]
+    return repo.casefold()
 
 
 def read_dcf(path: Path) -> dict[str, str]:
@@ -153,26 +165,33 @@ def read_dcf(path: Path) -> dict[str, str]:
     return fields
 
 
-def package_doc_source(root: Path) -> Path | None:
+def package_doc_source(root: Path) -> tuple[Path, str] | None:
     """The R/ file holding the "_PACKAGE" sentinel (R/<pkg>-package.R by
-    usethis's convention, but any file name works for roxygen2)."""
+    usethis's convention, but any file name works for roxygen2), with its
+    text as read, a byte that is not UTF-8 replaced."""
     for path in sorted((root / "R").glob("*.[Rr]")):
-        if PACKAGE_SENTINEL_RE.search(path.read_text(encoding="utf-8", errors="replace")):
-            return path
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if PACKAGE_SENTINEL_RE.search(text):
+            return path, text
     return None
 
 
 def package_block(text: str) -> str:
-    """The roxygen block documenting "_PACKAGE": the run of #' lines right
-    above the sentinel. Only an @seealso there suppresses the generated
+    """The roxygen block documenting "_PACKAGE": the #' lines above the
+    sentinel, climbing over blank lines and plain # comments and stopping at
+    the first code line. Only an @seealso there suppresses the generated
     "Report bugs at" line; one on another object's block does not."""
     lines = text.splitlines()
     for index, line in enumerate(lines):
         if PACKAGE_SENTINEL_RE.match(line):
             start = index
-            while start > 0 and lines[start - 1].lstrip().startswith("#'"):
+            while start > 0:
+                above = lines[start - 1].strip()
+                if above and not above.startswith("#"):
+                    break
                 start -= 1
-            return "\n".join(line.lstrip() for line in lines[start:index])
+            block = (line.lstrip() for line in lines[start:index])
+            return "\n".join(line for line in block if line.startswith("#'"))
     return ""
 
 
@@ -189,14 +208,24 @@ def check_repo(root: Path) -> list[str]:
     bugreports = desc.get("BugReports", "")
 
     # The package's own repository: BugReports:'s, when URL: names it too;
-    # otherwise whatever gitlab.com repository URL: names.
-    url_repos = REPO_URL_RE.findall(desc.get("URL", ""))
+    # otherwise whatever gitlab.com repository URL: names. Repositories are
+    # compared by _repo_key(); `own` maps each key to the address shown.
+    url_repos = {_repo_key(repo): repo.rstrip("/") for repo in REPO_URL_RE.findall(desc.get("URL", ""))}
     match = BUGREPORTS_RE.match(bugreports)
-    if match is not None and match.group(1) in url_repos:
-        own = {match.group(1)}
+    bug_repo = _repo_key(match.group(1)) if match is not None else None
+    if bug_repo in url_repos:
+        own = {bug_repo: match.group(1)}
     else:
-        own = set(url_repos)
-    own_label = ", ".join(f"{repo}/-/work_items" for repo in sorted(own)) or "none in URL:"
+        own = url_repos
+    own_label = ", ".join(f"{repo}/-/work_items" for repo in sorted(own.values())) or "none in URL:"
+
+    if not own:
+        errors.append(
+            "DESCRIPTION's URL: names no gitlab.com repository that BugReports: "
+            "agrees with, so this package's own tracker can't be derived and no "
+            "file's /-/work_items link can be checked against it. Add the "
+            "repository to URL:."
+        )
 
     if bugreports and match is None:
         errors.append(
@@ -205,7 +234,7 @@ def check_repo(root: Path) -> list[str]:
             f"check, and CRAN accepts /-/work_items (Uwe Ligges, 2026-10-23; "
             f"SEOR-sptibjph)."
         )
-    elif match is not None and match.group(1) not in url_repos:
+    elif match is not None and bug_repo not in url_repos:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', but URL: names no "
             f"repository '{match.group(1)}'. The tracker must be this "
@@ -229,17 +258,23 @@ def check_repo(root: Path) -> list[str]:
     if package and man_path.exists():
         text = man_path.read_text(encoding="utf-8")
         match = re.search(r"Report bugs at \\url\{([^}]*)\}", text)
-        pkg_r = package_doc_source(root)
-        r_rel = pkg_r.relative_to(root).as_posix() if pkg_r else 'no R/ file with "_PACKAGE"'
-        has_seealso = pkg_r is not None and re.search(
-            r"^#'\s*@seealso\b", package_block(pkg_r.read_text(encoding="utf-8")), re.MULTILINE
+        pkg_doc = package_doc_source(root)
+        has_seealso = pkg_doc is not None and re.search(
+            r"^#'\s*@seealso\b", package_block(pkg_doc[1]), re.MULTILINE
         )
         # roxygen2 generates the line only from a BugReports: value.
-        if match is None and bugreports and not has_seealso:
+        if match is None and bugreports and pkg_doc is None:
+            errors.append(
+                f"{man_rel} has no 'Report bugs at' link, and no R/ file "
+                f"holds the \"_PACKAGE\" sentinel whose @seealso could "
+                f"suppress it -- document the package with \"_PACKAGE\" and "
+                f"re-run devtools::document()."
+            )
+        elif match is None and bugreports and not has_seealso:
             errors.append(
                 f"{man_rel} has no 'Report bugs at' link, and "
-                f"{r_rel} declares no @seealso that "
-                f"suppresses it -- the man page is stale. Re-run "
+                f"{pkg_doc[0].relative_to(root).as_posix()} declares no "
+                f"@seealso that suppresses it -- the man page is stale. Re-run "
                 f"devtools::document()."
             )
         elif match is not None and match.group(1) != bugreports:
@@ -266,9 +301,10 @@ def check_repo(root: Path) -> list[str]:
                 f"non-browser client. Repoint it at /-/work_items."
             )
         # Another project's tracker may appear beside this package's own,
-        # never instead of it.
-        trackers = set(WORK_ITEMS_RE.findall(text))
-        if not (trackers & own if own else trackers):
+        # never instead of it. With no own tracker known, that is reported
+        # once above, not here per file.
+        trackers = {_repo_key(repo) for repo in WORK_ITEMS_RE.findall(text)}
+        if own and not trackers & own.keys():
             errors.append(
                 f"{name} does not name the project's /-/work_items tracker "
                 f"link ({own_label}) anywhere -- expected this package's own "
@@ -313,12 +349,18 @@ def _fixture(
     seealso: str = "package",
     url: str = "https://gitlab.com/bart-turczynski/fixture",
     package: str = "fixture",
+    r_encoding: str = "utf-8",
 ) -> Path:
-    """A throwaway package; `seealso` is "package", "other" or "none".
+    """A throwaway package; `seealso` picks the R/<pkg>-package.R shape.
 
     "package" puts an @seealso in the "_PACKAGE" block (it suppresses the
     generated "Report bugs at" line), "other" puts one only in another
     object's block (it suppresses nothing), "none" declares no @seealso.
+    "package-blank" and "package-comment" separate the block from the
+    sentinel by a blank line or a plain # comment, "package-trailing-comment"
+    puts a # comment after the sentinel, "package-accented" carries a
+    non-ASCII character (write it with `r_encoding` "latin-1" to get a byte
+    that is not UTF-8), and "no-sentinel" documents no "_PACKAGE" at all.
     """
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "DESCRIPTION").write_text(
@@ -343,8 +385,13 @@ def _fixture(
             "#' A helper.\n#' @seealso [base::print()]\nhelper <- function() NULL\n"
         ),
         "none": "#' The package.\n\"_PACKAGE\"\n",
+        "package-blank": "#' The package.\n#'\n#' @seealso The package website.\n\n\"_PACKAGE\"\n",
+        "package-comment": "#' The package.\n#'\n#' @seealso The package website.\n# nolint\n\"_PACKAGE\"\n",
+        "package-trailing-comment": "#' The package.\n#'\n#' @seealso The package website.\n\"_PACKAGE\" # nolint\n",
+        "package-accented": "#' The package, by Café Ltd.\n#'\n#' @seealso The package website.\n\"_PACKAGE\"\n",
+        "no-sentinel": "#' A helper.\nhelper <- function() NULL\n",
     }[seealso]
-    (r_dir / f"{package}-package.R").write_text(package_block, encoding="utf-8")
+    (r_dir / f"{package}-package.R").write_text(package_block, encoding=r_encoding)
     for name, content in human.items():
         path = directory / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -360,9 +407,11 @@ def self_test() -> None:
 
     failures: list[str] = []
     xpassed: list[str] = []
+    ran: set[str] = set()
     counts = {"positive": 0, "negative": 0, "xfail": 0}
 
     def run(tag: str, **kwargs) -> list[str]:
+        ran.add(tag)
         with tempfile.TemporaryDirectory() as tmp:
             return check_repo(_fixture(Path(tmp) / tag, **kwargs))
 
@@ -443,8 +492,9 @@ def self_test() -> None:
     )
 
     # POSITIVE: no BugReports: at all is a separate question, not drift here;
-    # the own address then comes from URL:.
-    expect_clean("empty-bugreports-clean", bugreports="", man_url=None, human=human_target)
+    # the own address then comes from URL:. With no @seealso either, the man
+    # page rightly has no "Report bugs at" line: roxygen2 writes none.
+    expect_clean("empty-bugreports-clean", bugreports="", man_url=None, human=human_target, seealso="none")
 
     # POSITIVE: the same checks hold for a package of any name.
     expect_clean(
@@ -453,6 +503,44 @@ def self_test() -> None:
         man_url=work_items,
         human=human_target,
         package="otherpkg",
+    )
+
+    # POSITIVE: the package block's @seealso still counts across a blank line
+    # or a plain # comment before the sentinel, and with a comment after it.
+    for shape in ("package-blank", "package-comment", "package-trailing-comment"):
+        expect_clean(f"seealso-{shape}", bugreports=work_items, man_url=None, human=human_target, seealso=shape)
+
+    # POSITIVE: an R/ file with a byte that is not UTF-8 (Latin-1 here).
+    expect_clean(
+        "latin1-package-file",
+        bugreports=work_items,
+        man_url=None,
+        human=human_target,
+        seealso="package-accented",
+        r_encoding="latin-1",
+    )
+
+    # POSITIVE: URL: names the repository with an owner in another case, a
+    # .git suffix and a trailing slash; it is still this package's own.
+    expect_clean(
+        "url-case-dotgit",
+        bugreports=work_items,
+        man_url=work_items,
+        human=human_target,
+        url="https://gitlab.com/Bart-Turczynski/fixture.git/",
+    )
+
+    # POSITIVE: an /issues path on another host, and a mixed-case host on the
+    # /-/work_items form, are not /-/issues links.
+    expect_clean(
+        "issues-elsewhere-clean",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file(
+            "README.md",
+            "Upstream bugs: <https://github.com/someone/else/issues/new>; ours: "
+            "<https://GitLab.com/bart-turczynski/fixture/-/work_items>.",
+        ),
     )
 
     # NEGATIVE: the line is absent and nothing suppresses it any more.
@@ -474,6 +562,28 @@ def self_test() -> None:
         man_url=None,
         human=human_target,
         seealso="other",
+    )
+
+    # NEGATIVE: no R/ file holds the "_PACKAGE" sentinel at all.
+    expect_flagged(
+        "no-sentinel",
+        'no R/ file holds the "_PACKAGE" sentinel',
+        bugreports=work_items,
+        man_url=None,
+        human=human_target,
+        seealso="no-sentinel",
+    )
+
+    # NEGATIVE: no BugReports: and no gitlab.com repository in URL:, so the
+    # package's own tracker is unknown; any project's must not pass for it.
+    expect_flagged(
+        "own-tracker-underivable",
+        "own tracker can't be derived",
+        bugreports="",
+        man_url=None,
+        human=human_target,
+        seealso="none",
+        url="https://example.org/fixture",
     )
 
     # NEGATIVE: a tracker copied from another package.
@@ -602,13 +712,17 @@ def self_test() -> None:
     )
 
     # NEGATIVE: the link in backticks, before a full stop, to one issue, over
-    # plain http://, and in a GitLab subgroup; earlier patterns missed each.
+    # plain http://, in a GitLab subgroup, on a mixed-case or www. host, and
+    # on the legacy path without "/-/"; earlier patterns missed each.
     for tag, text in (
         ("backticks", f"See `{issues}`."),
         ("full-stop", f"Report problems at {issues}."),
         ("one-issue", f"Fixed in {issues}/42 already."),
         ("http", f"Report problems at <{issues.replace('https://', 'http://')}>."),
         ("subgroup", "Report problems at <https://gitlab.com/some-group/sub.group/fixture/-/issues>."),
+        ("mixed-case-host", "Report problems at <https://GitLab.com/bart-turczynski/fixture/-/issues>."),
+        ("www-host", "Report problems at <https://www.gitlab.com/bart-turczynski/fixture/-/issues>."),
+        ("legacy-path", "Report problems at <https://gitlab.com/bart-turczynski/fixture/issues/new>."),
     ):
         expect_flagged(
             f"issues-link-{tag}",
@@ -627,9 +741,11 @@ def self_test() -> None:
         human={**human_target, ".gitlab/issue_templates/Bug.md": f"Search {issues} first."},
     )
 
-    if failures or xpassed:
+    unknown = sorted(XFAIL - ran)
+    if failures or xpassed or unknown:
         lines = [f"  - {failure}" for failure in failures]
         lines += [f"  - {tag}: passes but is listed in XFAIL; drop it" for tag in xpassed]
+        lines += [f"  - {tag}: listed in XFAIL but names no case; drop it" for tag in unknown]
         raise SystemExit("check-bugreports self-test FAILED:\n" + "\n".join(lines))
     pending = f", {counts['xfail']} expected failures pending" if counts["xfail"] else ""
     print(
