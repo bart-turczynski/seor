@@ -43,7 +43,7 @@ WHAT IT CHECKS.
 2. `man/seor-package.Rd`'s "Report bugs at" link, when present, is
    IDENTICAL to `DESCRIPTION`'s `BugReports:` value; when absent,
    `R/seor-package.R` declares the `@seealso` that suppresses it.
-3. Every file that carries the tracker link names this package's own
+3. Every file that carries the tracker link exists, names this package's own
    `/-/work_items` address (the repository `BugReports:` and `URL:` agree
    on; another project's tracker may appear beside it, never instead), and
    none of them carries a `/-/issues` link:
@@ -216,7 +216,11 @@ def check_repo(root: Path) -> list[str]:
 
     for name in HUMAN_FACING_FILES:
         path = root / name
-        if not path.exists():
+        if not path.is_file():
+            errors.append(
+                f"{name} is missing; it must exist and name this package's "
+                f"own tracker ({own_label})."
+            )
             continue
         text = path.read_text(encoding="utf-8")
         if ISSUES_RE.search(text):
@@ -262,8 +266,6 @@ def check_repo(root: Path) -> list[str]:
 # Cases that pin a known gap still open in check_repo(). A listed case must
 # fail; one that passes fails the self-test, so a fix has to drop its tag.
 XFAIL: frozenset[str] = frozenset({
-    # Gap 2: a missing required file is skipped.
-    "contributing-missing",
     # Gap 3: an empty BugReports: returns before the /-/issues ban.
     "empty-bugreports-issues-link",
     # Gap 4: http:// and GitLab subgroup paths.
