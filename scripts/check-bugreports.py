@@ -1,6 +1,9 @@
 # check-bugreports v2 (seor adaptation of pslr's v2, PSLR-cvhksjst). v2 requires
 # /-/work_items in DESCRIPTION too, the opposite of v1 and of the other
 # packages' copies until SEOR-sptibjph reaches them: never re-port from those.
+# seor's copy also carries the SEOR-jjblyiyd hardening (own tracker address,
+# missing files, empty BugReports:, http:// and subgroup links, no seor-only
+# paths, the package block's @seealso); the members' ports predate it.
 """BugReports / tracker-link gate.
 
 WHY THIS EXISTS. CRAN runs two checks over a GitLab `BugReports:` URL and,
@@ -33,7 +36,8 @@ fields. If that link is present it MUST agree with `DESCRIPTION`, or
 roxygen2 emits that generated section only when the package doc has no
 `@seealso` of its own. seor's `R/seor-package.R` declares none, so
 `man/seor-package.Rd` carries the line and it is compared. Its absence is
-accepted only while an `@seealso` suppresses it (pslr's shape).
+accepted only while an `@seealso` in the `"_PACKAGE"` block itself
+suppresses it (pslr's shape).
 
 WHAT IT CHECKS.
 
@@ -158,6 +162,20 @@ def package_doc_source(root: Path) -> Path | None:
     return None
 
 
+def package_block(text: str) -> str:
+    """The roxygen block documenting "_PACKAGE": the run of #' lines right
+    above the sentinel. Only an @seealso there suppresses the generated
+    "Report bugs at" line; one on another object's block does not."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if PACKAGE_SENTINEL_RE.match(line):
+            start = index
+            while start > 0 and lines[start - 1].lstrip().startswith("#'"):
+                start -= 1
+            return "\n".join(line.lstrip() for line in lines[start:index])
+    return ""
+
+
 def check_repo(root: Path) -> list[str]:
     """Findings for one repository; empty when every tracker link agrees."""
     errors: list[str] = []
@@ -214,7 +232,7 @@ def check_repo(root: Path) -> list[str]:
         pkg_r = package_doc_source(root)
         r_rel = pkg_r.relative_to(root).as_posix() if pkg_r else 'no R/ file with "_PACKAGE"'
         has_seealso = pkg_r is not None and re.search(
-            r"^#'\s*@seealso\b", pkg_r.read_text(encoding="utf-8"), re.MULTILINE
+            r"^#'\s*@seealso\b", package_block(pkg_r.read_text(encoding="utf-8")), re.MULTILINE
         )
         # roxygen2 generates the line only from a BugReports: value.
         if match is None and bugreports and not has_seealso:
@@ -284,10 +302,7 @@ def check_repo(root: Path) -> list[str]:
 
 # Cases that pin a known gap still open in check_repo(). A listed case must
 # fail; one that passes fails the self-test, so a fix has to drop its tag.
-XFAIL: frozenset[str] = frozenset({
-    # Gap 6: any @seealso counts, not only the package block's.
-    "seealso-in-other-block",
-})
+XFAIL: frozenset[str] = frozenset()
 
 
 def _fixture(
