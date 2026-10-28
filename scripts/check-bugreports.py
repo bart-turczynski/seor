@@ -43,8 +43,10 @@ WHAT IT CHECKS.
 2. `man/seor-package.Rd`'s "Report bugs at" link, when present, is
    IDENTICAL to `DESCRIPTION`'s `BugReports:` value; when absent,
    `R/seor-package.R` declares the `@seealso` that suppresses it.
-3. Every file that carries the tracker link names `/-/work_items`, and none
-   of them carries a `/-/issues` link:
+3. Every file that carries the tracker link names this package's own
+   `/-/work_items` address (the repository `BugReports:` and `URL:` agree
+   on; another project's tracker may appear beside it, never instead), and
+   none of them carries a `/-/issues` link:
      - codemeta.json (`"issueTracker"`)
      - .bestpractices.json
      - CONTRIBUTING.md (where to report a bug)
@@ -86,7 +88,8 @@ from pathlib import Path
 ISSUES_RE = re.compile(
     r"https://gitlab\.com/[\w.-]+/[\w.-]+/-/issues(?![\w-])"
 )
-WORK_ITEMS_RE = re.compile(r"https://gitlab\.com/[\w.-]+/[\w.-]+/-/work_items\b")
+# Group 1 is the repository the tracker belongs to.
+WORK_ITEMS_RE = re.compile(r"(https://gitlab\.com/[\w.-]+/[\w.-]+)/-/work_items\b")
 
 # DESCRIPTION's BugReports: value, in full, must match this.
 BUGREPORTS_RE = re.compile(r"^(https://gitlab\.com/[\w.-]+/[\w.-]+)/-/work_items/?$")
@@ -152,7 +155,16 @@ def check_repo(root: Path) -> list[str]:
     if not bugreports:
         return []  # No BugReports: field is a separate question, not drift here.
 
+    # The package's own repository: BugReports:'s, when URL: names it too;
+    # otherwise whatever gitlab.com repository URL: names.
+    url_repos = REPO_URL_RE.findall(desc.get("URL", ""))
     match = BUGREPORTS_RE.match(bugreports)
+    if match is not None and match.group(1) in url_repos:
+        own = {match.group(1)}
+    else:
+        own = set(url_repos)
+    own_label = ", ".join(f"{repo}/-/work_items" for repo in sorted(own)) or "none in URL:"
+
     if match is None:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', which is not a "
@@ -160,7 +172,7 @@ def check_repo(root: Path) -> list[str]:
             f"check, and CRAN accepts /-/work_items (Uwe Ligges, 2026-10-23; "
             f"SEOR-sptibjph)."
         )
-    elif match.group(1) not in REPO_URL_RE.findall(desc.get("URL", "")):
+    elif match.group(1) not in url_repos:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', but URL: names no "
             f"repository '{match.group(1)}'. The tracker must be this "
@@ -212,10 +224,14 @@ def check_repo(root: Path) -> list[str]:
                 f"{name} still links a /-/issues form, which 404s for a "
                 f"non-browser client. Repoint it at /-/work_items."
             )
-        if not WORK_ITEMS_RE.search(text):
+        # Another project's tracker may appear beside this package's own,
+        # never instead of it.
+        trackers = set(WORK_ITEMS_RE.findall(text))
+        if not (trackers & own if own else trackers):
             errors.append(
                 f"{name} does not name the project's /-/work_items tracker "
-                f"link anywhere -- expected the tracker URL."
+                f"link ({own_label}) anywhere -- expected this package's own "
+                f"tracker URL."
             )
 
     # A file already checked above is not reported a second time by the
@@ -246,8 +262,6 @@ def check_repo(root: Path) -> list[str]:
 # Cases that pin a known gap still open in check_repo(). A listed case must
 # fail; one that passes fails the self-test, so a fix has to drop its tag.
 XFAIL: frozenset[str] = frozenset({
-    # SEOR-jjblyiyd gap 1: any project's /-/work_items satisfies the files.
-    "contributing-foreign-work-items",
     # Gap 2: a missing required file is skipped.
     "contributing-missing",
     # Gap 3: an empty BugReports: returns before the /-/issues ban.
