@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded-by: 0012
 date: 2026-10-03
 tracking: SEOR-plnwieyf, SEOR-tahlljtx, SITE-kgpdfhoh
 ---

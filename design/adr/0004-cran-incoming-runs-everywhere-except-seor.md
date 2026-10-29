@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded-by: 0012
 date: 2026-09-23
 tracking: SEOR-tullzdwb, SEOR-ocbtrrnl
 ---
