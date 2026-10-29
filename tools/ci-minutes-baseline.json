@@ -1,0 +1,586 @@
+{
+  "description": "CI job-minutes baseline for SEOR-iadkgvqq (SEOR-mrndirpd). 'measured' is `python3 tools/ci-minutes.py --since 2026-09-29 --until 2026-10-29 --json`; --compare reads it. 'recorded' holds the original measurement's figures; 'gap' compares the two.",
+  "recorded": {
+    "source": "original measurement for SEOR-iadkgvqq, GitLab jobs API",
+    "window": "2026-09-29 .. 2026-10-29 (exact bounds and time zone not recorded)",
+    "jobs": 4387,
+    "pipelines": 729,
+    "total_job_minutes": 8816,
+    "main_push_pipelines": 551,
+    "main_push_share": 0.63,
+    "by_source": {
+      "schedule": 2980
+    },
+    "by_job_group": {
+      "pages": 1113,
+      "coverage": 1652,
+      "check/verify": 2544
+    },
+    "setup_share_per_job": "33-77%",
+    "peak_concurrency": 5,
+    "queue_wait_seconds": {
+      "median": 223,
+      "p90": 1440
+    },
+    "projects": {
+      "rurl": 2825,
+      "ssrfr": 1456,
+      "seor": 1316,
+      "sitemapr": 624,
+      "punycoder": 588,
+      "pagerankr": 566,
+      "pslr": 523,
+      "robotstxtr": 497,
+      "raddr": 267
+    }
+  },
+  "measured": {
+    "tool": "tools/ci-minutes.py v1",
+    "window": {
+      "since": "2026-09-29T00:00:00Z",
+      "until": "2026-10-29T00:00:00Z",
+      "bounds": "since inclusive, until exclusive, on created_at"
+    },
+    "measured_at": "2026-10-29T15:35:22Z",
+    "projects": {
+      "rurl": {
+        "status": "ok",
+        "jobs": 1051,
+        "pipelines": 173,
+        "job_minutes": 2784.6,
+        "by_job_name": {
+          "check": 1079.3,
+          "coverage": 839.1,
+          "pages": 323.1,
+          "gates": 140.7,
+          "docs-drift": 123.2,
+          "fossa": 87.7,
+          "floor-check": 77.7,
+          "full-check: [rocker/r-ver:devel]": 34.5,
+          "full-check: [rocker/r-ver:latest]": 18.5,
+          "security-audit": 15.9,
+          "full-check: [rocker/r-ver:4.5]": 15.5,
+          "osv-audit": 15.2,
+          "citation-version": 14.3
+        },
+        "by_source": {
+          "push": 2458.5,
+          "schedule": 318.8,
+          "api": 7.4
+        },
+        "by_status": {
+          "success": 2473.2,
+          "canceled": 254.4,
+          "failed": 57.1,
+          "skipped": 0.0
+        },
+        "main_push": {
+          "pipelines": 157,
+          "minutes": 2450.7
+        },
+        "failed_canceled_minutes": 311.4
+      },
+      "ssrfr": {
+        "status": "ok",
+        "jobs": 421,
+        "pipelines": 80,
+        "job_minutes": 1516.0,
+        "by_job_name": {
+          "verify": 485.8,
+          "coverage": 209.8,
+          "pages": 127.4,
+          "full-check: [devel]": 117.1,
+          "floor-check": 109.3,
+          "gates": 95.9,
+          "docs-drift": 90.5,
+          "full-check: [4.5.1]": 74.5,
+          "full-check: [4.6.1]": 71.7,
+          "full-check: [4.5.3]": 59.8,
+          "osv-audit": 20.0,
+          "security-audit": 18.2,
+          "fossa": 12.6,
+          "full-check: [4.4.3]": 11.4,
+          "renovate": 6.8,
+          "citation-version": 5.3
+        },
+        "by_source": {
+          "push": 744.2,
+          "schedule": 700.9,
+          "web": 40.7,
+          "api": 30.2
+        },
+        "by_status": {
+          "success": 1221.1,
+          "failed": 266.7,
+          "canceled": 28.1,
+          "skipped": 0.0,
+          "manual": 0.0
+        },
+        "main_push": {
+          "pipelines": 60,
+          "minutes": 744.2
+        },
+        "failed_canceled_minutes": 294.9
+      },
+      "seor": {
+        "status": "ok",
+        "jobs": 714,
+        "pipelines": 110,
+        "job_minutes": 1309.4,
+        "by_job_name": {
+          "verify": 295.1,
+          "gates": 235.1,
+          "pages": 203.8,
+          "coverage": 186.2,
+          "docs-drift": 80.8,
+          "readme": 54.7,
+          "full-check: [4.5.3]": 49.3,
+          "full-check: [4.6.1]": 47.2,
+          "floor-check": 41.5,
+          "full-check: [devel]": 35.6,
+          "fossa": 20.3,
+          "security-audit": 19.0,
+          "osv-audit": 17.5,
+          "citation-version": 8.5,
+          "full-check: [4.4.3]": 6.2,
+          "full-check: [4.5.1]": 6.1,
+          "news-version": 2.3
+        },
+        "by_source": {
+          "push": 819.3,
+          "schedule": 415.6,
+          "api": 74.5
+        },
+        "by_status": {
+          "success": 1222.8,
+          "canceled": 45.2,
+          "failed": 41.3,
+          "skipped": 0.0
+        },
+        "main_push": {
+          "pipelines": 89,
+          "minutes": 819.3
+        },
+        "failed_canceled_minutes": 86.5
+      },
+      "sitemapr": {
+        "status": "ok",
+        "jobs": 293,
+        "pipelines": 70,
+        "job_minutes": 616.5,
+        "by_job_name": {
+          "check": 235.5,
+          "coverage": 106.0,
+          "pages": 71.8,
+          "floor-check": 53.9,
+          "deep-check: [devel]": 47.6,
+          "deep-check: [4.5]": 47.4,
+          "deep-check: [4.6]": 33.8,
+          "osv-audit": 7.2,
+          "citation-version": 6.2,
+          "security-audit": 5.9,
+          "deep-check: [4.1.3]": 1.1
+        },
+        "by_source": {
+          "schedule": 321.7,
+          "push": 270.7,
+          "api": 24.1
+        },
+        "by_status": {
+          "success": 599.1,
+          "failed": 12.3,
+          "canceled": 5.1,
+          "skipped": 0.0
+        },
+        "main_push": {
+          "pipelines": 52,
+          "minutes": 270.7
+        },
+        "failed_canceled_minutes": 17.4
+      },
+      "punycoder": {
+        "status": "ok",
+        "jobs": 424,
+        "pipelines": 75,
+        "job_minutes": 595.8,
+        "by_job_name": {
+          "check": 95.9,
+          "sanitizers": 89.4,
+          "gates": 75.8,
+          "pages": 75.0,
+          "full-check: [rocker/r-ver:devel]": 69.6,
+          "coverage": 63.8,
+          "floor-check": 56.5,
+          "full-check: [rocker/r-ver:4.5]": 24.7,
+          "full-check: [rocker/r-ver:latest]": 19.4,
+          "sanitizers: [clang-asan]": 7.6,
+          "security-audit": 6.0,
+          "osv-audit": 5.9,
+          "citation-version": 5.5,
+          "sanitizers: [valgrind]": 0.8
+        },
+        "by_source": {
+          "schedule": 331.5,
+          "push": 206.0,
+          "api": 58.4
+        },
+        "by_status": {
+          "success": 514.1,
+          "failed": 77.6,
+          "canceled": 4.1,
+          "skipped": 0.0,
+          "manual": 0.0
+        },
+        "main_push": {
+          "pipelines": 52,
+          "minutes": 191.1
+        },
+        "failed_canceled_minutes": 81.7
+      },
+      "pagerankr": {
+        "status": "ok",
+        "jobs": 451,
+        "pipelines": 61,
+        "job_minutes": 598.6,
+        "by_job_name": {
+          "check": 117.4,
+          "pages": 101.1,
+          "gates": 95.6,
+          "rurl-floor": 88.6,
+          "coverage": 74.2,
+          "full-check: [rocker/r-ver:devel]": 27.9,
+          "floor-check": 25.6,
+          "osv-audit": 14.2,
+          "full-check: [rocker/r-ver:4.5]": 13.3,
+          "full-check: [rocker/r-ver:latest]": 12.9,
+          "security-audit": 7.3,
+          "check-oldrel": 7.1,
+          "citation-version": 5.8,
+          "rurl-devel": 5.7,
+          "lint": 1.7,
+          "news-version": 0.1,
+          "codemeta": 0.1
+        },
+        "by_source": {
+          "push": 341.8,
+          "schedule": 246.0,
+          "api": 10.8
+        },
+        "by_status": {
+          "success": 591.8,
+          "failed": 6.8,
+          "manual": 0.0,
+          "skipped": 0.0,
+          "canceled": 0.0
+        },
+        "main_push": {
+          "pipelines": 40,
+          "minutes": 322.9
+        },
+        "failed_canceled_minutes": 6.8
+      },
+      "pslr": {
+        "status": "ok",
+        "jobs": 449,
+        "pipelines": 54,
+        "job_minutes": 512.5,
+        "by_job_name": {
+          "coverage": 93.2,
+          "check": 83.5,
+          "pages": 52.5,
+          "lint": 50.2,
+          "readme": 43.7,
+          "full-check: [4.1.3]": 27.9,
+          "full-check: [devel]": 27.7,
+          "spelling": 27.5,
+          "sanitizers": 24.9,
+          "full-check: [4.5]": 19.4,
+          "docs-drift": 19.4,
+          "full-check: [4.6]": 18.4,
+          "news-version": 5.7,
+          "citation-version": 5.2,
+          "full-check: [4.1.3, true]": 4.7,
+          "osv-audit": 4.4,
+          "security-audit": 4.2
+        },
+        "by_source": {
+          "push": 307.2,
+          "schedule": 205.3
+        },
+        "by_status": {
+          "success": 487.2,
+          "failed": 24.3,
+          "canceled": 1.0,
+          "skipped": 0.0
+        },
+        "main_push": {
+          "pipelines": 38,
+          "minutes": 307.2
+        },
+        "failed_canceled_minutes": 25.3
+      },
+      "robotstxtr": {
+        "status": "ok",
+        "jobs": 290,
+        "pipelines": 54,
+        "job_minutes": 504.4,
+        "by_job_name": {
+          "pages": 125.6,
+          "check": 88.8,
+          "gates": 83.3,
+          "coverage": 59.4,
+          "floor-check": 31.0,
+          "sanitizers": 25.8,
+          "full-check: [rocker/r-ver:latest]": 21.5,
+          "full-check: [rocker/r-ver:devel]": 19.7,
+          "full-check: [rocker/r-ver:4.5]": 17.1,
+          "security-audit": 12.9,
+          "osv-audit": 12.7,
+          "citation-version": 6.6
+        },
+        "by_source": {
+          "push": 248.7,
+          "schedule": 248.6,
+          "api": 7.2
+        },
+        "by_status": {
+          "success": 414.7,
+          "failed": 88.4,
+          "canceled": 1.3,
+          "skipped": 0.0
+        },
+        "main_push": {
+          "pipelines": 36,
+          "minutes": 244.8
+        },
+        "failed_canceled_minutes": 89.7
+      },
+      "raddr": {
+        "status": "ok",
+        "jobs": 264,
+        "pipelines": 48,
+        "job_minutes": 278.9,
+        "by_job_name": {
+          "check:linux-release": 70.8,
+          "pages": 41.2,
+          "deep-check:floor": 39.2,
+          "deep-check:devel": 35.2,
+          "coverage": 22.1,
+          "check:linux-devel": 20.3,
+          "deep-check:oldrel": 15.0,
+          "readme": 12.2,
+          "deep-check:release": 11.6,
+          "citation-version": 3.6,
+          "news-version": 3.2,
+          "osv-audit": 2.5,
+          "security-audit": 2.0
+        },
+        "by_source": {
+          "schedule": 146.5,
+          "push": 125.7,
+          "api": 6.7
+        },
+        "by_status": {
+          "success": 269.3,
+          "failed": 8.2,
+          "canceled": 1.3,
+          "skipped": 0.0
+        },
+        "main_push": {
+          "pipelines": 34,
+          "minutes": 125.7
+        },
+        "failed_canceled_minutes": 9.6
+      },
+      "fleet-ci": {
+        "status": "not found"
+      }
+    },
+    "fleet": {
+      "packages_job_minutes": 8716.7,
+      "fleet_ci_job_minutes": 0.0,
+      "total_job_minutes": 8716.7,
+      "jobs": 4357,
+      "pipelines": 725,
+      "main_push_pipelines": 558,
+      "main_push_minutes": 5476.6,
+      "main_push_share": 0.628,
+      "failed_canceled_minutes": 923.3,
+      "by_source": {
+        "push": 5522.1,
+        "schedule": 2934.9,
+        "api": 219.3,
+        "web": 40.7
+      },
+      "by_job_name": {
+        "check": 1700.4,
+        "coverage": 1653.8,
+        "pages": 1121.5,
+        "verify": 780.9,
+        "gates": 726.4,
+        "floor-check": 395.5,
+        "docs-drift": 313.9,
+        "full-check: [devel]": 180.4,
+        "full-check: [rocker/r-ver:devel]": 151.7,
+        "sanitizers": 140.1,
+        "fossa": 120.6,
+        "full-check: [4.6.1]": 118.9,
+        "readme": 110.6,
+        "full-check: [4.5.3]": 109.1,
+        "osv-audit": 99.6,
+        "security-audit": 91.4,
+        "rurl-floor": 88.6,
+        "full-check: [4.5.1]": 80.6,
+        "full-check: [rocker/r-ver:latest]": 72.3,
+        "check:linux-release": 70.8,
+        "full-check: [rocker/r-ver:4.5]": 70.6,
+        "citation-version": 61.0,
+        "lint": 51.9,
+        "deep-check: [devel]": 47.6,
+        "deep-check: [4.5]": 47.4,
+        "deep-check:floor": 39.2,
+        "deep-check:devel": 35.2,
+        "deep-check: [4.6]": 33.8,
+        "full-check: [4.1.3]": 27.9,
+        "spelling": 27.5,
+        "check:linux-devel": 20.3,
+        "full-check: [4.5]": 19.4,
+        "full-check: [4.6]": 18.4,
+        "full-check: [4.4.3]": 17.6,
+        "deep-check:oldrel": 15.0,
+        "deep-check:release": 11.6,
+        "news-version": 11.3,
+        "sanitizers: [clang-asan]": 7.6,
+        "check-oldrel": 7.1,
+        "renovate": 6.8,
+        "rurl-devel": 5.7,
+        "full-check: [4.1.3, true]": 4.7,
+        "deep-check: [4.1.3]": 1.1,
+        "sanitizers: [valgrind]": 0.8,
+        "codemeta": 0.1
+      },
+      "queue_wait_seconds": {
+        "median": 235.5,
+        "p90": 1650.1
+      },
+      "peak_concurrency": 5
+    }
+  },
+  "gap": {
+    "total_job_minutes": {
+      "recorded": 8816,
+      "measured": 8716.7,
+      "pct": -1.1
+    },
+    "jobs": {
+      "recorded": 4387,
+      "measured": 4357,
+      "pct": -0.7
+    },
+    "pipelines": {
+      "recorded": 729,
+      "measured": 725,
+      "pct": -0.5
+    },
+    "main_push_pipelines": {
+      "recorded": 551,
+      "measured": 558
+    },
+    "main_push_share": {
+      "recorded": 0.63,
+      "measured": 0.628
+    },
+    "schedule_minutes": {
+      "recorded": 2980,
+      "measured": 2934.9,
+      "pct": -1.5
+    },
+    "by_job_group": {
+      "pages": {
+        "recorded": 1113,
+        "measured": 1121.5,
+        "pct": 0.8
+      },
+      "coverage": {
+        "recorded": 1652,
+        "measured": 1653.8,
+        "pct": 0.1
+      },
+      "check/verify": {
+        "recorded": 2544,
+        "measured": 2579.5,
+        "pct": 1.4
+      }
+    },
+    "queue_wait_seconds": {
+      "recorded": {
+        "median": 223,
+        "p90": 1440
+      },
+      "measured": {
+        "median": 235.5,
+        "p90": 1650.1
+      }
+    },
+    "peak_concurrency": {
+      "recorded": 5,
+      "measured": 5
+    },
+    "projects": {
+      "rurl": {
+        "recorded": 2825,
+        "measured": 2784.6,
+        "pct": -1.4
+      },
+      "ssrfr": {
+        "recorded": 1456,
+        "measured": 1516.0,
+        "pct": 4.1
+      },
+      "seor": {
+        "recorded": 1316,
+        "measured": 1309.4,
+        "pct": -0.5
+      },
+      "sitemapr": {
+        "recorded": 624,
+        "measured": 616.5,
+        "pct": -1.2
+      },
+      "punycoder": {
+        "recorded": 588,
+        "measured": 595.8,
+        "pct": 1.3
+      },
+      "pagerankr": {
+        "recorded": 566,
+        "measured": 598.6,
+        "pct": 5.8
+      },
+      "pslr": {
+        "recorded": 523,
+        "measured": 512.5,
+        "pct": -2.0
+      },
+      "robotstxtr": {
+        "recorded": 497,
+        "measured": 504.4,
+        "pct": 1.5
+      },
+      "raddr": {
+        "recorded": 267,
+        "measured": 278.9,
+        "pct": 4.5
+      }
+    },
+    "notes": [
+      "The total is within 2% (-1.1%), so the measured block is the baseline; the re-measure compares against it with --compare.",
+      "The recorded per-package figures sum to 8662, not 8816; the recorded total was not their sum, so the 154 min difference is unexplained.",
+      "Per package the gaps run -1.4% to +5.8%, both ways, which fits a shifted window rather than lost jobs. Replaying the same cache with the window moved 12 h later (2026-09-29T12:00Z .. 2026-10-29T12:00Z) reproduces every recorded per-package figure within 0.6% except pagerankr (576.0 vs 566): the original was most likely a rolling 30 days ending around noon UTC on 2026-10-29, not whole UTC days.",
+      "check/verify here sums jobs named check, verify, check:* and check-*; the original grouping is not recorded.",
+      "Setup share (33-77% per job) needs job logs, not the listings, so the script does not measure it.",
+      "Queue p90 recorded as 24 min is stored as 1440 s.",
+      "fleet-ci did not exist on GitLab at measurement time (HTTP 404)."
+    ]
+  }
+}
