@@ -67,8 +67,10 @@ removed rather than left to render broken:
 
 ### Pipeline (GitLab CI)
 
-No setup — the badge tracks the pipeline for `main`, and the scaffold already
-ships `.gitlab-ci.yml`. It goes green on the first push to `main`.
+No setup — the badge tracks the latest pipeline for `main`, and the scaffold
+already ships `.gitlab-ci.yml`. In the fleet's R packages a merge creates no
+pipeline ([ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md)), so
+the badge reports the latest weekly or release pipeline.
 
 The badge URL takes a branch (`.../badges/main/pipeline.svg`); if your default
 branch is not `main`, change it in both the image and the link. Two optional
@@ -139,8 +141,9 @@ down state:
 GitLab blue; a URL that does not answer reads "docs | down" (both checked live
 on 2026-10-03, with rurl and a missing site). A static
 `img.shields.io/badge/docs-pkgdown-...` badge, which pslr and pagerankr carry
-today, stays blue when the site is gone. No setup beyond the `pages` job, which
-publishes on every push to `main`.
+today, stays blue when the site is gone. No setup beyond the `pages` job,
+which publishes from a `v*` tag, so the site shows the released version
+([ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md)).
 
 ### OpenSSF Best Practices (R)
 

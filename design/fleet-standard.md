@@ -7,9 +7,11 @@ and checks in all nine packages (SEOR-plnwieyf). Each package's "meets the
 fleet standard" issue cites this file instead of restating it.
 [ADR 0007](adr/0007-one-fleet-standard-for-badges-and-checks.md) records why
 the load-bearing choices went the way they did.
+[ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md) supersedes it:
+it replaces where the checks run and names the choices that stay in force.
 
 This is a living reference. Edit it when a fact changes. A change to a choice
-ADR 0007 records needs a new ADR first.
+ADR 0007 or ADR 0012 records needs a new ADR first.
 
 **Scope (owner, 2026-10-03).** These are single-maintainer hobby projects. The
 point is that all nine look and work the same; best effort is enough. Meet the
@@ -194,22 +196,73 @@ under another name: Function overview and Key functions are banned too.
 `https://bart-turczynski.gitlab.io/<pkg>/llms.txt` answered 200 for all nine
 packages on 2026-10-04.
 
-## CI on every push to `main`
+## Verification tiers
 
-Every push to `main` runs:
+[ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md) decides this
+section: what a change can break, and the event, choose what runs. A push to
+`main` creates no pipeline. It describes the target state, which fleet-ci and
+each package's migration implement; until a package migrates, its current CI
+stays as it is.
 
-- `R CMD check --as-cran` through `rcmdcheck` with `error_on = "warning"`.
-  CRAN incoming feasibility stays on, with the two exceptions
-  [ADR 0004](adr/0004-cran-incoming-runs-everywhere-except-seor.md) names:
-  seor turns it off, and pslr's `_R_CHECK_CRAN_INCOMING_REMOTE_=false` stays
-  grandfathered.
-- A coverage job: a `coverage:` regex for the badge, a cobertura
+| Tier | Trigger | Where | What runs |
+|------|---------|-------|-----------|
+| T0 docs | a push the pre-push hook sees (branch pushes included) whose diff against the target the fail-closed classifier calls docs-only | pre-push hook | lint and fixers, spelling, docs drift, `pkgdown::check_pkgdown()` |
+| T1 merge | any other push the pre-push hook sees, branch pushes included | pre-push hook, in the shared fleet image | the cheap gates, one `R CMD check` (`NOT_CRAN=true`; no incoming, no remote, no manual), positive locale assertions |
+| T2 weekly | the `deep-check` schedule on `main` | CI | release, oldrel and devel legs, the floor, sanitizers, the full locale legs, `--as-cran` with incoming and URLs, `coverage`, the audits |
+| T3 release | a `RELEASE=1` web pipeline before submission; the `v*` tag after acceptance | CI | T2, the PDF manual, and the `pages` deploy from a `v*` tag only |
+
+- **T1 is the `Gate: local` merge gate.** The cheap gates are README drift
+  (`README.md` matches a fresh knit of `README.Rmd`), news-version,
+  citation-version, lint and spelling. The shared image provides `python3`
+  for the gates written in Python.
+- **T0 and T1 run on the branch push.** In the merge-request flow the push
+  the pre-push hook sees is the branch push, not a push to `main`; the
+  classifier reads the pushed diff against the target. The merged tree is
+  covered because the `agent-workflow` skill merges only a gated head that
+  already contains the target's current tip, rebasing onto a moved target
+  and gating again.
+- **The event table** in ADR 0012 is deny by default. A schedule selects on
+  the `SCHEDULE_KIND` it already sets: `deep-check` runs T2, pagerankr's
+  `rurl-devel` runs its suite against rurl's `main` plus `coverage`, and any
+  other schedule creates no pipeline.
+- **`R CMD check --as-cran`** runs in `t2-ascran` through `rcmdcheck` with
+  `error_on = "warning"`, CRAN incoming feasibility on. It sets
+  `_R_CHECK_CRAN_INCOMING_` from `FLEET_INCOMING` and
+  `_R_CHECK_CRAN_INCOMING_REMOTE_` from `FLEET_INCOMING_REMOTE`, both
+  template-owned, `"true"` by default. seor sets `FLEET_INCOMING="false"`, its
+  named exception, and pslr sets `FLEET_INCOMING_REMOTE="false"`, its
+  grandfathered remote suppression
+  ([ADR 0004](adr/0004-cran-incoming-runs-everywhere-except-seor.md), both
+  carried forward by ADR 0012). On a `v*` tag ref `t2-ascran` tolerates
+  exactly one incoming note, the version already being on CRAN, and fails on
+  anything else; the template owns that tolerance.
+- **`coverage`** has a `coverage:` regex for the badge, a cobertura
   `coverage_report` artifact for the diff annotations, and a failure below
   95% total coverage. The threshold is never lowered; a package under it adds
-  tests ([ADR 0007](adr/0007-one-fleet-standard-for-badges-and-checks.md)).
-- The pkgdown `pages` deploy.
-- The cheap gates: README drift (`README.md` matches a fresh knit of
-  `README.Rmd`), news-version, citation-version, lint and spelling.
+  tests ([ADR 0007](adr/0007-one-fleet-standard-for-badges-and-checks.md),
+  carried forward by ADR 0012). Every pipeline on `main` carries it.
+- **Fixed job names:** `t2-check-release`, `t2-check-oldrel`,
+  `t2-check-devel`, `t2-floor`, `t2-sanitizers`, `t2-locale`, `t2-ascran`,
+  `coverage`, `osv-audit`, `security-audit`, `t3-manual`, `pages` and
+  `citation-version`.
+- **A package varies only the switches** `FLEET_SANITIZERS`, `FLEET_FLOOR`,
+  `FLEET_LOCALE`, `FLEET_DEVEL` and `FLEET_MANUAL` (`"true"` or `"false"`,
+  defaults in the template) and the settings `FLEET_INCOMING` and
+  `FLEET_INCOMING_REMOTE`. It never writes `rules` or `when`. Setting
+  `FLEET_FLOOR` or `FLEET_MANUAL` to `"false"` needs a reason recorded in the
+  package's own docs, and `FLEET_MANUAL="false"` is not allowed for a package
+  submitted to CRAN with a PDF manual.
+- **`x-*` jobs** extend one of the template's hidden bases and inherit its
+  rules: `.t2-job`, `.t3-job`, or `.schedule-job`, whose rules admit a
+  schedule pipeline whose `SCHEDULE_KIND` equals the job's
+  `FLEET_JOB_SCHEDULE` and nothing else. `x-fossa` uses `.t2-job`;
+  `x-renovate` (ssrfr) uses `.schedule-job` with `deep-check`, so it stays out
+  of tag and release pipelines; `x-rurl-devel` (pagerankr) uses it with
+  `rurl-devel`.
+- **fleet-ci is pinned by commit SHA.** The template at that SHA names the
+  image digests (`registry.gitlab.com/bart-turczynski/fleet-ci/<variant>`:
+  `fleet-r`, `fleet-r-tex`, `fleet-r-idn2`), so one pin covers both. A
+  package moves to rebuilt images by bumping the SHA.
 
 **pandoc 3.10, pinned in the shared R setup.** pandoc's markdown writer
 reflows text and pads tables differently between versions, so `README.md` is
@@ -327,29 +380,25 @@ A bump moves together, in one change per repository: `PANDOC_VERSION`, the
 two sha256 digests (amd64, arm64), a re-knit of `README.md`, and, once for
 the fleet, `PANDOC_PIN` in `scripts/check-fleet-standard.py`.
 
-Each repository carries the install block in its own `.gitlab-ci.yml`; it
-is not shared through a GitLab `include:` of seor's file. rurl's
-`tools/local-ci-plan.R` reads the CI file without following `include:`, so
-its local runs would lose the install, and a cross-project include makes
-every package's pipeline depend on seor at CI time. The fleet checker keeps
-the copies in step instead.
-
-Every pipeline a schedule creates on `main`, `deep-check` and
-`dependency-audit` alike, runs the coverage job too. The coverage badge reads
-the latest successful pipeline on `main`, so a green schedule pipeline without
-it turns the badge "unknown" (pslr and raddr, 2026-10-03). The fleet runs the
-other push-to-`main` jobs there as well.
+Every pipeline on `main` runs `coverage`. The coverage badge reads the latest
+successful pipeline on `main`, so a green pipeline without it turns the badge
+"unknown" (pslr and raddr, 2026-10-03).
 
 A tag pipeline must not fail only because that version is already on CRAN.
 rurl's `v3.1.0` tag pipeline (#209, 2026-10-02) failed exactly that way: its
 `check` job stopped on a WARNING from "checking CRAN incoming feasibility" for
-a version CRAN had already accepted.
+a version CRAN had already accepted. Under the tiers the tag pipeline runs
+`t2-ascran`, which on a tag ref tolerates exactly that one incoming note (see
+"`R CMD check --as-cran`" above).
 
 ## Scheduled pipelines
 
 The schedule rules in [`fleet.md`](fleet.md) hold: weekly and staggered,
-`SCHEDULE_KIND` set on the schedule itself, every schedule on `main`. Every
-package has both kinds below.
+`SCHEDULE_KIND` set on the schedule itself, every schedule on `main`. Under
+the tiers every package needs only the `deep-check` schedule, which runs T2,
+audits included. A `dependency-audit` schedule then creates no pipeline, and
+the owner deletes it (SEOR-uldurjev). Until a package migrates, it keeps both
+kinds below, and each schedule runs what its CI file gives it today.
 
 ### `deep-check`
 
@@ -376,8 +425,9 @@ package has both kinds below.
 
 `osv-audit` and `security-audit`, in seor's shape: each advisory reported needs
 an explicit disposition row, and a row nobody reports any more fails
-(`tests/testthat/helper-security.R`, SEOR-fkvlzltx). The jobs run only on a
-schedule that sets `SCHEDULE_KIND=dependency-audit` (SEOR-fftbjnpl).
+(`tests/testthat/helper-security.R`, SEOR-fkvlzltx). Under the tiers the jobs
+run in T2 and T3. Until a package migrates, they run only on a schedule that
+sets `SCHEDULE_KIND=dependency-audit` (SEOR-fftbjnpl).
 `security-audit` fails when its OSS Index credentials are missing instead of
 skipping green. Never add an allow-list row ahead of the advisory it answers:
 an anticipatory row fails as stale on the day it lands.
@@ -387,7 +437,8 @@ an anticipatory row fails as stale on the day it lands.
 The free plan allows five projects per account. Owner allocation, 2026-10-03:
 
 1. rurl, ssrfr and seor, each with a `fossa analyze` CI job and the slot-17
-   badges.
+   badges. Under the tiers the job is `x-fossa`, in the T2 and T3 runs: the
+   FOSSA project is refreshed weekly and at each release, not on each merge.
 2. Two slots held for the non-R repositories.
 3. raddr, then pslr, if a slot frees up.
 
@@ -403,6 +454,9 @@ to the allocation means retiring those, which takes the owner's FOSSA login.
 
 ## Local pre-push gate
 
+Under the tiers this gate is the merge gate: T0 for a docs-only diff, T1 in
+the shared fleet image otherwise (see "Verification tiers").
+
 The shared set all nine repositories already run, measured 2026-10-03 on each
 `.pre-commit-config.yaml`: the seven per-commit hygiene hooks, codespell with
 `--builtin en-GB_to_en-US`, `check-toolchain`, and `verify`, whose chain
@@ -417,7 +471,7 @@ it checked zero URLs, and nothing is exempt: `BugReports:` names `/-/work_items`
 (ADR 0011).
 
 Also added: `check-toolchain`'s pandoc check, which compares the local pandoc
-with the CI pin (see the pandoc rule under "CI on every push to `main`").
+with the CI pin (see the pandoc rule under "Verification tiers").
 
 Also added: a generated-docs drift check (SEOR-nwfmerhu). A stale `.Rd` is
 still valid `.Rd`, so lint, spelling and `R CMD check` all pass it; the logo
@@ -668,7 +722,9 @@ What it checks, section by section:
   in order, `Language: en-US`, a declared R floor, and
   `X-schema.org-keywords` with at least five tokens besides the four
   r-universe drops, and none of those four.
-- **CI.** It evaluates `workflow:` and job `rules:` for a push to `main`, each
+- **CI, in the shape before ADR 0012.** The checker has not moved to the
+  tiers yet, so it still tests the CI an unmigrated package carries. It
+  evaluates `workflow:` and job `rules:` for a push to `main`, each
   schedule kind and a tag. On a push it looks for `R CMD check --as-cran`
   through `rcmdcheck` with `error_on = "warning"`, with incoming off only as
   ADR 0004 allows. It also looks for a coverage job with a regex, a cobertura
