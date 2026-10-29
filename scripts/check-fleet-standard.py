@@ -152,7 +152,8 @@ such as `!reference`, a scalar its tag cannot hold such as `2026-02-30`, a
 recursive alias, another document shape), whose `extends:` names a block it
 does not define, or whose `rules:if` does not read (an empty one included),
 leaves every CI rule of that package not judged and the run incomplete; the
-other areas are still judged. `include:` is not followed. On top of the YAML sits only GitLab's own
+other areas are still judged. `include:` is not followed, but for fleet-ci's
+(A MIGRATED PACKAGE, below). On top of the YAML sits only GitLab's own
 semantics: `extends:` deep-merges mappings and replaces arrays, later parents
 over earlier ones and the job over all; `default:` (or a deprecated top-level
 `image:`, `before_script:`, ...) fills each key a job leaves unset, never
@@ -191,10 +192,45 @@ and has no exemption (ADR 0011), how security-audit treats missing OSS
 Index credentials, the GitLab project badges, and that no employer is named as
 copyright holder or funder. Those stay review items.
 
+A MIGRATED PACKAGE (ADR 0012, transitional; SEOR-sehpgsww). A .gitlab-ci.yml
+that includes fleet-ci's project is judged on that shape instead
+(check_ci_migrated()), and every other file exactly as above; the file is
+then read with `!reference` allowed (ReferenceLoader), and a package whose
+include is not fleet-ci's, or whose file does not load that way, is read
+as above. The include is one entry, `templates/r-package.yml` at a 40-hex
+SHA, and a v* tag of the fleet-ci clone (FLEET_CI_DIR, `--fleet-ci`) points
+at that SHA. The package's own file writes no `workflow`, `rules`,
+job-level `when`, template job or hidden key, and adds only x-* jobs, each
+extending exactly one of `.t2-job`, `.t3-job`, `.schedule-job`, a schedule
+job on deep-check or, in pagerankr alone, rurl-devel. On the merged
+configuration (the template at the SHA, the package's file merged over it
+as GitLab merges an include): ADR 0012's 13 job names, no fewer, no other;
+the switches and the incoming settings "true" or "false", FLEET_SANITIZERS
+off only without `src/`, FLEET_FLOOR or FLEET_MANUAL off only with a
+Markdown file naming it (a loose test of "a reason recorded"), FLEET_MANUAL
+never off on CRAN, FLEET_INCOMING off in seor alone and
+FLEET_INCOMING_REMOTE in pslr alone; FLEET_LOCALE or FLEET_DEVEL off is
+listed as not judged, a review item. `image/fleet-r/Dockerfile` at the SHA
+pins pandoc PANDOC_PIN (`ARG PANDOC_VERSION=`), the image's copy of the
+pin. `.fleet-ci/` is byte for byte what fleet-ci's bin/vendor writes at the
+SHA, and nothing else. bin/rules-sim at the SHA accepts the file, its
+invariants hold, and its contexts give ADR 0012's event table: no pipeline
+on a push to main or any schedule but deep-check and rurl-devel, T2 on
+deep-check, T2 and t3-manual on a RELEASE=1 run on main, all 13 on a v*
+tag, a switch's job aside when it is off, and coverage in rurl-devel's
+pipeline. FOSSA packages run `fossa analyze` in an x-* job. Each SHA is
+checked out from a shared clone in a temporary directory, never in the
+clone itself; that needs git, and rules-sim needs Ruby. A SHA the clone
+lacks, or a step that cannot run, leaves the rest not judged and the run
+incomplete. The merged configuration is the local expansion; GitLab's CI
+lint is not asked.
+
 Needs PyYAML (pinned at 6.0.3 in the pre-commit hook, which installs it); a run
 without it exits 2 with an install hint. `glab` must be on PATH and
 authenticated unless `--offline`, and `Rscript` for the pandoc pin (the
-self-test included).
+self-test included). A migrated package, and the self-test, need git, Ruby
+and a fleet-ci clone; the self-test builds its fixture fleet-ci from the
+clone's FLEET_CI_FIXTURE_BASE commit.
 """
 
 from __future__ import annotations
@@ -343,7 +379,9 @@ class DictSource:
 
 
 class LocalSource:
-    """A checkout on disk, read-only. Skips VCS and build directories."""
+    """A checkout on disk, read-only. Skips VCS and build directories, and
+    the agents' worktrees in `.claude/worktrees`: other checkouts of the
+    repository, never its files."""
 
     SKIP_DIRS = {".git", "node_modules", "renv", ".Rproj.user", "_scratch", "tmp", ".fp", ".r-lib"}
 
@@ -355,8 +393,9 @@ class LocalSource:
         if self._tree is None:
             found = set()
             for dirpath, dirnames, filenames in os.walk(self.root):
-                dirnames[:] = [d for d in dirnames if d not in self.SKIP_DIRS and not d.endswith(".Rcheck")]
                 rel = Path(dirpath).relative_to(self.root)
+                dirnames[:] = [d for d in dirnames if d not in self.SKIP_DIRS and not d.endswith(".Rcheck")
+                               and (rel / d).as_posix() != ".claude/worktrees"]
                 found.update((rel / name).as_posix() for name in filenames)
             self._tree = {p[2:] if p.startswith("./") else p for p in found}
         return self._tree
@@ -2794,6 +2833,12 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report, 
     if text is None:
         report.gap("ci", "no .gitlab-ci.yml")
         return
+    # Transitional (ADR 0012): a package that includes fleet-ci's template is
+    # judged on that shape; every other file exactly as before.
+    migrated = fleet_ci_include(text)
+    if migrated is not None:
+        check_ci_migrated(pkg, source, state, text, *migrated, fleet or FLEET_CI, report)
+        return
     ci = CI(text, source)
     if ci.error:
         report.skip("ci", f"could not read .gitlab-ci.yml ({ci.error}), so none of its CI rules is judged: R CMD "
@@ -3010,6 +3055,304 @@ class FleetCI:
         if self._root is not None:
             shutil.rmtree(self._root, ignore_errors=True)
         self._root, self._checkouts, self._vendored = None, {}, {}
+
+
+# The clone a live run reads; main() points it at --fleet-ci.
+FLEET_CI = FleetCI(FLEET_CI_DIR)
+
+# ADR 0012's job names, its hidden bases for x-* jobs, and the jobs each
+# switch turns off.
+FIXED_JOBS = ("t2-check-release", "t2-check-oldrel", "t2-check-devel", "t2-floor", "t2-sanitizers", "t2-locale",
+              "t2-ascran", "coverage", "osv-audit", "security-audit", "t3-manual", "pages", "citation-version")
+T2_JOBS = tuple(job for job in FIXED_JOBS if job not in ("t3-manual", "pages"))
+X_BASES = (".t2-job", ".t3-job", ".schedule-job")
+SWITCH_JOBS = {"FLEET_SANITIZERS": "t2-sanitizers", "FLEET_FLOOR": "t2-floor", "FLEET_LOCALE": "t2-locale",
+               "FLEET_DEVEL": "t2-check-devel", "FLEET_MANUAL": "t3-manual"}
+# The two settings and the one package each may turn off (ADR 0004, carried
+# forward by ADR 0012).
+INCOMING_SETTINGS = {"FLEET_INCOMING": "seor", "FLEET_INCOMING_REMOTE": "pslr"}
+# The schedules a consumer job may tie itself to, and who may use the one
+# exception.
+SCHEDULE_EXCEPTION = ("rurl-devel", "pagerankr")
+# What bin/rules-sim's contexts must give (ADR 0012's event table): the
+# jobs each pipeline carries at least, None for no pipeline.
+RULES_SIM_WANT: dict[str, tuple[str, ...] | None] = {
+    "push-main": None,
+    "schedule-deep-check": T2_JOBS,
+    "schedule-dependency-audit": None,
+    "schedule-other": None,
+    "schedule-none": None,
+    "web-release-main": T2_JOBS + ("t3-manual",),
+    "tag-v1.2.3": FIXED_JOBS,
+    "web-pages-tag": ("pages",),
+    "tag-other": None,
+    "web-nothing": None,
+    "merge-request": None,
+    "branch-push": None,
+    "api-main": None,
+}
+DOCKER_PANDOC_RE = re.compile(r"^ARG[ \t]+PANDOC_VERSION=(\S+)[ \t]*$", re.M)
+
+
+def fleet_ci_include(text: str) -> tuple[dict, list] | None:
+    """(config, include entries) when .gitlab-ci.yml includes fleet-ci's
+    project: the migrated shape, which may hold `!reference`. None for
+    anything else, a file that does not load included, which the old
+    shape's reader then reports as it always has."""
+    try:
+        data = load_ci(text, references=True)
+    except (CIError, RecursionError):
+        return None
+    include = data.get("include")
+    entries = include if isinstance(include, list) else [include]
+    if any(isinstance(entry, dict) and entry.get("project") == FLEET_CI_PROJECT for entry in entries):
+        return data, entries
+    return None
+
+
+def key_paths(node: object, key: str, path: str = "") -> list[str]:
+    """Where `key` sits as a mapping key in `node`, as `a/b[0]/c` paths."""
+    hits: list[str] = []
+    if isinstance(node, dict):
+        for name, value in node.items():
+            here = f"{path}/{name}" if path else str(name)
+            if name == key:
+                hits.append(here)
+            hits += key_paths(value, key, here)
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            hits += key_paths(value, key, f"{path}[{i}]")
+    return hits
+
+
+def pinned_sha(entries: list, report: Report) -> str | None:
+    """The fleet-ci commit the include pins, or None after a gap: one
+    include, of the template, at a 40-hex SHA."""
+    if len(entries) != 1:
+        report.gap("ci", f".gitlab-ci.yml has {len(entries)} includes; a migrated package includes fleet-ci's "
+                         f"{FLEET_CI_TEMPLATE} and nothing else")
+        return None
+    entry = entries[0]
+    if entry.get("file") not in (FLEET_CI_TEMPLATE, f"/{FLEET_CI_TEMPLATE}"):
+        report.gap("ci", f"the fleet-ci include names file {entry.get('file')!r}, not {FLEET_CI_TEMPLATE}")
+        return None
+    ref = gitlab_str(entry.get("ref"))
+    if not SHA_RE.fullmatch(ref):
+        report.gap("ci", f"the fleet-ci include's ref {ref!r} is not a 40-hex commit SHA; pin fleet-ci by the "
+                         "commit a v* tag points at, never a branch or a tag name (ADR 0012)")
+        return None
+    return ref
+
+
+def check_consumer(pkg: str, consumer: dict, report: Report) -> None:
+    """What the package's own .gitlab-ci.yml writes: variables and x-* jobs,
+    each extending exactly one hidden base, and never `workflow`, `rules`,
+    a job-level `when`, a template job or a hidden key, so the event table
+    is the template's (ADR 0012, "What a package may vary")."""
+    if "workflow" in consumer:
+        report.gap("ci", ".gitlab-ci.yml overrides `workflow`, the template's event table; a package sets "
+                         "variables and adds x-* jobs only (ADR 0012)")
+    for path in key_paths({k: v for k, v in consumer.items() if k != "workflow"}, "rules"):
+        report.gap("ci", f".gitlab-ci.yml writes `rules` at {path}; the template's rules decide what runs, and a "
+                         "package never writes rules (ADR 0012)")
+    for name, body in consumer.items():
+        if name in ("include", "variables", "workflow"):
+            continue
+        if isinstance(body, dict) and "when" in body:
+            report.gap("ci", f"{name}: a job-level `when`; a package never writes when (ADR 0012)")
+        if name in FIXED_JOBS:
+            report.gap("ci", f".gitlab-ci.yml redefines template job `{name}`; a package sets the template's "
+                             "variables instead (ADR 0012)")
+        elif str(name).startswith("."):
+            report.gap("ci", f".gitlab-ci.yml overrides the template's hidden key `{name}`, which can change its "
+                             "rules; a package defines no hidden key (ADR 0012)")
+        elif name in RESERVED:
+            report.gap("ci", f".gitlab-ci.yml sets top-level `{name}`; a package sets variables and x-* jobs only")
+        elif not str(name).startswith("x-"):
+            report.gap("ci", f"job `{name}` is outside ADR 0012's 13 names and the x-* prefix")
+        else:
+            extends = body.get("extends") if isinstance(body, dict) else None
+            if not (isinstance(extends, str) and extends in X_BASES):
+                report.gap("ci", f"{name}: extends {extends!r}, not exactly one of {', '.join(X_BASES)} (ADR 0012)")
+            elif extends == ".schedule-job":
+                kind = gitlab_str(variables_of(body.get("variables")).get("FLEET_JOB_SCHEDULE"))
+                exception, owner = SCHEDULE_EXCEPTION
+                if kind != "deep-check" and not (kind == exception and pkg == owner):
+                    report.gap("ci", f"{name}: runs on the {kind!r} schedule; a schedule job runs on deep-check, and "
+                                     f"the only schedule exception is {owner}'s {exception} (ADR 0012)")
+
+
+def check_switches(pkg: str, source, state: State, variables: dict[str, str], report: Report) -> None:
+    """The switches and the incoming settings, as the merged configuration
+    sets them: "true" or "false", and "false" only where ADR 0012 allows it."""
+    for name in (*SWITCH_JOBS, *INCOMING_SETTINGS):
+        value = variables.get(name)
+        if value not in ("true", "false"):
+            report.gap("ci", f"{name} is {value!r}, not \"true\" or \"false\"")
+    tree = source.tree()
+    off = [name for name in SWITCH_JOBS if variables.get(name) == "false"]
+    if "FLEET_SANITIZERS" in off and any(path.startswith("src/") for path in tree):
+        report.gap("ci", "FLEET_SANITIZERS is \"false\", but the package has compiled code (src/), which the "
+                         "sanitizer leg exists for")
+    reasoned = [name for name in ("FLEET_FLOOR", "FLEET_MANUAL") if name in off]
+    if reasoned:
+        docs = [path for path in sorted(tree) if path.endswith(".md") and not path.startswith((".fleet-ci/", "docs/"))]
+        texts = [source.read(path) or "" for path in docs]
+        for name in reasoned:
+            if not any(re.search(rf"\b{name}\b", text) for text in texts):
+                report.gap("ci", f"{name} is \"false\" with no reason recorded: no Markdown file in the package "
+                                 f"names {name} (ADR 0012)")
+    if "FLEET_MANUAL" in off:
+        if state.on_cran:
+            report.gap("ci", "FLEET_MANUAL is \"false\" for a package on CRAN, which has a PDF manual (ADR 0012)")
+        elif state.on_cran is None:
+            report.skip("ci", "FLEET_MANUAL is \"false\"; whether the package is on CRAN is unknown", incomplete=False)
+    for name in ("FLEET_LOCALE", "FLEET_DEVEL"):
+        if name in off:
+            report.skip("ci", f"{name} is \"false\"; whether the package lacks what {SWITCH_JOBS[name]} checks is "
+                              "a review item", incomplete=False)
+    for name, owner in INCOMING_SETTINGS.items():
+        if variables.get(name) == "false" and pkg != owner:
+            report.gap("ci", f"{name} is \"false\"; only {owner} may turn it off (ADR 0004, carried forward by "
+                             "ADR 0012)")
+
+
+def rules_sim_pipelines(stdout: str) -> dict[str, list[str] | None]:
+    """bin/rules-sim's report as {context: the jobs it runs, or None for no pipeline}."""
+    pipelines: dict[str, list[str] | None] = {}
+    context = None
+    for line in stdout.splitlines():
+        if line.startswith("== "):
+            context = line[3:].split(":", 1)[0]
+            pipelines[context] = None
+        elif context is None or not line.strip():
+            continue
+        elif line.startswith("   no pipeline"):
+            pipelines[context] = None
+        elif line.startswith("   pipeline"):
+            pipelines[context] = []
+        elif line.startswith("   (no jobs"):
+            pipelines[context] = None
+        elif pipelines[context] is not None:
+            pipelines[context].append(line.split()[0])
+    return pipelines
+
+
+def check_rules_sim(pkg: str, sha: str, text: str, variables: dict[str, str], fleet: FleetCI, report: Report) -> None:
+    """bin/rules-sim at the pinned SHA on the package's file: it accepts the
+    file, its invariants hold, and each context's pipeline is the event
+    table's, the switches the package turned off aside."""
+    status, stdout, stderr = fleet.rules_sim(sha, text)
+    short = sha[:12]
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    invariants = [line.removeprefix("rules-sim: invariant: ") for line in lines
+                  if line.startswith("rules-sim: invariant: ")]
+    if status and not invariants:
+        report.gap("ci", f"fleet-ci's bin/rules-sim at {short} refuses .gitlab-ci.yml: "
+                         f"{' '.join(lines).removeprefix('rules-sim: ')[:400]}")
+        return
+    for invariant in invariants:
+        report.gap("ci", f"fleet-ci's bin/rules-sim at {short}: {invariant}")
+    pipelines = rules_sim_pipelines(stdout)
+    off = {SWITCH_JOBS[name] for name in SWITCH_JOBS if variables.get(name) == "false"}
+    for context, want in RULES_SIM_WANT.items():
+        if context not in pipelines:
+            report.gap("ci", f"fleet-ci's bin/rules-sim at {short} reports no {context} context")
+            continue
+        jobs = pipelines[context]
+        if want is None:
+            if jobs:
+                report.gap("ci", f"the {context} event creates a pipeline ({', '.join(jobs)}); ADR 0012's event "
+                                 "table gives it none")
+            continue
+        missing = [job for job in want if job not in off and job not in (jobs or [])]
+        if missing:
+            label = context.removeprefix("schedule-")
+            report.gap("ci", f"the {label} pipeline lacks {', '.join(missing)} (ADR 0012's event table)")
+    rurl_devel = pipelines.get("schedule-rurl-devel")
+    if rurl_devel and "coverage" not in rurl_devel:
+        report.gap("ci", "the rurl-devel schedule's pipeline does not run coverage; every pipeline on main carries "
+                         "it (ADR 0012)")
+    if rurl_devel and pkg != SCHEDULE_EXCEPTION[1] and set(rurl_devel) - {"coverage"}:
+        report.gap("ci", f"the rurl-devel schedule runs {', '.join(j for j in rurl_devel if j != 'coverage')}; the "
+                         f"only schedule exception is {SCHEDULE_EXCEPTION[1]}'s rurl-devel (ADR 0012)")
+
+
+def check_vendored_gate(source, sha: str, fleet: FleetCI, report: Report) -> None:
+    """.fleet-ci/ is what fleet-ci's bin/vendor writes at the pinned SHA,
+    byte for byte, and nothing else."""
+    want = fleet.vendored(sha)
+    have = sorted(path.removeprefix(".fleet-ci/") for path in source.tree() if path.startswith(".fleet-ci/"))
+    rerun = f"re-run bin/vendor from a clean fleet-ci checkout at {sha[:12]}"
+    for name in sorted(want):
+        if name not in have:
+            report.gap("ci", f".fleet-ci/{name} is missing; {rerun}")
+        elif source.read_bytes(f".fleet-ci/{name}") != want[name]:
+            report.gap("ci", f".fleet-ci/{name} differs from what fleet-ci's bin/vendor writes at {sha[:12]}; {rerun}")
+    for name in have:
+        if name not in want:
+            report.gap("ci", f".fleet-ci/{name} is not written by fleet-ci's bin/vendor at {sha[:12]}; remove it")
+
+
+def check_ci_migrated(pkg: str, source, state: State, text: str, consumer: dict, entries: list,
+                      fleet: FleetCI, report: Report) -> None:
+    """A package that includes fleet-ci's template (ADR 0012), transitional:
+    judged on its own file, the merged configuration and bin/rules-sim and
+    bin/vendor, all at the fleet-ci commit it pins, read from `fleet`."""
+    check_consumer(pkg, consumer, report)
+    check_audit_files(source, report)
+    if pkg in FOSSA_PACKAGES and not any(
+            str(name).startswith("x-") and isinstance(body, dict)
+            and any(re.search(r"\bfossa analyze\b", item) for item in script_items(body.get("script")))
+            for name, body in consumer.items()):
+        report.gap("ci", "no x-* job runs `fossa analyze` (x-fossa, on .t2-job, ADR 0012)")
+    sha = pinned_sha(entries, report)
+    if sha is None:
+        return
+    short = sha[:12]
+    try:
+        if not fleet.has_commit(sha):
+            report.skip("ci", f"fleet-ci {sha} is not in the clone at {fleet.clone} (fetch it), so the pinned "
+                              "template, its rules and the vendored gate are not judged", incomplete=True)
+            return
+        if not fleet.v_tags(sha):
+            report.gap("ci", f"the fleet-ci include pins {sha}, and no v* tag points at {sha}; pin a released "
+                             "fleet-ci, the commit a v* tag points at")
+        template_text = fleet.read(sha, FLEET_CI_TEMPLATE)
+        if template_text is None:
+            report.gap("ci", f"fleet-ci {short} has no {FLEET_CI_TEMPLATE}")
+            return
+        try:
+            template = load_ci(template_text, references=True)
+        except (CIError, RecursionError) as error:
+            report.skip("ci", f"fleet-ci {short}'s {FLEET_CI_TEMPLATE} did not load ({error})", incomplete=True)
+            return
+        # GitLab merges the package's file over the included one: deep for
+        # mappings, arrays replaced, as `extends` does.
+        merged = deep_merge(template, {key: value for key, value in consumer.items() if key != "include"})
+        jobs = {str(name) for name, block in merged.items()
+                if isinstance(block, dict) and name not in RESERVED and not str(name).startswith(".")}
+        missing = [job for job in FIXED_JOBS if job not in jobs]
+        if missing:
+            report.gap("ci", f"fleet-ci {short}'s template lacks {', '.join(missing)}, of ADR 0012's 13 jobs")
+        extra = sorted(job for job in jobs - set(FIXED_JOBS) if not job.startswith("x-") and job not in consumer)
+        if extra:
+            report.gap("ci", f"fleet-ci {short}'s template adds {', '.join(extra)}, outside ADR 0012's 13 jobs")
+        variables = as_strings(variables_of(merged.get("variables")))
+        check_switches(pkg, source, state, variables, report)
+        dockerfile = fleet.read(sha, FLEET_CI_DOCKERFILE)
+        pins = DOCKER_PANDOC_RE.findall(dockerfile or "")
+        if not pins:
+            report.gap("ci", f"fleet-ci {short}'s {FLEET_CI_DOCKERFILE} does not pin pandoc (`ARG PANDOC_VERSION=`), "
+                             f"so the image's pandoc is not the fleet's {PANDOC_PIN}")
+        elif set(pins) != {PANDOC_PIN}:
+            report.gap("ci", f"fleet-ci {short}'s {FLEET_CI_DOCKERFILE} pins pandoc {', '.join(pins)}, not the "
+                             f"fleet's {PANDOC_PIN}")
+        check_vendored_gate(source, sha, fleet, report)
+        check_rules_sim(pkg, sha, text, variables, fleet, report)
+    except FleetCIError as error:
+        report.skip("ci", f"fleet-ci {short} could not be read ({error}), so the pinned template, its rules and "
+                          "the vendored gate are not judged", incomplete=True)
 
 
 @cache
@@ -5016,7 +5359,8 @@ def self_test() -> list[str]:
         # The event table is the template's: no rules, when or workflow.
         migrated("a template job's rules overridden", "punycoder",
                  migrated_repo("punycoder", jobs="\ncoverage:\n  rules:\n    - when: always\n"),
-                 needles=("writes `rules` at coverage", "redefines template job `coverage`", "bin/rules-sim at"))
+                 needles=("writes `rules` at coverage", ".gitlab-ci.yml redefines template job `coverage`",
+                          "refuses .gitlab-ci.yml: consumer file breaks the standard"))
         migrated("the template's events overridden", "punycoder",
                  migrated_repo("punycoder", jobs="\n.fleet-events:\n  t2:\n    - when: always\n"),
                  needles=("overrides the template's hidden key `.fleet-events`",))
@@ -5076,7 +5420,8 @@ def self_test() -> list[str]:
                  needles=("the rurl-devel schedule's pipeline does not run coverage",))
         migrated("a rurl-devel suite outside pagerankr", "punycoder",
                  migrated_repo("punycoder", jobs=FIXTURE_RURL_DEVEL_JOB),
-                 needles=("the only schedule exception is pagerankr's rurl-devel",))
+                 needles=("x-rurl-devel: runs on the 'rurl-devel' schedule",
+                          "the rurl-devel schedule runs x-rurl-devel; the only schedule exception"))
 
     # The pin reader's Rscript reads the user's .Renviron, where a library
     # holding yaml may be set, and not the user's .Rprofile, whose output
@@ -5119,7 +5464,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--local", type=Path, help="read a local checkout instead of GitLab main (needs --repo)")
     parser.add_argument("--offline", action="store_true", help="no network at all (needs --local)")
     parser.add_argument("--self-test", action="store_true", help="run the offline fixtures")
+    parser.add_argument("--fleet-ci", type=Path, help=f"the fleet-ci clone a migrated package's pin is read from "
+                                                      f"(default: $FLEET_CI_DIR, else {FLEET_CI_DIR})")
     args = parser.parse_args(argv)
+    global FLEET_CI
+    if args.fleet_ci:
+        FLEET_CI = FleetCI(args.fleet_ci.expanduser())
 
     if yaml is None:
         print("check-fleet-standard: PyYAML is not installed, and .gitlab-ci.yml is read with it. Install it with "
@@ -5139,8 +5489,11 @@ def main(argv: list[str]) -> int:
     if args.offline and not args.local:
         parser.error("--offline needs --local")
 
-    reports = [run_one(pkg, args.local.expanduser() if args.local else None, args.offline)
-               for pkg in ([args.repo] if args.repo else FLEET)]
+    try:
+        reports = [run_one(pkg, args.local.expanduser() if args.local else None, args.offline)
+                   for pkg in ([args.repo] if args.repo else FLEET)]
+    finally:
+        FLEET_CI.cleanup()
     for report in reports:
         print(report.render())
     total = sum(len(r.gaps) for r in reports)
