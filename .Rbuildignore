@@ -62,6 +62,7 @@
 ^docs$
 ^design$
 ^scripts$
+^tools$
 ^ARCHITECTURE\.md$
 ^CLAUDE\.md$
 ^AGENTS\.md$
