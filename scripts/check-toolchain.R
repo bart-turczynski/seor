@@ -1,5 +1,5 @@
 #!/usr/bin/env Rscript
-# check-toolchain v4
+# check-toolchain v5
 #
 # Fail fast when the MACHINE, not the tree, is what makes the verify gate red.
 #
@@ -69,7 +69,8 @@
 #    wrong one. Unlike check 1's field, it is not the only place the version
 #    lives: a bump also moves the two sha256 digests beside it, a re-knit of
 #    README.md, and the fleet's PANDOC_PIN in check-fleet-standard.py. A
-#    repository whose CI never names PANDOC_VERSION is not checked here.
+#    repository not migrated to fleet-ci (below) whose CI never names
+#    PANDOC_VERSION is not checked here.
 #    One that uses `$PANDOC_VERSION` with no pin this reads fails: a pin in
 #    an included file would otherwise pass as no pin at all (SEOR-mbiwrxql).
 #    And a PANDOC_VERSION value set in a spelling this does not read fails
@@ -77,6 +78,23 @@
 #    job's `env PANDOC_VERSION=3.9` would otherwise pass as 3.10 while that
 #    job installs 3.9 (SEOR-usrdxvbj). A null value (`PANDOC_VERSION:` bare,
 #    `~` or `null`) sets no version, and passes.
+#
+#    A package migrated to fleet-ci (ADR 0012), marked by .fleet-ci/VERSION,
+#    names no pin in .gitlab-ci.yml: the fleet-ci image installs pandoc
+#    (v5, SEOR-bkwtrvhh). This check then reads the pin from
+#    .fleet-ci/toolchain, which fleet-ci's bin/vendor writes beside VERSION,
+#    exactly one line `PANDOC_VERSION=<version>` and its newline, the version
+#    a literal as above, and compares it as it compares a CI pin. A missing,
+#    unreadable or malformed .fleet-ci/toolchain fails, naming bin/vendor as
+#    the fix: a migrated package would otherwise pass unchecked. Its
+#    .gitlab-ci.yml is not read for pandoc, even where it names
+#    PANDOC_VERSION: the image's pandoc is what its jobs run. Without
+#    .fleet-ci/VERSION, a .fleet-ci/toolchain is not read.
+#
+#    The self-test runs this check on fixture packages held in memory,
+#    pandoc_pin() reading them through the same function package_files()
+#    returns for a real one, and fakes the local pandoc by passing its
+#    version to check_pandoc(), as run_checks() passes rmarkdown's.
 #
 # WHAT IT DELIBERATELY DOES NOT DO.
 #
@@ -1263,25 +1281,91 @@ pinned_pandoc <- function(lines) {
 }
 
 # The files of the package at `root`, as a function of a path relative to
-# it: the file's lines, or NULL when there is no file. The self-test hands
+# it: the file's lines, or with `raw` its whole text, newlines included (NA
+# when it cannot be read); NULL when there is no file. The self-test hands
 # pandoc_pin() a list in its place, so it reads fixture packages without I/O.
 package_files <- function(root) {
-  function(path) {
+  function(path, raw = FALSE) {
     full <- file.path(root, path)
     if (!file.exists(full)) {
       return(NULL)
+    }
+    if (raw) {
+      return(tryCatch(
+        {
+          text <- readChar(full, file.size(full), useBytes = TRUE)
+          if (length(text)) text else ""
+        },
+        error = function(e) NA_character_,
+        warning = function(w) NA_character_
+      ))
     }
     readLines(full, warn = FALSE)
   }
 }
 
-# The pandoc pins of the package whose files `read` returns (package_files()).
-pandoc_pin <- function(read) {
-  lines <- read(".gitlab-ci.yml")
-  if (is.null(lines)) {
-    return(character())
+# A package migrated to fleet-ci (ADR 0012) carries what fleet-ci's
+# bin/vendor writes into .fleet-ci/: VERSION, the fleet-ci commit, marks it
+# migrated, and toolchain is the pandoc the fleet-ci image installs, one line
+# `PANDOC_VERSION=<version>`.
+fleet_ci_version <- ".fleet-ci/VERSION"
+fleet_ci_toolchain <- ".fleet-ci/toolchain"
+
+# The pin in `text`, the whole of .fleet-ci/toolchain (NULL when there is no
+# file, NA when it cannot be read). It stops unless the text is exactly one
+# line `PANDOC_VERSION=<version>` and its newline, the version a literal as
+# a CI pin is: a migrated package with no pin read would pass unchecked.
+toolchain_pin <- function(text) {
+  value <- NA_character_
+  if (is.character(text) && length(text) == 1L && !is.na(text)) {
+    # Bytes, not characters: a file that is not UTF-8 is malformed, not an
+    # error of its own.
+    line <- "^PANDOC_VERSION=([^\n]*)\n$"
+    if (grepl(line, text, useBytes = TRUE)) {
+      value <- sub(line, "\\1", text, useBytes = TRUE)
+    }
   }
-  pinned_pandoc(lines)
+  why <- if (is.null(text)) {
+    "is missing"
+  } else if (is.na(text)) {
+    "cannot be read"
+  } else if (
+    is.na(value) || !grepl(pandoc_literal_re, value, useBytes = TRUE)
+  ) {
+    "is not exactly one line `PANDOC_VERSION=<version>`"
+  }
+  if (!is.null(why)) {
+    stop(
+      fleet_ci_version,
+      " marks this package as migrated to fleet-ci, whose image installs ",
+      "pandoc, but ",
+      fleet_ci_toolchain,
+      " ",
+      why,
+      ", so check-toolchain.R reads no pandoc pin. Re-vendor .fleet-ci/ ",
+      "with fleet-ci's bin/vendor at the commit the include pins.",
+      call. = FALSE
+    )
+  }
+  value
+}
+
+# The pandoc pins of the package whose files `read` returns
+# (package_files()), and the file they come from: .fleet-ci/toolchain in a
+# package migrated to fleet-ci, whose .gitlab-ci.yml is then not read for
+# pandoc, else .gitlab-ci.yml.
+pandoc_pin <- function(read) {
+  if (!is.null(read(fleet_ci_version, raw = TRUE))) {
+    return(list(
+      pins = toolchain_pin(read(fleet_ci_toolchain, raw = TRUE)),
+      source = fleet_ci_toolchain
+    ))
+  }
+  lines <- read(".gitlab-ci.yml")
+  list(
+    pins = if (is.null(lines)) character() else pinned_pandoc(lines),
+    source = ".gitlab-ci.yml"
+  )
 }
 
 read_pandoc_pin <- function(root) pandoc_pin(package_files(root))
@@ -1300,7 +1384,8 @@ installed_pandoc <- function() {
   as.character(version)
 }
 
-check_pandoc <- function(pinned, installed) {
+# `source` is the file the pin was read from, named in the messages.
+check_pandoc <- function(pinned, installed, source = ".gitlab-ci.yml") {
   if (!length(pinned)) {
     return(character())
   }
@@ -1324,7 +1409,8 @@ check_pandoc <- function(pinned, installed) {
   if (is.na(installed)) {
     return(paste0(
       "rmarkdown finds no pandoc (or rmarkdown is not installed), but ",
-      ".gitlab-ci.yml pins pandoc ",
+      source,
+      " pins pandoc ",
       pinned,
       " (PANDOC_VERSION). ",
       fix
@@ -1336,7 +1422,9 @@ check_pandoc <- function(pinned, installed) {
   paste0(
     "pandoc version mismatch: rmarkdown uses ",
     installed,
-    ", .gitlab-ci.yml pins ",
+    ", ",
+    source,
+    " pins ",
     pinned,
     " (PANDOC_VERSION). README.md is byte-stable only under the pinned ",
     "pandoc, so build_readme() here knits what CI reports as drift. This is ",
@@ -1346,8 +1434,9 @@ check_pandoc <- function(pinned, installed) {
 }
 
 run_checks <- function(root) {
-  # First: a pin in GitLab's expanded form stops the run, before CRAN is read.
-  pandoc_pin <- read_pandoc_pin(root)
+  # First: a pin in GitLab's expanded form, or a migrated package's
+  # .fleet-ci/toolchain that does not read, stops the run, before CRAN is read.
+  pin <- read_pandoc_pin(root)
   installed <- tryCatch(
     as.character(utils::packageVersion("roxygen2")),
     error = function(e) NA_character_
@@ -1360,7 +1449,7 @@ run_checks <- function(root) {
       running
     ),
     run_stale_check(root),
-    check_pandoc(pandoc_pin, installed_pandoc())
+    check_pandoc(pin$pins, installed_pandoc(), pin$source)
   )
 }
 
@@ -2899,10 +2988,11 @@ self_test <- function() {
   # passing it, as check_pandoc() takes it.
   package <- function(...) {
     files <- list(...)
-    function(path) files[[path]]
+    function(path, raw = FALSE) files[[path]]
   }
   pandoc_problems <- function(files, installed) {
-    check_pandoc(pandoc_pin(files), installed)
+    pin <- pandoc_pin(files)
+    check_pandoc(pin$pins, installed, pin$source)
   }
   ci_include <- c(
     "include:",
@@ -2940,13 +3030,118 @@ self_test <- function() {
       grepl("but .gitlab-ci.yml pins pandoc 3.10", absent, fixed = TRUE)
   )
   # A package migrated to fleet-ci (ADR 0012) names no PANDOC_VERSION in
-  # .gitlab-ci.yml: its pandoc is the fleet-ci image's.
+  # .gitlab-ci.yml: its pandoc is the fleet-ci image's, which bin/vendor
+  # writes to .fleet-ci/toolchain (SEOR-bkwtrvhh).
+  migrated <- function(toolchain, ci = ci_include) {
+    files <- list(`.gitlab-ci.yml` = ci, `.fleet-ci/VERSION` = sha)
+    files[[fleet_ci_toolchain]] <- toolchain
+    do.call(package, files)
+  }
+  pinned <- "PANDOC_VERSION=3.10\n"
   case(
-    "package: migrated, not checked",
+    "package: migrated, the toolchain pin matches",
+    !length(pandoc_problems(migrated(pinned), "3.10"))
+  )
+  mismatch <- pandoc_problems(migrated(pinned), "3.11")
+  case(
+    "package: migrated, the toolchain pin differs",
+    length(mismatch) == 1L &&
+      grepl(
+        "rmarkdown uses 3.11, .fleet-ci/toolchain pins 3.10",
+        mismatch,
+        fixed = TRUE
+      ) &&
+      grepl("MACHINE problem", mismatch, fixed = TRUE)
+  )
+  case(
+    "package: migrated, a patch release differs",
+    length(pandoc_problems(migrated(pinned), "3.10.1")) == 1L
+  )
+  absent <- pandoc_problems(migrated(pinned), NA_character_)
+  case(
+    "package: migrated, no local pandoc",
+    length(absent) == 1L &&
+      grepl("but .fleet-ci/toolchain pins pandoc 3.10", absent, fixed = TRUE)
+  )
+  # .gitlab-ci.yml is not read for pandoc in a migrated package: the image
+  # installs it, whatever PANDOC_VERSION the file names, a spelling the
+  # reader refuses included.
+  case(
+    "package: migrated, a CI pin ignored",
+    !length(pandoc_problems(migrated(pinned, c(ci_include, global)), "3.10"))
+  )
+  case(
+    "package: migrated, a CI pin ignored, the toolchain's compared",
+    length(pandoc_problems(migrated(pinned, c(ci_include, global)), "3.9")) ==
+      1L
+  )
+  refused_ci <- c(ci_include, "variables:", "  PANDOC_VERSION: ~x")
+  case(
+    "package: migrated, a refused CI spelling ignored",
+    nzchar(refusal(refused_ci)) &&
+      !length(pandoc_problems(migrated(pinned, refused_ci), "3.10"))
+  )
+  # Without .fleet-ci/VERSION a package is not migrated, and a toolchain
+  # file there is not read.
+  case(
+    "package: not migrated, a toolchain file not read",
     !length(pandoc_problems(
-      package(`.gitlab-ci.yml` = ci_include, `.fleet-ci/VERSION` = sha),
-      "3.11"
+      package(
+        `.gitlab-ci.yml` = global,
+        `.fleet-ci/toolchain` = "PANDOC_VERSION=3.9\n"
+      ),
+      "3.10"
     ))
+  )
+  # A migrated package whose pin does not read fails, naming the file and
+  # the fix: it would otherwise pass unchecked.
+  toolchain_refusal <- function(toolchain) {
+    tryCatch(
+      {
+        pandoc_pin(migrated(toolchain))
+        ""
+      },
+      error = conditionMessage
+    )
+  }
+  refused <- function(toolchain, why) {
+    message <- toolchain_refusal(toolchain)
+    grepl(paste0(".fleet-ci/toolchain ", why), message, fixed = TRUE) &&
+      grepl("fleet-ci's bin/vendor", message, fixed = TRUE)
+  }
+  case("package: migrated, no toolchain file", refused(NULL, "is missing"))
+  case(
+    "package: migrated, the toolchain file unreadable",
+    refused(NA_character_, "cannot be read")
+  )
+  malformed <- list(
+    empty = "",
+    `no newline` = "PANDOC_VERSION=3.10",
+    `CRLF` = "PANDOC_VERSION=3.10\r\n",
+    `two lines` = "PANDOC_VERSION=3.10\nPANDOC_VERSION=3.9\n",
+    `a blank line after` = "PANDOC_VERSION=3.10\n\n",
+    `a comment before` = "# pandoc\nPANDOC_VERSION=3.10\n",
+    `no value` = "PANDOC_VERSION=\n",
+    `a computed value` = "PANDOC_VERSION=$(cat v)\n",
+    `quoted` = "PANDOC_VERSION=\"3.10\"\n",
+    `spaces` = "PANDOC_VERSION = 3.10\n",
+    `leading space` = " PANDOC_VERSION=3.10\n",
+    `another name` = "PANDOC=3.10\n",
+    `export` = "export PANDOC_VERSION=3.10\n",
+    `not UTF-8` = "PANDOC_VERSION=3.10\xff\n"
+  )
+  for (tag in names(malformed)) {
+    case(
+      paste0("package: migrated, the toolchain file malformed, ", tag),
+      refused(malformed[[tag]], "is not exactly one line")
+    )
+  }
+  case(
+    "package: migrated, a pin's literal characters",
+    identical(
+      pandoc_pin(migrated("PANDOC_VERSION=3.1.11-rc+1\n"))$pins,
+      "3.1.11-rc+1"
+    )
   )
 
   paste0(

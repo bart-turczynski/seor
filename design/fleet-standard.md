@@ -377,6 +377,13 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   `RSTUDIO_PANDOC`, `PATH` and `~/opt/pandoc`, so a Homebrew upgrade past the
   pin otherwise knits a README that CI then reports as drift. Reading the
   variable from the environment is not that check: nothing sets it locally.
+  A package migrated to fleet-ci (ADR 0012), marked by `.fleet-ci/VERSION`,
+  has no pin in `.gitlab-ci.yml`: the fleet-ci image installs pandoc. There
+  the script reads the pin from `.fleet-ci/toolchain`, the one line
+  `PANDOC_VERSION=<version>` that fleet-ci's `bin/vendor` writes, and
+  ignores `.gitlab-ci.yml` for pandoc; a missing, unreadable or malformed
+  `.fleet-ci/toolchain` fails the gate and asks for a re-vendor
+  (SEOR-bkwtrvhh).
   It needs the R package yaml 2.2.1 or later, which rmarkdown and knitr
   already import, and stops in one line naming it when it is missing or
   older.
@@ -711,7 +718,9 @@ migrated rows, loudly. A package with any other include, or whose file does
 not load with `!reference` allowed, is read as above, its include not
 followed. Until every package migrates, the old-shape checks below stay
 (SEOR-jlsdnsjd), and a migrated package's `scripts/check-toolchain.R` is not
-compared with seor's copy (SEOR-bkwtrvhh).
+compared with seor's copy yet: seor's copy reads a migrated package's pandoc
+pin from `.fleet-ci/toolchain`, and the comparison waits on fleet-ci's
+`bin/vendor` writing that file (SEOR-bkwtrvhh).
 
 What it checks, section by section:
 
