@@ -377,13 +377,17 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
   `RSTUDIO_PANDOC`, `PATH` and `~/opt/pandoc`, so a Homebrew upgrade past the
   pin otherwise knits a README that CI then reports as drift. Reading the
   variable from the environment is not that check: nothing sets it locally.
-  A package migrated to fleet-ci (ADR 0012), marked by `.fleet-ci/VERSION`,
-  has no pin in `.gitlab-ci.yml`: the fleet-ci image installs pandoc. There
-  the script reads the pin from `.fleet-ci/toolchain`, the one line
-  `PANDOC_VERSION=<version>` that fleet-ci's `bin/vendor` writes, and
-  ignores `.gitlab-ci.yml` for pandoc; a missing, unreadable or malformed
-  `.fleet-ci/toolchain` fails the gate and asks for a re-vendor
-  (SEOR-bkwtrvhh).
+  A package migrated to fleet-ci (ADR 0012) has no pin in `.gitlab-ci.yml`:
+  the fleet-ci image installs pandoc. Migrated is decided as the fleet
+  checker and fleet-ci's `bin/gate` decide it, by the include of the project
+  `bart-turczynski/fleet-ci` in `.gitlab-ci.yml`; a stray `.fleet-ci/`
+  without it is not read. There `.fleet-ci/VERSION` must be the SHA the
+  include's `ref:` pins, else the gate fails and asks for `bin/vendor` at
+  that SHA, and the script reads the pin from `.fleet-ci/toolchain`, the one
+  line `PANDOC_VERSION=<version>` that fleet-ci's `bin/vendor` writes from
+  fleet-ci v1.1.0 on, and ignores `.gitlab-ci.yml` for pandoc. A missing,
+  unreadable or malformed `.fleet-ci/toolchain` fails the gate and asks for
+  a re-vendor, after bumping an include older than v1.1.0 (SEOR-bkwtrvhh).
   It needs the R package yaml 2.2.1 or later, which rmarkdown and knitr
   already import, and stops in one line naming it when it is missing or
   older.
@@ -392,7 +396,11 @@ only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
 
 A bump moves together, in one change per repository: `PANDOC_VERSION`, the
 two sha256 digests (amd64, arm64), a re-knit of `README.md`, and, once for
-the fleet, `PANDOC_PIN` in `scripts/check-fleet-standard.py`.
+the fleet, `PANDOC_PIN` in `scripts/check-fleet-standard.py`. For migrated
+packages it moves `ARG PANDOC_VERSION` in fleet-ci's
+`image/fleet-r/Dockerfile`, then a new fleet-ci tag, then in each package the
+include's `ref:` bumped to that tag's SHA, `.fleet-ci/` re-vendored and
+`README.md` re-knit.
 
 Every pipeline on `main` runs `coverage`. The coverage badge reads the latest
 successful pipeline on `main`, so a green pipeline without it turns the badge
@@ -719,8 +727,9 @@ not load with `!reference` allowed, is read as above, its include not
 followed. Until every package migrates, the old-shape checks below stay
 (SEOR-jlsdnsjd), and a migrated package's `scripts/check-toolchain.R` is not
 compared with seor's copy yet: seor's copy reads a migrated package's pandoc
-pin from `.fleet-ci/toolchain`, and the comparison waits on fleet-ci's
-`bin/vendor` writing that file (SEOR-bkwtrvhh).
+pin from `.fleet-ci/toolchain`, which `bin/vendor` writes from fleet-ci
+v1.1.0 on, so the comparison waits on each migrated package pinning v1.1.0
+or later (SEOR-bkwtrvhh).
 
 What it checks, section by section:
 
