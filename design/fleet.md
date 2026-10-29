@@ -219,11 +219,15 @@ Schedules live in each project's settings (Build > Pipeline schedules), not in
   a schedule only through the default-branch rule, so a schedule on any other
   ref creates no pipeline.
 
-A schedule pipeline on `main` also runs every job that runs on a push to `main`
-(check, coverage, gates or verify, pages), because their rules admit any
-pipeline on the default branch. The one exception is `fossa` (rurl, seor,
-ssrfr), whose rule admits pushes only. So a schedule costs its own jobs plus
-one main pipeline.
+Under the verification tiers
+([ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md)) the
+`deep-check` schedule runs T2, which includes the audits and, in rurl, seor
+and ssrfr, `x-fossa`; `rurl-devel` runs pagerankr's suite against rurl's
+`main` plus `coverage`; a `dependency-audit` schedule creates no pipeline. No
+schedule re-runs the merge gate, which the pre-push hook already ran. Until a
+package migrates, its schedules run what its CI file gives them, which
+re-ran the main pipeline's jobs on an already-tested commit (the runner
+times below were measured that way).
 
 ### The schedule table
 
@@ -262,8 +266,8 @@ All nineteen are active. The eight from rurl's audit to seor's deep check were
 created 2026-09-30. The last six were created through the API on 2026-10-03
 for the fleet standard (SEOR-tahlljtx), whose run that day and the next gave
 every repository its deep-check and dependency-audit jobs.
-Each runner time includes the push-to-`main` jobs the schedule also runs, not
-only the jobs in the third column. A `~` marks an estimate. Every row is a
+Each runner time includes the main-pipeline jobs the schedule also ran when
+measured, not only the jobs in the third column. A `~` marks an estimate. Every row is a
 measurement (method below); ssrfr's and seor's deep checks come from their
 first runs with a green, blocking floor-check (2909933319 and 2909936469,
 2026-10-04). seor's audit jobs take 5 to 6 minutes each, building their
@@ -288,16 +292,15 @@ GitLab API). For each schedule, take its `last_pipeline`; if that is not green,
 take the newest green schedule pipeline on `main` whose jobs include the
 schedule's own. Sum `duration` over that pipeline's jobs, leaving out manual and
 skipped ones. None of the pipelines used had a retried job. All are from
-2026-10-03 except pagerankr's `rurl-devel` (2026-09-30), whose push-to-`main`
-jobs have not changed since. These replace the 2026-09-30 estimates, which were
+2026-10-03 except pagerankr's `rurl-devel` (2026-09-30), whose main-pipeline
+jobs had not changed since. These replace the 2026-09-30 estimates, which were
 medians of each project's last 100 successful jobs. Re-measure a row when its
-repository changes its scheduled or push-to-`main` jobs.
+repository changes its scheduled jobs, or migrates to the tiers.
 
-**Kept for now (owner, 2026-09-30).** About two-thirds of a new schedule's
-runner time is the main pipeline rerunning on a commit that already passed.
-Adding `$CI_PIPELINE_SOURCE != "schedule"` to each repository's on-main rules
-would cut the week to about an hour, but a scheduled run would no longer
-re-check `main` against moved dependencies. That re-check is useful for the
-audits and deep checks, and it's why the rows above keep it. The 2026-10-04
-measurements put the rerun at about half, not two-thirds: the seventeen
-measured rows' own jobs are about 2.7 of their 5.4 runner-hours.
+**The weekly re-check is T2.** The weekly `deep-check` schedule is the
+re-check of `main` against moved dependencies, and it runs T2, not the merge
+gate again ([ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md)).
+Before the tiers, the owner kept the main pipeline re-running inside every
+schedule for that re-check (2026-09-30); the 2026-10-04 measurements put the
+re-run at about half of the schedules' runner time (2.7 of the seventeen
+measured rows' 5.4 runner-hours).

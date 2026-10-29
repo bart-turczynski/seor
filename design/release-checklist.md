@@ -88,6 +88,16 @@ Who runs each step:
    by step 5's local run against `https://cloud.r-project.org`, and Windows by
    R-hub's Windows platforms.
 
+**owner, last before submission: the release checks.** Run `/cran`, and
+start a `RELEASE=1` web pipeline on `main` (Build > Pipelines > Run pipeline,
+ref `main`, variable `RELEASE=1`) for the exact commit to be submitted. It
+runs the T2 checks with `coverage` and the PDF manual (`t3-manual`), and
+deploys no pages ([ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md)).
+The release candidate is that pipeline's `CI_COMMIT_SHA`: the pipeline must
+pass for it, step 7 submits that same commit, and step 9 tags it. A pass on
+an earlier commit of `main` does not authorize submitting a newer one; a new
+commit means a new run.
+
 ## Submission
 
 7. **owner** Run `devtools::submit_cran()` from a clean clone of `main`, not
@@ -102,7 +112,9 @@ Who runs each step:
    an annotated `vX.Y.Z` and push the tag to GitLab. The `v*` protected-tag
    rule mirrors it to GitHub and makes it undeletable (`github-mirror.md`
    §2.8), so tag after acceptance, not at submission. Check
-   `git merge-base --is-ancestor vX.Y.Z origin/main`.
+   `git merge-base --is-ancestor vX.Y.Z origin/main`. The tag push runs the
+   full T3 pipeline, which re-verifies the release and deploys the pkgdown
+   site for it (`pages`); check that it is green.
 10. **agent+go** Create the GitLab release from the tag
     (`glab release create vX.Y.Z`), with that version's `NEWS.md` section as
     the notes. Every CRAN version gets one; the latest-release badge
