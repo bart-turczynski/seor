@@ -263,6 +263,13 @@ stays as it is.
   image digests (`registry.gitlab.com/bart-turczynski/fleet-ci/<variant>`:
   `fleet-r`, `fleet-r-tex`, `fleet-r-idn2`), so one pin covers both. A
   package moves to rebuilt images by bumping the SHA.
+- **fleet-ci is private, so every pull is authenticated**
+  ([ADR 0013](adr/0013-fleet-ci-is-private.md), amending ADR 0012). Locally,
+  `docker login registry.gitlab.com` once. In CI the runner pulls with
+  `CI_JOB_TOKEN`, so fleet-ci's job token allowlist must admit every package
+  project. `include: project:` resolves only for a pipeline whose user can
+  read fleet-ci, the schedule owner for the weekly runs. Forks and outside
+  contributors cannot run T1, T2 or T3.
 
 **pandoc 3.10, pinned in the shared R setup.** pandoc's markdown writer
 reflows text and pads tables differently between versions, so `README.md` is
