@@ -35,7 +35,7 @@
     }
   },
   "measured": {
-    "tool": "tools/ci-minutes.py v1",
+    "tool": "tools/ci-minutes.py v2",
     "window": {
       "since": "2026-09-29T00:00:00Z",
       "until": "2026-10-29T00:00:00Z",
@@ -397,8 +397,17 @@
       }
     },
     "fleet": {
-      "packages_job_minutes": 8716.7,
-      "fleet_ci_job_minutes": 0.0,
+      "projects": [
+        "rurl",
+        "ssrfr",
+        "seor",
+        "sitemapr",
+        "punycoder",
+        "pagerankr",
+        "pslr",
+        "robotstxtr",
+        "raddr"
+      ],
       "total_job_minutes": 8716.7,
       "jobs": 4357,
       "pipelines": 725,
@@ -464,7 +473,11 @@
         "p90": 1650.1
       },
       "peak_concurrency": 5
-    }
+    },
+    "fleet_ci": {
+      "status": "not found"
+    },
+    "total_including_fleet_ci_minutes": 8716.7
   },
   "gap": {
     "total_job_minutes": {
@@ -575,6 +588,7 @@
     },
     "notes": [
       "The total is within 2% (-1.1%), so the measured block is the baseline; the re-measure compares against it with --compare.",
+      "The measured block is v2 of the script replaying the same raw pages as v1 (measured 2026-10-29T15:35:22Z), and no figure moved: the pages held no repeated job or pipeline id, so de-duplication removed nothing, and v1's updated_before bound (2026-11-05) lay after the measurement, so dropping it admits no extra pipeline. Package totals, queue wait and peak concurrency cover the nine packages only; fleet-ci has its own block.",
       "The recorded per-package figures sum to 8662, not 8816; the recorded total was not their sum, so the 154 min difference is unexplained.",
       "Per package the gaps run -1.4% to +5.8%, both ways, which fits a shifted window rather than lost jobs. Replaying the same cache with the window moved 12 h later (2026-09-29T12:00Z .. 2026-10-29T12:00Z) reproduces every recorded per-package figure within 0.6% except pagerankr (576.0 vs 566): the original was most likely a rolling 30 days ending around noon UTC on 2026-10-29, not whole UTC days.",
       "check/verify here sums jobs named check, verify, check:* and check-*; the original grouping is not recorded.",
