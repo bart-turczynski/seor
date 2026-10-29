@@ -183,7 +183,9 @@ Notes the table cannot carry:
 - **pslr's pre-push gate runs no `R CMD check`.** The `standard` tier is lint,
   spelling and tests. The CI `check` job runs `--as-cran` with
   `_R_CHECK_CRAN_INCOMING_REMOTE_=false`, and the `cran` tier turns the remote
-  half back on. ADR 0004 records the CI setting as grandfathered.
+  half back on. ADR 0004 records the CI setting as grandfathered; under the
+  tiers it carries forward as `FLEET_INCOMING_REMOTE="false"` in pslr's
+  `t2-ascran` ([ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md)).
 - **raddr's floor scripts** (`data-raw/check-r-floor.sh`,
   `data-raw/check-dep-floor.sh`) suppress incoming. They are hand-run, not the
   gate, and ADR 0004 puts them out of scope.
@@ -196,6 +198,14 @@ reason is the 2026-09-22 finding: punycoder's gate, which runs incoming, was
 the only thing that noticed the fleet's `BugReports:` URLs returned 404. seor
 is exempt because its members are not on CRAN, so incoming always errors
 there. ssrfr, added to the fleet after the ADR, complies.
+
+[ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md) supersedes it
+and moves incoming out of the local gate into `t2-ascran`, in the weekly and
+release runs. The template sets the two variables from `FLEET_INCOMING` and
+`FLEET_INCOMING_REMOTE`, both `"true"` by default: seor sets
+`FLEET_INCOMING="false"` (its named exception) and pslr
+`FLEET_INCOMING_REMOTE="false"` (its grandfathered remote suppression). The
+table above is the gates as measured before the tiers.
 
 ## Scheduled pipelines
 
@@ -223,7 +233,8 @@ Under the verification tiers
 ([ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md)) the
 `deep-check` schedule runs T2, which includes the audits and, in rurl, seor
 and ssrfr, `x-fossa`; `rurl-devel` runs pagerankr's suite against rurl's
-`main` plus `coverage`; a `dependency-audit` schedule creates no pipeline. No
+`main` plus `coverage`; a `dependency-audit` schedule creates no pipeline,
+and the owner deletes it (SEOR-uldurjev). No
 schedule re-runs the merge gate, which the pre-push hook already ran. Until a
 package migrates, its schedules run what its CI file gives them, which
 re-ran the main pipeline's jobs on an already-tested commit (the runner

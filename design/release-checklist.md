@@ -62,7 +62,9 @@ Who runs each step:
    Setting `R_CRAN_SRC` and `R_CRAN_WEB` to `https://cloud.r-project.org`
    moves only that step; raddr's and punycoder's CI jobs do this. In
    robotstxtr, sitemapr, pagerankr and rurl (`r-base`) the `CRAN` entry is
-   already cloud.r-project.org, and pslr turns the remote half off. Don't count a CI `--as-cran` result that shows
+   already cloud.r-project.org, and pslr turns the remote half off (under the
+   tiers, `FLEET_INCOMING_REMOTE="false"` in its `t2-ascran`, ADR 0012), so
+   for pslr only this local run covers the remote half. Don't count a CI `--as-cran` result that shows
    `Execution halted` under the incoming step as a pass, even when rcmdcheck
    reports it as 0/0/0: nothing after that line ran.
 6. **agent+go** Cross-platform checks, all on the same final SHA:
@@ -100,9 +102,11 @@ commit means a new run.
 
 ## Submission
 
-7. **owner** Run `devtools::submit_cran()` from a clean clone of `main`, not
-   a working copy, whose untracked files can reach the tarball. Then click
-   CRAN's confirmation email.
+7. **owner** Run `devtools::submit_cran()` from a clean checkout of exactly
+   the commit whose `RELEASE=1` run passed (that pipeline's `CI_COMMIT_SHA`),
+   not a working copy, whose untracked files can reach the tarball. If `main`
+   has moved since and you want the newer tip, re-run `RELEASE=1` on it
+   first. Then click CRAN's confirmation email.
 8. **agent** Commit `CRAN-SUBMISSION`, and record the date, SHA and tarball
    SHA-256 in `cran-comments.md`.
 
@@ -114,7 +118,9 @@ commit means a new run.
    §2.8), so tag after acceptance, not at submission. Check
    `git merge-base --is-ancestor vX.Y.Z origin/main`. The tag push runs the
    full T3 pipeline, which re-verifies the release and deploys the pkgdown
-   site for it (`pages`); check that it is green.
+   site for it (`pages`); check that it is green. Its `t2-ascran` tolerates
+   the one incoming note that the version is already on CRAN; any other
+   failure is a finding.
 10. **agent+go** Create the GitLab release from the tag
     (`glab release create vX.Y.Z`), with that version's `NEWS.md` section as
     the notes. Every CRAN version gets one; the latest-release badge

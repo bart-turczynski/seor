@@ -206,22 +206,36 @@ stays as it is.
 
 | Tier | Trigger | Where | What runs |
 |------|---------|-------|-----------|
-| T0 docs | a push whose diff the fail-closed classifier calls docs-only | pre-push hook | lint and fixers, spelling, docs drift, `pkgdown::check_pkgdown()` |
-| T1 merge | any other push to `main` | pre-push hook, in the shared fleet image | the cheap gates, one `R CMD check` (`NOT_CRAN=true`; no incoming, no remote, no manual), positive locale assertions |
+| T0 docs | a push the pre-push hook sees (branch pushes included) whose diff against the target the fail-closed classifier calls docs-only | pre-push hook | lint and fixers, spelling, docs drift, `pkgdown::check_pkgdown()` |
+| T1 merge | any other push the pre-push hook sees, branch pushes included | pre-push hook, in the shared fleet image | the cheap gates, one `R CMD check` (`NOT_CRAN=true`; no incoming, no remote, no manual), positive locale assertions |
 | T2 weekly | the `deep-check` schedule on `main` | CI | release, oldrel and devel legs, the floor, sanitizers, the full locale legs, `--as-cran` with incoming and URLs, `coverage`, the audits |
 | T3 release | a `RELEASE=1` web pipeline before submission; the `v*` tag after acceptance | CI | T2, the PDF manual, and the `pages` deploy from a `v*` tag only |
 
 - **T1 is the `Gate: local` merge gate.** The cheap gates are README drift
   (`README.md` matches a fresh knit of `README.Rmd`), news-version,
-  citation-version, lint and spelling.
+  citation-version, lint and spelling. The shared image provides `python3`
+  for the gates written in Python.
+- **T0 and T1 run on the branch push.** In the merge-request flow the push
+  the pre-push hook sees is the branch push, not a push to `main`; the
+  classifier reads the pushed diff against the target. The merged tree is
+  covered because the `agent-workflow` skill merges only a gated head that
+  already contains the target's current tip, rebasing onto a moved target
+  and gating again.
 - **The event table** in ADR 0012 is deny by default. A schedule selects on
   the `SCHEDULE_KIND` it already sets: `deep-check` runs T2, pagerankr's
   `rurl-devel` runs its suite against rurl's `main` plus `coverage`, and any
   other schedule creates no pipeline.
 - **`R CMD check --as-cran`** runs in `t2-ascran` through `rcmdcheck` with
-  `error_on = "warning"`, CRAN incoming feasibility on. seor's named
-  exception ([ADR 0004](adr/0004-cran-incoming-runs-everywhere-except-seor.md),
-  carried forward by ADR 0012) still turns it off there.
+  `error_on = "warning"`, CRAN incoming feasibility on. It sets
+  `_R_CHECK_CRAN_INCOMING_` from `FLEET_INCOMING` and
+  `_R_CHECK_CRAN_INCOMING_REMOTE_` from `FLEET_INCOMING_REMOTE`, both
+  template-owned, `"true"` by default. seor sets `FLEET_INCOMING="false"`, its
+  named exception, and pslr sets `FLEET_INCOMING_REMOTE="false"`, its
+  grandfathered remote suppression
+  ([ADR 0004](adr/0004-cran-incoming-runs-everywhere-except-seor.md), both
+  carried forward by ADR 0012). On a `v*` tag ref `t2-ascran` tolerates
+  exactly one incoming note, the version already being on CRAN, and fails on
+  anything else; the template owns that tolerance.
 - **`coverage`** has a `coverage:` regex for the badge, a cobertura
   `coverage_report` artifact for the diff annotations, and a failure below
   95% total coverage. The threshold is never lowered; a package under it adds
@@ -233,8 +247,18 @@ stays as it is.
   `citation-version`.
 - **A package varies only the switches** `FLEET_SANITIZERS`, `FLEET_FLOOR`,
   `FLEET_LOCALE`, `FLEET_DEVEL` and `FLEET_MANUAL` (`"true"` or `"false"`,
-  defaults in the template), and may add `x-*` jobs extending `.t2-job` or
-  `.t3-job`. It never writes `rules` or `when`.
+  defaults in the template) and the settings `FLEET_INCOMING` and
+  `FLEET_INCOMING_REMOTE`. It never writes `rules` or `when`. Setting
+  `FLEET_FLOOR` or `FLEET_MANUAL` to `"false"` needs a reason recorded in the
+  package's own docs, and `FLEET_MANUAL="false"` is not allowed for a package
+  submitted to CRAN with a PDF manual.
+- **`x-*` jobs** extend one of the template's hidden bases and inherit its
+  rules: `.t2-job`, `.t3-job`, or `.schedule-job`, whose rules admit a
+  schedule pipeline whose `SCHEDULE_KIND` equals the job's
+  `FLEET_JOB_SCHEDULE` and nothing else. `x-fossa` uses `.t2-job`;
+  `x-renovate` (ssrfr) uses `.schedule-job` with `deep-check`, so it stays out
+  of tag and release pipelines; `x-rurl-devel` (pagerankr) uses it with
+  `rurl-devel`.
 - **fleet-ci is pinned by commit SHA.** The template at that SHA names the
   image digests (`registry.gitlab.com/bart-turczynski/fleet-ci/<variant>`:
   `fleet-r`, `fleet-r-tex`, `fleet-r-idn2`), so one pin covers both. A
@@ -363,15 +387,18 @@ successful pipeline on `main`, so a green pipeline without it turns the badge
 A tag pipeline must not fail only because that version is already on CRAN.
 rurl's `v3.1.0` tag pipeline (#209, 2026-10-02) failed exactly that way: its
 `check` job stopped on a WARNING from "checking CRAN incoming feasibility" for
-a version CRAN had already accepted.
+a version CRAN had already accepted. Under the tiers the tag pipeline runs
+`t2-ascran`, which on a tag ref tolerates exactly that one incoming note (see
+"`R CMD check --as-cran`" above).
 
 ## Scheduled pipelines
 
 The schedule rules in [`fleet.md`](fleet.md) hold: weekly and staggered,
-`SCHEDULE_KIND` set on the schedule itself, every schedule on `main`. Every
-package has both kinds below. Under the tiers the `deep-check` schedule runs
-T2, audits included, and a `dependency-audit` schedule creates no pipeline;
-until a package migrates, each schedule runs what its CI file gives it today.
+`SCHEDULE_KIND` set on the schedule itself, every schedule on `main`. Under
+the tiers every package needs only the `deep-check` schedule, which runs T2,
+audits included. A `dependency-audit` schedule then creates no pipeline, and
+the owner deletes it (SEOR-uldurjev). Until a package migrates, it keeps both
+kinds below, and each schedule runs what its CI file gives it today.
 
 ### `deep-check`
 
