@@ -234,7 +234,9 @@ Under the verification tiers
 `deep-check` schedule runs T2, which includes the audits and, in rurl, seor
 and ssrfr, `x-fossa`; `rurl-devel` runs pagerankr's suite against rurl's
 `main` plus `coverage`; a `dependency-audit` schedule creates no pipeline,
-and the owner deletes it (SEOR-uldurjev). No
+and the owner deletes it (SEOR-uldurjev). fleet-ci is private
+([ADR 0013](adr/0013-fleet-ci-is-private.md)), so a schedule's owner must be
+able to read it, or the template include does not resolve. No
 schedule re-runs the merge gate, which the pre-push hook already ran. Until a
 package migrates, its schedules run what its CI file gives them, which
 re-ran the main pipeline's jobs on an already-tested commit (the runner
