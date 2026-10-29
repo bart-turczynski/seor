@@ -36,9 +36,9 @@ retries. Every raw response body is written to the `--out` cache directory
 (default `tmp/ci-minutes/`, gitignored). `--cached` re-reads that cache
 instead of the network, so the aggregation can be rerun offline.
 
-TOKEN. `GITLAB_TOKEN` from the environment, else the glab CLI's stored token
-(`glab config get token --host gitlab.com`). The token is sent as a header and
-never printed or written.
+TOKEN. `GITLAB_TOKEN` from the environment, sent as a header; else each GET
+goes through `glab api --include`, which reads glab's stored token (keyring or
+config) itself. Either way the token is never printed or written.
 
     python3 tools/ci-minutes.py --since 2026-09-29 --until 2026-10-29
     python3 tools/ci-minutes.py --since ... --until ... --json > out.json
@@ -59,7 +59,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import statistics
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -144,6 +144,37 @@ def urllib_get(url: str, token: str | None) -> tuple[int, dict, bytes]:
     except urllib.error.HTTPError as err:
         headers = {k.lower(): v for k, v in (err.headers or {}).items()}
         return err.code, headers, err.read() or b""
+
+
+def glab_get(url: str, _token: str | None) -> tuple[int, dict, bytes]:
+    """One GET through `glab api`, which reads its own stored token (keyring
+    or config) so the token never passes through this process."""
+    endpoint = url.removeprefix(API + "/")
+    res = subprocess.run(
+        ["glab", "api", "--include", "--hostname", "gitlab.com",
+         "--method", "GET", endpoint],
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    return parse_include(res.stdout, endpoint)
+
+
+def parse_include(raw: bytes, endpoint: str) -> tuple[int, dict, bytes]:
+    """Split `glab api --include` output into status, headers and body."""
+    raw = raw.replace(b"\r\n", b"\n")
+    head, _, body = raw.partition(b"\n\n")
+    lines = head.decode("utf-8", "replace").split("\n")
+    try:
+        status = int(lines[0].split()[1])
+    except (IndexError, ValueError):
+        raise ApiError(f"glab api gave no HTTP status for {endpoint}") from None
+    headers = {}
+    for line in lines[1:]:
+        key, sep, value = line.partition(":")
+        if sep:
+            headers[key.strip().lower()] = value.strip()
+    return status, headers, body
 
 
 class Client:
@@ -484,31 +515,31 @@ def render_compare(baseline: dict, current: dict) -> str:
             f"{name:<12} {bm if bm is not None else '-':>10}"
             f" {cm if cm is not None else '-':>10} {pct_change(bm, cm):>9}"
         )
-    for key in ("packages_job_minutes", "total_job_minutes"):
+    for label, key in (("packages", "packages_job_minutes"),
+                       ("total", "total_job_minutes")):
         bm, cm = base["fleet"][key], current["fleet"][key]
-        lines.append(f"{key:<12} {bm:>10} {cm:>10} {pct_change(bm, cm):>9}")
+        lines.append(f"{label:<12} {bm:>10} {cm:>10} {pct_change(bm, cm):>9}")
     return "\n".join(lines)
 
 
 # --- token -------------------------------------------------------------------
 
 
-def find_token() -> str | None:
+def make_client(out: Path) -> Client:
+    """`GITLAB_TOKEN` over urllib when set, else every GET through `glab api`.
+
+    Not `glab config get token`: with the token in the OS keyring (the
+    default for `glab auth login`), that returns a stale config value and the
+    API answers 401. `glab api` reads the keyring itself.
+    """
     token = os.environ.get("GITLAB_TOKEN", "").strip()
     if token:
-        return token
-    try:
-        res = subprocess.run(
-            ["glab", "config", "get", "token", "--host", "gitlab.com"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    token = res.stdout.strip()
-    return token if res.returncode == 0 and token else None
+        return Client(token, out)
+    if shutil.which("glab") is None:
+        print("warning: no GITLAB_TOKEN and no glab; reading anonymously",
+              file=sys.stderr)
+        return Client(None, out)
+    return Client(None, out, http=glab_get)
 
 
 # --- self-test ---------------------------------------------------------------
@@ -634,6 +665,16 @@ def self_test() -> int:
         cur["projects"]["rurl"] = {"status": "ok", "job_minutes": 40.0}
         check("compare shows -60%", "-60.0%" in render_compare(base, cur))
 
+        # glab api --include parsing, including an empty X-Prev-Page.
+        status, headers, body = parse_include(
+            b"HTTP/2.0 200 OK\nX-Next-Page: 2\nX-Prev-Page: \n\n[{\"id\": 1}]", "x"
+        )
+        check("glab include parse", (status, headers.get("x-next-page"),
+                                     headers.get("x-prev-page"), json.loads(body))
+              == (200, "2", "", [{"id": 1}]))
+        status, _, _ = parse_include(b"HTTP/2.0 404 Not Found\n\n{}", "x")
+        check("glab include 404", status == 404)
+
     for label in failures:
         print(f"FAIL {label}", file=sys.stderr)
     print("self-test: " + ("FAILED" if failures else "ok"))
@@ -671,11 +712,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cached:
         client = CacheClient(args.out)
     else:
-        token = find_token()
-        if not token:
-            print("warning: no GITLAB_TOKEN and no glab token; reading anonymously",
-                  file=sys.stderr)
-        client = Client(token, args.out)
+        client = make_client(args.out)
     try:
         result = measure(client, since, until, None if args.cached else args.out)
     except ApiError as err:
