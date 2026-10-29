@@ -691,7 +691,26 @@ the config. A file that does not load, an unknown tag such as `!reference`, a
 value its tag cannot hold, a recursive alias, an `extends:` that names no
 block, or a `rules:if` that does not read (an empty one included) leaves every
 CI rule of that package not judged; the other areas are still judged.
-`include:` is not followed.
+
+It follows one include, fleet-ci's
+([ADR 0014](adr/0014-fleet-checker-follows-the-fleet-ci-include.md), amending
+ADR 0008), and no other. A `.gitlab-ci.yml` that includes fleet-ci's project
+is a migrated package, judged on the merged configuration: the template at
+the pinned SHA, with the package's file merged over it as GitLab merges an
+include, expanded locally (GitLab's CI lint is not asked). On that path alone
+`!reference` loads, kept unresolved. The include must be one entry,
+`templates/r-package.yml`, at a 40-hex SHA that a fleet-ci `v*` tag points
+at. `.fleet-ci/` must be byte for byte what fleet-ci's `bin/vendor` writes at
+that SHA, and `.fleet-ci.yml` must load as fleet-ci's classifier reads it
+there (`bin/classify --config-json`). This needs a fleet-ci clone
+(`--fleet-ci`, else `FLEET_CI_DIR`), git and Ruby; a SHA the clone lacks
+leaves that package's CI not judged. The self-test needs the same and fails
+without them unless `SEOR_SKIP_FLEET_CI_SELFTEST=1`, which skips the
+migrated rows, loudly. A package with any other include, or whose file does
+not load with `!reference` allowed, is read as above, its include not
+followed. Until every package migrates, the old-shape checks below stay
+(SEOR-jlsdnsjd), and a migrated package's `scripts/check-toolchain.R` is not
+compared with seor's copy (SEOR-bkwtrvhh).
 
 What it checks, section by section:
 
@@ -729,8 +748,8 @@ What it checks, section by section:
   in order, `Language: en-US`, a declared R floor, and
   `X-schema.org-keywords` with at least five tokens besides the four
   r-universe drops, and none of those four.
-- **CI, in the shape before ADR 0012.** The checker has not moved to the
-  tiers yet, so it still tests the CI an unmigrated package carries. It
+- **CI, in the shape before ADR 0012.** For a package that does not include
+  fleet-ci's template, it still tests the CI an unmigrated package carries. It
   evaluates `workflow:` and job `rules:` for a push to `main`, each
   schedule kind and a tag. On a push it looks for `R CMD check --as-cran`
   through `rcmdcheck` with `error_on = "warning"`, with incoming off only as
@@ -797,9 +816,16 @@ What it checks, section by section:
   at pre-push (its own `stages`, else `default_stages`, else every stage)
   runs `scripts/check-news.py` on `NEWS.md`, in its `entry` and `args` or in
   an R or shell script it calls; the self-test alone does not count, and the
-  port is not compared with seor's copy.
+  port is not compared with seor's copy. A migrated package's local gate is
+  fleet-ci's instead: its `.fleet-ci.yml`, validated as above, lists
+  `scripts/check-docs-drift.R` among the cheap gates and a URL check in a
+  gate list; the NEWS check is a pre-push hook or a gate;
+  `.pre-commit-config.yaml` has no `verify` hook and no hook running
+  `.fleet-ci/gate`; `.Rbuildignore` excludes `.fleet-ci` and `.fleet-ci.yml`.
 - **Schedules.** One active `deep-check` and one `dependency-audit` schedule,
-  on `main`, with `SCHEDULE_KIND` set on each schedule.
+  on `main`, with `SCHEDULE_KIND` set on each schedule. A migrated package
+  needs `deep-check` (and pagerankr `rurl-devel`); `dependency-audit` is no
+  longer required.
 
 It does not check whether a tag pipeline fails on "already on CRAN", how the
 URL check treats zero URLs or the `BugReports:` 404, how `security-audit`
