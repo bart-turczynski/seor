@@ -201,12 +201,14 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import urllib.error
 import urllib.parse
@@ -662,7 +664,21 @@ class CIError(Exception):
     """A .gitlab-ci.yml GitLab itself would refuse: its CI rules are not judged."""
 
 
-def load_ci(text: str) -> dict:
+class Reference(list):
+    """A `!reference [block, key, ...]`, kept unresolved: the fleet-ci template
+    and a migrated package's file may hold them (fleet_ci_include())."""
+
+
+if yaml is not None:
+    class ReferenceLoader(yaml.SafeLoader):
+        """SafeLoader that reads GitLab's `!reference` tag as a Reference;
+        every other unknown tag is still an error."""
+
+    ReferenceLoader.add_constructor(
+        "!reference", lambda loader, node: Reference(loader.construct_sequence(node, deep=True)))
+
+
+def load_ci(text: str, references: bool = False) -> dict:
     """The config mapping of a .gitlab-ci.yml, or CIError when GitLab would refuse it.
 
     Every failure to load is a CIError: a YAML error, an unknown tag, and also
@@ -670,10 +686,13 @@ def load_ci(text: str) -> dict:
     raises as a plain ValueError. The file is one document, or a header
     document holding only `spec:` (an include's inputs), `---`, then the
     config; an empty document (a trailing `---`) is no document. A node that contains itself (`a: &a [*a]`) is refused here, so
-    nothing downstream recurses into it.
+    nothing downstream recurses into it. `references` reads `!reference`
+    as a Reference instead of refusing it: only the migrated shape
+    (check_ci_migrated()) asks for that.
     """
     try:
-        documents = [document for document in yaml.safe_load_all(text) if document is not None]
+        loaded = yaml.load_all(text, Loader=ReferenceLoader) if references else yaml.safe_load_all(text)
+        documents = [document for document in loaded if document is not None]
     except Exception as error:  # noqa: BLE001 - any failure to load is a load error
         detail = str(error) if isinstance(error, yaml.YAMLError) else f"{type(error).__name__}: {error}"
         raise CIError(" ".join(detail.split())[:300]) from error
@@ -2769,7 +2788,8 @@ def check_audit_files(source, report: Report) -> None:
         report.gap("ci", f"audit jobs lack seor's disposition-row shape: missing {', '.join(missing)}")
 
 
-def check_ci(pkg: str, source, state: State, floor: str | None, report: Report, pins: PinReads | None = None) -> None:
+def check_ci(pkg: str, source, state: State, floor: str | None, report: Report, pins: PinReads | None = None,
+             fleet: FleetCI | None = None) -> None:
     text = source.read(".gitlab-ci.yml")
     if text is None:
         report.gap("ci", "no .gitlab-ci.yml")
@@ -2870,6 +2890,126 @@ def check_ci(pkg: str, source, state: State, floor: str | None, report: Report, 
 
     if pkg in FOSSA_PACKAGES and not any(re.search(r"\bfossa analyze\b", j.full_text) for j in ci.jobs.values()):
         report.gap("ci", "no fossa analyze job")
+
+
+# --- CI, migrated: a package that includes fleet-ci's template (ADR 0012) ----------
+
+FLEET_CI_PROJECT = f"{OWNER}/fleet-ci"
+FLEET_CI_TEMPLATE = "templates/r-package.yml"
+# The local fleet-ci clone the pinned SHA is read from: tags, the template,
+# bin/rules-sim, bin/vendor and the image Dockerfile, all at that SHA.
+FLEET_CI_DIR = Path(os.environ.get("FLEET_CI_DIR") or "~/Projects/fleet-ci").expanduser()
+FLEET_CI_DOCKERFILE = "image/fleet-r/Dockerfile"
+SHA_RE = re.compile(r"[0-9a-f]{40}")
+
+
+class FleetCIError(Exception):
+    """fleet-ci could not be read at a SHA: not judged, never a gap."""
+
+
+def git_env() -> dict[str, str]:
+    """The environment without GIT_*: a pre-push hook runs this with GIT_DIR
+    and friends pointing at seor, and a git command here must read only the
+    repository it names."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+
+
+class FleetCI:
+    """A fleet-ci clone, read-only, and what it holds at a commit.
+
+    Nothing here changes the clone: a SHA is checked out into a shared
+    clone of it in a temporary directory, where bin/vendor and bin/rules-sim
+    run (bin/vendor needs a git checkout, clean, to write VERSION). Each SHA
+    is checked out and vendored once per run; cleanup() removes them."""
+
+    def __init__(self, clone: Path):
+        self.clone = clone
+        self._root: Path | None = None
+        self._checkouts: dict[str, Path] = {}
+        self._vendored: dict[str, dict[str, bytes]] = {}
+        self._runs = 0
+
+    def git(self, *args: str, cwd: Path | None = None) -> str:
+        command = ["git", "-C", str(cwd or self.clone), *args]
+        try:
+            run = subprocess.run(command, capture_output=True, text=True, env=git_env(), timeout=120, check=False)  # noqa: S603
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise FleetCIError(f"git {' '.join(args)}: {error}") from error
+        if run.returncode:
+            raise FleetCIError(f"git {' '.join(args)}: {run.stderr.strip()[:200]}")
+        return run.stdout
+
+    def root(self) -> Path:
+        if self._root is None:
+            self._root = Path(tempfile.mkdtemp(prefix="fleet-ci-"))
+        return self._root
+
+    def has_commit(self, sha: str) -> bool:
+        if not (self.clone / ".git").exists() and not (self.clone / "HEAD").is_file():
+            raise FleetCIError(f"no fleet-ci clone at {self.clone} (set FLEET_CI_DIR or --fleet-ci)")
+        try:
+            self.git("cat-file", "-e", f"{sha}^{{commit}}")
+        except FleetCIError:
+            return False
+        return True
+
+    def v_tags(self, sha: str) -> list[str]:
+        """The v* tags that point at `sha`, lightweight or annotated."""
+        return self.git("tag", "--list", "v*", "--points-at", sha).split()
+
+    def checkout(self, sha: str) -> Path:
+        if sha not in self._checkouts:
+            dest = self.root() / sha
+            self.git("clone", "--quiet", "--shared", "--no-checkout", str(self.clone), str(dest), cwd=self.root())
+            self.git("checkout", "--quiet", "--detach", sha, cwd=dest)
+            self._checkouts[sha] = dest
+        return self._checkouts[sha]
+
+    def read(self, sha: str, path: str) -> str | None:
+        target = self.checkout(sha) / path
+        return target.read_text(encoding="utf-8", errors="replace") if target.is_file() else None
+
+    def vendored(self, sha: str) -> dict[str, bytes]:
+        """What fleet-ci's bin/vendor writes into a package's .fleet-ci/ at
+        `sha`, by file name: it runs on a scratch package."""
+        if sha not in self._vendored:
+            checkout = self.checkout(sha)
+            package = self.root() / f"package-{sha}"
+            package.mkdir()
+            (package / "DESCRIPTION").write_text("Package: fixture\n", encoding="utf-8")
+            (package / ".Rbuildignore").write_text("^\\.fleet-ci$\n^\\.fleet-ci\\.yml$\n", encoding="utf-8")
+            try:
+                run = subprocess.run([str(checkout / "bin" / "vendor"), str(package)], capture_output=True, text=True,  # noqa: S603
+                                     env=git_env(), timeout=120, check=False)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise FleetCIError(f"bin/vendor: {error}") from error
+            if run.returncode:
+                raise FleetCIError(f"bin/vendor exited {run.returncode}: {run.stderr.strip()[:200]}")
+            written = package / ".fleet-ci"
+            self._vendored[sha] = {path.relative_to(written).as_posix(): path.read_bytes()
+                                   for path in sorted(written.rglob("*")) if path.is_file()}
+        return self._vendored[sha]
+
+    def rules_sim(self, sha: str, text: str) -> tuple[int, str, str]:
+        """bin/rules-sim at `sha` on a package's .gitlab-ci.yml text, every
+        context: (exit status, stdout, stderr). It reads YAML with Ruby."""
+        if shutil.which("ruby") is None:
+            raise FleetCIError("bin/rules-sim reads YAML with Ruby (bin/yaml2json), and ruby is not on PATH")
+        checkout = self.checkout(sha)
+        self._runs += 1
+        consumer = self.root() / f"consumer-{self._runs}.yml"
+        consumer.write_text(text, encoding="utf-8")
+        try:
+            run = subprocess.run([sys.executable, str(checkout / "bin" / "rules-sim"), "--fleet-ci", str(checkout),  # noqa: S603
+                                  str(consumer)], capture_output=True, text=True, env=git_env(), timeout=120, check=False)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise FleetCIError(f"bin/rules-sim: {error}") from error
+        return run.returncode, run.stdout, run.stderr
+
+    def cleanup(self) -> None:
+        if self._root is not None:
+            shutil.rmtree(self._root, ignore_errors=True)
+        self._root, self._checkouts, self._vendored = None, {}, {}
 
 
 @cache
@@ -3079,8 +3219,9 @@ def check_schedules(state: State, report: Report) -> None:
 
 def check_repo(pkg: str, source, state: State,
                fetch: Callable[[str], tuple[int, str, bytes]] | None = None,
-               pins: PinReads | None = None) -> Report:
-    """One package's report. `pins` is check_pandoc_pin()'s: the pin reads made already, or None."""
+               pins: PinReads | None = None, fleet: FleetCI | None = None) -> Report:
+    """One package's report. `pins` is check_pandoc_pin()'s: the pin reads made already, or None.
+    `fleet` is the fleet-ci clone a migrated package's pin is read from (FLEET_CI when None)."""
     report = Report(pkg)
     for area, error in state.errors:
         report.skip(area, f"probe failed: {error}", incomplete=True)
@@ -3093,7 +3234,7 @@ def check_repo(pkg: str, source, state: State,
     check_logo(pkg, source, report)
     check_files(source, report)
     floor = check_description(pkg, source, state, report)
-    check_ci(pkg, source, state, floor, report, pins)
+    check_ci(pkg, source, state, floor, report, pins, fleet)
     check_local_gate(source, report)
     check_news_rule(source, report)
     check_docs_drift_copy(source, report)
@@ -3356,6 +3497,121 @@ def fixture_state(on_cran: bool = True, release: bool = True, doi: bool = True, 
     )
 
 
+# The fixture fleet-ci (fixture_fleet_ci()) is this commit's tree from the
+# local clone (FLEET_CI_DIR), committed afresh in a scratch repository and
+# tagged there, so the real template, bin/rules-sim and bin/vendor run on it.
+FLEET_CI_FIXTURE_BASE = "a326159eca0a776e13f817ad82fbf24c0f3d9925"
+
+# A migrated package's whole .gitlab-ci.yml: the include, the floor leg's
+# settings, two x-* jobs (one through !reference), then `variables` and
+# `jobs` a row adds.
+FIXTURE_CONSUMER_CI = """\
+include:
+  - project: bart-turczynski/fleet-ci
+    ref: {ref}
+    file: templates/r-package.yml
+
+variables:
+  FLEET_FLOOR_R: "4.1.3"
+  FLEET_FLOOR_SNAPSHOT: "https://packagemanager.posit.co/cran/2025-04-10"
+{variables}
+x-check-idn2:
+  extends: .t2-job
+  image: $FLEET_RELEASE_IMAGE
+  variables:
+    FLEET_RELEASE_VARIANT: fleet-r-idn2
+  before_script:
+    - !reference [.fleet-r, before_script]
+  script:
+    - !reference [.fleet-scripts, check]
+
+x-renovate:
+  extends: .schedule-job
+  image: alpine:3
+  variables:
+    FLEET_JOB_SCHEDULE: deep-check
+  script:
+    - echo renovate
+{jobs}"""
+
+FIXTURE_RURL_DEVEL_JOB = """
+x-rurl-devel:
+  extends: .schedule-job
+  image: alpine:3
+  variables:
+    FLEET_JOB_SCHEDULE: rurl-devel
+  script:
+    - echo rurl devel
+"""
+
+FIXTURE_FOSSA_JOB = """
+x-fossa:
+  extends: .t2-job
+  image: alpine:3
+  script:
+    - fossa analyze
+"""
+
+
+def fixture_consumer(ref: str, variables: str = "", jobs: str = "") -> str:
+    return FIXTURE_CONSUMER_CI.format(ref=ref, variables=variables, jobs=jobs)
+
+
+def fixture_fleet_ci(dest: Path) -> dict[str, str]:
+    """A fixture fleet-ci repository at `dest`, built from FLEET_CI_DIR's
+    tree at FLEET_CI_FIXTURE_BASE; its commits by name, each on a branch of
+    that name. `v1` is that tree, tagged v1.0.0; `untagged` an empty commit
+    on it with no tag; and, each on `v1` and tagged, `no-locale` (v1.0.1) the
+    template without t2-locale, `pandoc` (v1.0.2) fleet-r's Dockerfile on
+    pandoc 3.9, `no-rurl-coverage` (v1.0.3) coverage without the rurl-devel
+    events. FleetCIError when the clone or the commit is missing."""
+    if not FleetCI(FLEET_CI_DIR).has_commit(FLEET_CI_FIXTURE_BASE):
+        raise FleetCIError(f"the fleet-ci clone at {FLEET_CI_DIR} lacks {FLEET_CI_FIXTURE_BASE}")
+    try:
+        archive = subprocess.run(["git", "-C", str(FLEET_CI_DIR), "archive", "--format=tar", FLEET_CI_FIXTURE_BASE],  # noqa: S607
+                                 capture_output=True, env=git_env(), timeout=120, check=True)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise FleetCIError(f"git archive {FLEET_CI_FIXTURE_BASE}: {error}") from error
+    dest.mkdir(parents=True)
+    with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+        tar.extractall(dest, filter="data")
+    repo = FleetCI(dest)
+    config = ("-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+              "-c", "tag.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "init.defaultBranch=main")
+    shas: dict[str, str] = {}
+
+    def commit(name: str, tag: str | None) -> None:
+        repo.git(*config, "add", "-A")
+        repo.git(*config, "commit", "--quiet", "--allow-empty", "-m", name)
+        shas[name] = repo.git("rev-parse", "HEAD").strip()
+        repo.git(*config, "branch", "--force", name, shas[name])
+        if tag:
+            repo.git(*config, "tag", tag, shas[name])
+
+    def variant(name: str, tag: str | None, path: str, edit: Callable[[str], str]) -> None:
+        repo.git(*config, "checkout", "--quiet", "--detach", shas["v1"])
+        target = dest / path
+        old = target.read_text(encoding="utf-8")
+        new = edit(old)
+        if new == old:
+            raise FleetCIError(f"fixture edit of {path} for {name} changed nothing")
+        target.write_text(new, encoding="utf-8")
+        commit(name, tag)
+
+    repo.git(*config, "init", "--quiet")
+    commit("v1", "v1.0.0")
+    variant("untagged", None, "README.md", lambda text: text + "\nAn untagged commit.\n")
+    variant("no-locale", "v1.0.1", FLEET_CI_TEMPLATE,
+            lambda text: re.sub(r"(?ms)^t2-locale:\n.*?(?=^# Coverage through)", "", text))
+    variant("pandoc", "v1.0.2", FLEET_CI_DOCKERFILE,
+            lambda text: text.replace("ARG PANDOC_VERSION=3.10\n", "ARG PANDOC_VERSION=3.9\n"))
+    variant("no-rurl-coverage", "v1.0.3", FLEET_CI_TEMPLATE,
+            lambda text: text.replace("    - !reference [.fleet-events, rurl-devel-idn2]\n"
+                                      "    - !reference [.fleet-events, rurl-devel]\n", ""))
+    repo.git(*config, "checkout", "--quiet", "--detach", shas["v1"])
+    return shas
+
+
 Judge = Callable[[Report], None]
 
 
@@ -3365,11 +3621,12 @@ def self_test() -> list[str]:
     .gitlab-ci.yml's pin in one Rscript run, not one per fixture
     (SEOR-xhyrogfm), and each row is checked with that read and judged."""
     failures: list[str] = []
-    queued: list[tuple[str, DictSource, State, object, Judge]] = []
+    queued: list[tuple[str, DictSource, State, object, Judge, FleetCI | None]] = []
 
-    def run(pkg: str, files: dict | DictSource, state: State, fetch=None, judge: Judge | None = None) -> None:
+    def run(pkg: str, files: dict | DictSource, state: State, fetch=None, judge: Judge | None = None,
+            fleet: FleetCI | None = None) -> None:
         source = files if isinstance(files, DictSource) else DictSource(files)
-        queued.append((pkg, source, state, fetch, judge or (lambda report: None)))
+        queued.append((pkg, source, state, fetch, judge or (lambda report: None), fleet))
 
     def loads(tag: str, report: Report) -> None:
         # A fixture GitLab would refuse leaves CI not judged, and a clean
@@ -4690,6 +4947,137 @@ def self_test() -> list[str]:
 
     run("punycoder", cran, State(), judge=no_state_gaps)
 
+    # A migrated package (ADR 0012): .gitlab-ci.yml includes fleet-ci's
+    # template, pinned by SHA, and is judged on the merged configuration,
+    # bin/rules-sim and bin/vendor at that SHA, read from a fixture fleet-ci
+    # built from the local clone (fixture_fleet_ci()).
+    fixture_dir = Path(tempfile.mkdtemp(prefix="fleet-ci-fixture-"))
+    fixture_fleet: FleetCI | None = FleetCI(fixture_dir / "fleet-ci")
+    try:
+        shas = fixture_fleet_ci(fixture_fleet.clone)
+    except FleetCIError as error:
+        failures.append(f"the fixture fleet-ci was not built ({error}), so no migrated row ran")
+        shas, fixture_fleet = {}, None
+    if shas and fixture_fleet is not None:
+        fleet = fixture_fleet
+        v1 = shas["v1"]
+
+        def migrated_repo(pkg: str, ref: str = v1, variables: str = "", jobs: str = "") -> dict:
+            files = fixture_repo(pkg)
+            files[".gitlab-ci.yml"] = fixture_consumer(ref, variables, jobs)
+            vendored = fleet.vendored(ref if SHA_RE.fullmatch(ref) else v1)
+            files.update({f".fleet-ci/{name}": body for name, body in vendored.items()})
+            return files
+
+        def migrated(tag: str, pkg: str, files: dict, needles: tuple[str, ...] = (), absent: str | None = None,
+                     state: State | None = None) -> None:
+            """A migrated row: no gap at all when `needles` and `absent` are
+            both unset; else a gap holding each needle, and none holding
+            `absent`. Its CI is judged in full: nothing left not judged."""
+            def judge(report: Report) -> None:
+                loads(tag, report)
+                unjudged = [text for area, text in report.unjudged if area == "ci"]
+                if unjudged:
+                    failures.append(f"{tag}: CI left not judged: {unjudged}")
+                if not needles and absent is None and report.gaps:
+                    failures.append(f"{tag}: expected no gaps, got {report.gaps}")
+                for needle in needles:
+                    if not any(needle in text for _, text in report.gaps):
+                        failures.append(f"{tag}: expected a gap containing {needle!r}, got {report.gaps}")
+                if absent is not None and any(absent in text for _, text in report.gaps):
+                    failures.append(f"{tag}: expected no gap containing {absent!r}, got {report.gaps}")
+            run(pkg, files, state or fixture_state(), judge=judge, fleet=fleet)
+
+        migrated("migrated, pinned to the commit v1.0.0 points at", "punycoder", migrated_repo("punycoder"))
+        migrated("migrated pagerankr with its rurl-devel suite", "pagerankr",
+                 migrated_repo("pagerankr", jobs=FIXTURE_RURL_DEVEL_JOB))
+        migrated("migrated, FOSSA package with x-fossa", "seor", migrated_repo("seor", jobs=FIXTURE_FOSSA_JOB),
+                 absent="fossa analyze")
+        migrated("migrated, FOSSA package without x-fossa", "seor", migrated_repo("seor"),
+                 needles=("no x-* job runs `fossa analyze`",))
+        # The pin: a SHA that a v* tag points at.
+        untagged = shas["untagged"]
+        migrated("pinned to a commit no v* tag points at", "punycoder", migrated_repo("punycoder", ref=untagged),
+                 needles=(f"no v* tag points at {untagged}",))
+        for ref in ("main", "v1.0.0"):
+            migrated(f"include ref {ref}, not a SHA", "punycoder", migrated_repo("punycoder", ref=ref),
+                     needles=(f"ref {ref!r} is not a 40-hex commit SHA",))
+        # .fleet-ci/ is what bin/vendor writes at the pinned SHA, byte for byte.
+        files = migrated_repo("punycoder")
+        files[".fleet-ci/gate"] = files[".fleet-ci/gate"] + b"# a local edit\n"
+        migrated("a vendored .fleet-ci file edited", "punycoder", files,
+                 needles=(".fleet-ci/gate differs from what fleet-ci's bin/vendor writes",))
+        files = migrated_repo("punycoder")
+        files[".fleet-ci/notes.txt"] = "x\n"
+        del files[".fleet-ci/VERSION"]
+        migrated("a .fleet-ci file vendor does not write, and one missing", "punycoder", files,
+                 needles=(".fleet-ci/notes.txt is not written by fleet-ci's bin/vendor",
+                          ".fleet-ci/VERSION is missing"))
+        # The event table is the template's: no rules, when or workflow.
+        migrated("a template job's rules overridden", "punycoder",
+                 migrated_repo("punycoder", jobs="\ncoverage:\n  rules:\n    - when: always\n"),
+                 needles=("writes `rules` at coverage", "redefines template job `coverage`", "bin/rules-sim at"))
+        migrated("the template's events overridden", "punycoder",
+                 migrated_repo("punycoder", jobs="\n.fleet-events:\n  t2:\n    - when: always\n"),
+                 needles=("overrides the template's hidden key `.fleet-events`",))
+        migrated("workflow overridden", "punycoder",
+                 migrated_repo("punycoder", jobs="\nworkflow:\n  rules:\n    - when: always\n"),
+                 needles=("overrides `workflow`",))
+        migrated("a job-level when", "punycoder",
+                 migrated_repo("punycoder", jobs="\nx-notes:\n  extends: .t3-job\n  image: alpine:3\n  when: manual\n"
+                                                 "  script:\n    - echo notes\n"),
+                 needles=("x-notes: a job-level `when`",))
+        migrated("an x-* job extending a list", "punycoder",
+                 migrated_repo("punycoder", jobs="\nx-two:\n  extends: [.t2-job]\n  image: alpine:3\n"
+                                                 "  script:\n    - echo two\n"),
+                 needles=("x-two: extends ['.t2-job'], not exactly one of",))
+        migrated("a job outside the fixed set and x-*", "punycoder",
+                 migrated_repo("punycoder", jobs="\nlint:\n  extends: .t2-job\n  image: alpine:3\n"
+                                                 "  script:\n    - echo lint\n"),
+                 needles=("job `lint` is outside ADR 0012's 13 names and the x-* prefix",))
+        # The job set: ADR 0012's 13, in the template at the pinned SHA.
+        migrated("a template missing a T2 job", "punycoder", migrated_repo("punycoder", ref=shas["no-locale"]),
+                 needles=("lacks t2-locale, of ADR 0012's 13 jobs", "the deep-check pipeline lacks t2-locale"))
+        # Switches off only where the package lacks the capability.
+        off = '  FLEET_SANITIZERS: "false"\n'
+        files = migrated_repo("punycoder", variables=off)
+        files["src/punycode.c"] = "int punycode;\n"
+        migrated("sanitizers off in a package with src/", "punycoder", files,
+                 needles=('FLEET_SANITIZERS is "false", but the package has compiled code',))
+        migrated("sanitizers off in a package without src/", "punycoder", migrated_repo("punycoder", variables=off))
+        floor_off = '  FLEET_FLOOR: "false"\n'
+        migrated("the floor off with no reason recorded", "punycoder", migrated_repo("punycoder", variables=floor_off),
+                 needles=('FLEET_FLOOR is "false" with no reason recorded',))
+        files = migrated_repo("punycoder", variables=floor_off)
+        files["ARCHITECTURE.md"] = "The floor leg is off (FLEET_FLOOR): the package has no R floor below 4.6.\n"
+        migrated("the floor off, its reason recorded", "punycoder", files)
+        files = migrated_repo("punycoder", variables='  FLEET_MANUAL: "false"\n')
+        files["ARCHITECTURE.md"] = "FLEET_MANUAL is off: no reason good enough.\n"
+        migrated("the manual off for a package on CRAN", "punycoder", files,
+                 needles=('FLEET_MANUAL is "false" for a package on CRAN',))
+        # The incoming settings: FLEET_INCOMING off in seor alone, the remote
+        # half in pslr alone (ADR 0004, carried forward).
+        incoming_off = '  FLEET_INCOMING: "false"\n'
+        migrated("incoming off outside seor", "punycoder", migrated_repo("punycoder", variables=incoming_off),
+                 needles=('FLEET_INCOMING is "false"',))
+        migrated("incoming off in seor", "seor", migrated_repo("seor", variables=incoming_off, jobs=FIXTURE_FOSSA_JOB),
+                 absent="FLEET_INCOMING")
+        remote_off = '  FLEET_INCOMING_REMOTE: "false"\n'
+        migrated("remote incoming off outside pslr", "punycoder", migrated_repo("punycoder", variables=remote_off),
+                 needles=('FLEET_INCOMING_REMOTE is "false"',))
+        migrated("remote incoming off in pslr", "pslr", migrated_repo("pslr", variables=remote_off),
+                 absent="FLEET_INCOMING_REMOTE")
+        # The pandoc pin lives in the image: fleet-r's Dockerfile at the SHA.
+        migrated("an image on another pandoc", "punycoder", migrated_repo("punycoder", ref=shas["pandoc"]),
+                 needles=(f"pins pandoc 3.9, not the fleet's {PANDOC_PIN}",))
+        # pagerankr's rurl-devel is the one schedule exception, and carries coverage.
+        migrated("a rurl-devel pipeline without coverage", "pagerankr",
+                 migrated_repo("pagerankr", ref=shas["no-rurl-coverage"], jobs=FIXTURE_RURL_DEVEL_JOB),
+                 needles=("the rurl-devel schedule's pipeline does not run coverage",))
+        migrated("a rurl-devel suite outside pagerankr", "punycoder",
+                 migrated_repo("punycoder", jobs=FIXTURE_RURL_DEVEL_JOB),
+                 needles=("the only schedule exception is pagerankr's rurl-devel",))
+
     # The pin reader's Rscript reads the user's .Renviron, where a library
     # holding yaml may be set, and not the user's .Rprofile, whose output
     # would mix into what it prints.
@@ -4709,11 +5097,16 @@ def self_test() -> list[str]:
         failures.append(f"the pin reader's Rscript flags: expected ~/.Renviron read and ~/.Rprofile not, got {probe!r}")
     # Every row is built: read their pins in one Rscript run, then judge them.
     try:
-        pins = read_pandoc_assignments([source.read(".gitlab-ci.yml") or "" for _, source, _, _, _ in queued])
-    except ProbeError as error:
-        return [f"the pandoc pin reader did not run: {error}"]
-    for pkg, source, state, fetch, judge in queued:
-        judge(check_repo(pkg, source, state, fetch, pins))
+        try:
+            pins = read_pandoc_assignments([source.read(".gitlab-ci.yml") or "" for _, source, _, _, _, _ in queued])
+        except ProbeError as error:
+            return [f"the pandoc pin reader did not run: {error}"]
+        for pkg, source, state, fetch, judge, fleet in queued:
+            judge(check_repo(pkg, source, state, fetch, pins, fleet))
+    finally:
+        if fixture_fleet is not None:
+            fixture_fleet.cleanup()
+        shutil.rmtree(fixture_dir, ignore_errors=True)
     return failures
 
 
