@@ -63,9 +63,10 @@ followed; this ADR is the correction, as
 ## Consequences
 
 - Judging a migrated package needs a fleet-ci clone with its `v*` tags, git
-  and Ruby, on top of PyYAML. A clone that lacks the pinned SHA leaves that
-  package's CI not judged and the run incomplete, so a stale clone is
-  reported, never read as a pass.
+  and Ruby, on top of PyYAML. A pinned SHA the clone lacks is a gap (an
+  unknown fleet-ci commit: fetch the clone) and leaves the rest of that
+  package's CI not judged, so a stale clone is reported, never read as a
+  pass.
 - fleet-ci is private ([ADR 0013](0013-fleet-ci-is-private.md)), so only a
   machine that can read fleet-ci can judge a migrated package.
 - The check is transitional. Both shapes are judged until every package

@@ -704,7 +704,8 @@ at. `.fleet-ci/` must be byte for byte what fleet-ci's `bin/vendor` writes at
 that SHA, and `.fleet-ci.yml` must load as fleet-ci's classifier reads it
 there (`bin/classify --config-json`). This needs a fleet-ci clone
 (`--fleet-ci`, else `FLEET_CI_DIR`), git and Ruby; a SHA the clone lacks
-leaves that package's CI not judged. The self-test needs the same and fails
+is a gap (an unknown fleet-ci commit) and leaves the rest of that package's
+CI not judged. The self-test needs the same and fails
 without them unless `SEOR_SKIP_FLEET_CI_SELFTEST=1`, which skips the
 migrated rows, loudly. A package with any other include, or whose file does
 not load with `!reference` allowed, is read as above, its include not
