@@ -43,8 +43,12 @@ dependencies and (2) attach them all on `library(seor)`.
   mirroring a GitLab repo to GitHub as proven on the eight R packages, and
   [`design/badges.md`](design/badges.md). What every member carries (badges,
   CI, schedules, files, `DESCRIPTION` fields) is `design/fleet-standard.md`;
-  [ADR 0007](design/adr/0007-one-fleet-standard-for-badges-and-checks.md)
-  records its load-bearing choices.
+  [ADR 0012](design/adr/0012-verification-tiers-replace-per-push-ci.md),
+  which supersedes ADR 0007, records its load-bearing choices: verification
+  tiers instead of per-push CI, with each package's CI moving to fleet-ci's
+  shared template, pinned by SHA.
+  [ADR 0013](design/adr/0013-fleet-ci-is-private.md) amends it: fleet-ci is
+  private, so its template and images need authenticated reads.
 - `scripts/` — repository hygiene checks that run from the pre-push hook and CI.
   `check-design.py` owns design-doc hygiene; `check-citation.py` owns the
   agreement between `CITATION.cff`, `.zenodo.json` and `DESCRIPTION`. Both are
@@ -73,7 +77,11 @@ dependencies and (2) attach them all on `library(seor)`.
   [ADR 0006](design/adr/0006-non-r-citation-metadata-has-its-own-gate.md)
   for why it is not part of `check-citation.py`.
   `check-fleet-standard.py` is not stdlib-only: it reads CI with PyYAML
-  ([ADR 0008](design/adr/0008-fleet-checker-reads-ci-with-pyyaml.md)).
+  ([ADR 0008](design/adr/0008-fleet-checker-reads-ci-with-pyyaml.md)). It
+  follows one include, fleet-ci's template at a `v*`-tagged SHA, expanded
+  locally from a fleet-ci clone, and no other
+  ([ADR 0014](design/adr/0014-fleet-checker-follows-the-fleet-ci-include.md),
+  amending ADR 0008).
   `check-toolchain.R`, which every member vendors, is not base R only either:
   it reads the pandoc pin in `.gitlab-ci.yml` with the yaml package
   ([ADR 0009](design/adr/0009-check-toolchain-reads-the-ci-pin-with-yaml.md)),
@@ -111,10 +119,13 @@ dependencies and (2) attach them all on `library(seor)`.
   Incoming always ERRORs for a metapackage whose members are off CRAN, so
   `_R_CHECK_CRAN_INCOMING_ = "false"` is deliberate and is not to be removed to
   fix a red gate. Every other repository in the fleet runs the check, because it
-  is what surfaces dead `URL:`/`BugReports:` links — see
-  [ADR 0004](design/adr/0004-cran-incoming-runs-everywhere-except-seor.md) for
-  the boundary and how the rule is enforced across seven different gate
-  implementations.
+  is what surfaces dead `URL:`/`BugReports:` links. The exception was decided
+  in [ADR 0004](design/adr/0004-cran-incoming-runs-everywhere-except-seor.md),
+  now superseded by
+  [ADR 0012](design/adr/0012-verification-tiers-replace-per-push-ci.md), which
+  carries seor's exception forward: once seor moves to fleet-ci's template it
+  is `FLEET_INCOMING="false"` in the T2 and T3 runs, and the local gate runs no
+  incoming check at all.
 - **seor's cheap CI jobs are deliberately not folded into one.** The fleet folded
   its cheap verify jobs into a single `gates` job to buy wall time; seor did not,
   because fixing the cache took the six jobs a merge pipeline runs here from
@@ -122,10 +133,12 @@ dependencies and (2) attach them all on `library(seor)`.
   [ADR 0005](design/adr/0005-cheap-ci-jobs-fold-into-one-gates-job.md) for the
   decision and its boundary, and
   [ADR 0003](design/adr/0003-fleet-ci-runs-on-self-hosted-runners.md) for the
-  cache mechanism. Two standing rules from ADR 0005 apply here even though seor
-  was not folded: never fold jobs for compute reasons, and a job carrying its own
-  `image:` cannot be folded into one that does not — `glab ci lint` passes on
-  that bug.
+  cache mechanism. ADR 0005 is superseded by ADR 0012, which replaces these
+  per-push jobs once seor moves to fleet-ci's template. Until then its rules
+  apply here even though seor was not folded: never fold jobs for compute
+  reasons, and a job carrying its own `image:` cannot be folded into one that
+  does not — `glab ci lint` passes on that bug. ADR 0012 carries the second
+  forward.
 
 ## Membership and CRAN status
 
