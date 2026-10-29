@@ -1262,13 +1262,29 @@ pinned_pandoc <- function(lines) {
   pins
 }
 
-read_pandoc_pin <- function(root) {
-  path <- file.path(root, ".gitlab-ci.yml")
-  if (!file.exists(path)) {
+# The files of the package at `root`, as a function of a path relative to
+# it: the file's lines, or NULL when there is no file. The self-test hands
+# pandoc_pin() a list in its place, so it reads fixture packages without I/O.
+package_files <- function(root) {
+  function(path) {
+    full <- file.path(root, path)
+    if (!file.exists(full)) {
+      return(NULL)
+    }
+    readLines(full, warn = FALSE)
+  }
+}
+
+# The pandoc pins of the package whose files `read` returns (package_files()).
+pandoc_pin <- function(read) {
+  lines <- read(".gitlab-ci.yml")
+  if (is.null(lines)) {
     return(character())
   }
-  pinned_pandoc(readLines(path, warn = FALSE))
+  pinned_pandoc(lines)
 }
+
+read_pandoc_pin <- function(root) pandoc_pin(package_files(root))
 
 # The version build_readme() renders with, as rmarkdown chooses it: the NEWEST
 # pandoc among RSTUDIO_PANDOC, PATH and ~/opt/pandoc. NA when rmarkdown is
@@ -2876,6 +2892,61 @@ self_test <- function() {
     "pandoc-two-pins",
     check_pandoc(c("3.10", "3.9"), "3.10"),
     "more than once"
+  )
+
+  # Whole packages: check 4 on the files `...` hold, by path, with the local
+  # pandoc `installed`, as run_checks() runs it. The local pandoc is faked by
+  # passing it, as check_pandoc() takes it.
+  package <- function(...) {
+    files <- list(...)
+    function(path) files[[path]]
+  }
+  pandoc_problems <- function(files, installed) {
+    check_pandoc(pandoc_pin(files), installed)
+  }
+  ci_include <- c(
+    "include:",
+    "  - project: bart-turczynski/fleet-ci",
+    "    ref: a326159eca0a776e13f817ad82fbf24c0f3d9925",
+    "    file: templates/r-package.yml"
+  )
+  sha <- "a326159eca0a776e13f817ad82fbf24c0f3d9925"
+  case(
+    "package: no .gitlab-ci.yml, not checked",
+    !length(pandoc_problems(package(DESCRIPTION = "Package: x"), "3.11"))
+  )
+  case(
+    "package: CI never names PANDOC_VERSION, not checked",
+    !length(pandoc_problems(package(`.gitlab-ci.yml` = job("echo")), "3.11"))
+  )
+  case(
+    "package: the CI pin matches",
+    !length(pandoc_problems(package(`.gitlab-ci.yml` = global), "3.10"))
+  )
+  mismatch <- pandoc_problems(package(`.gitlab-ci.yml` = global), "3.11")
+  case(
+    "package: the CI pin differs",
+    length(mismatch) == 1L &&
+      grepl(
+        "rmarkdown uses 3.11, .gitlab-ci.yml pins 3.10",
+        mismatch,
+        fixed = TRUE
+      )
+  )
+  absent <- pandoc_problems(package(`.gitlab-ci.yml` = global), NA_character_)
+  case(
+    "package: no local pandoc",
+    length(absent) == 1L &&
+      grepl("but .gitlab-ci.yml pins pandoc 3.10", absent, fixed = TRUE)
+  )
+  # A package migrated to fleet-ci (ADR 0012) names no PANDOC_VERSION in
+  # .gitlab-ci.yml: its pandoc is the fleet-ci image's.
+  case(
+    "package: migrated, not checked",
+    !length(pandoc_problems(
+      package(`.gitlab-ci.yml` = ci_include, `.fleet-ci/VERSION` = sha),
+      "3.11"
+    ))
   )
 
   paste0(
