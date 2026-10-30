@@ -382,7 +382,21 @@ def check_repo(root: Path) -> list[str]:
 
 # Cases that pin a known gap still open in check_repo(). A listed case must
 # fail; one that passes fails the self-test, so a fix has to drop its tag.
-XFAIL: frozenset[str] = frozenset()
+XFAIL: frozenset[str] = frozenset(
+    {
+        # SEOR-sgfvtzps, the review of fix/bugreports-hardening.
+        "legacy-issues-smart-quotes",
+        "legacy-issues-ellipsis",
+        "legacy-issues-html-entity",
+        "legacy-issues-issue-notes",
+        "legacy-issues-service-desk",
+        "legacy-issues-repo-paths",
+        "url-www-host",
+        "bugreports-www-host",
+        "bugreports-mixed-case-host",
+        "bugreports-dotgit-no-gitlab-url",
+    }
+)
 
 
 def _fixture(
@@ -816,6 +830,47 @@ def self_test() -> None:
             human=with_file("README.md", f"See https://gitlab.com/bart-turczynski/fixture/{suffix}"),
         )
 
+    # NEGATIVE: the legacy path followed by a character no ASCII delimiter
+    # list foresees: smart quotes, an ellipsis, an HTML entity, a note on an
+    # issue, the service desk.
+    for tag, text in (
+        ("smart-quotes", "See “https://gitlab.com/bart-turczynski/fixture/issues”."),
+        ("ellipsis", "See https://gitlab.com/bart-turczynski/fixture/issues..."),
+        ("html-entity", 'See <a href="https://gitlab.com/bart-turczynski/fixture/issues&amp;x=1">'),
+        ("issue-notes", "See https://gitlab.com/bart-turczynski/fixture/issues/42/notes"),
+        ("service-desk", "See https://gitlab.com/bart-turczynski/fixture/issues/service_desk"),
+    ):
+        expect_flagged(
+            f"legacy-issues-{tag}",
+            "README.md links a /-/issues form",
+            bugreports=work_items,
+            man_url=work_items,
+            human=with_file("README.md", text),
+        )
+
+    # POSITIVE: a folder or file named "issues" in a repository path, under
+    # blob/, tree/, raw/ or wikis/, with or without "/-/", is not the legacy
+    # /issues path.
+    expect_clean(
+        "legacy-issues-repo-paths",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file(
+            "README.md",
+            "\n".join(
+                f"See <https://gitlab.com/bart-turczynski/fixture/{path}>."
+                for path in (
+                    "blob/main/issues",
+                    "tree/main/issues/",
+                    "raw/main/docs/issues",
+                    "wikis/issues",
+                    "-/blob/main/issues",
+                    "-/tree/main/issues/",
+                )
+            ),
+        ),
+    )
+
     # POSITIVE: a subgroup project named "issues", and a repository file
     # named issues.md, are not the legacy /issues path.
     expect_clean(
@@ -842,24 +897,58 @@ def self_test() -> None:
             ),
         )
 
-    # POSITIVE: URL: names the repository on a www. or mixed-case host.
-    for tag, host in (("mixed-case", "https://GitLab.com"), ("www", "https://www.gitlab.com")):
-        expect_clean(
-            f"url-{tag}-host",
-            bugreports=work_items,
-            man_url=work_items,
-            human=human_target,
-            url=f"{host}/bart-turczynski/fixture",
-        )
+    # POSITIVE: URL: names the repository on a mixed-case host.
+    expect_clean(
+        "url-mixed-case-host",
+        bugreports=work_items,
+        man_url=work_items,
+        human=human_target,
+        url="https://GitLab.com/bart-turczynski/fixture",
+    )
 
-    # POSITIVE: BugReports: on a mixed-case host, the man page and
-    # codemeta.json naming the identical address.
+    # NEGATIVE: URL: or BugReports: on www.gitlab.com, which answers with a
+    # 308 permanent redirect that CRAN's URL check reports as moved.
+    www = "https://www.gitlab.com/bart-turczynski/fixture"
+    expect_flagged(
+        "url-www-host",
+        "www.gitlab.com",
+        only=True,
+        bugreports=work_items,
+        man_url=work_items,
+        human=human_target,
+        url=www,
+    )
+    expect_flagged(
+        "bugreports-www-host",
+        "www.gitlab.com",
+        only=True,
+        bugreports=f"{www}/-/work_items",
+        man_url=f"{www}/-/work_items",
+        human=with_file("codemeta.json", f'{{"issueTracker": "{www}/-/work_items"}}'),
+    )
+
+    # POSITIVE: BugReports: on a mixed-case host. The man page repeats it
+    # verbatim (roxygen2 copies it); codemeta.json may spell the host in
+    # lower case.
     upper = "https://GitLab.com/bart-turczynski/fixture/-/work_items"
     expect_clean(
         "bugreports-mixed-case-host",
         bugreports=upper,
         man_url=upper,
-        human=with_file("codemeta.json", f'{{"issueTracker": "{upper}"}}'),
+        human=human_target,
+    )
+
+    # NEGATIVE: codemeta.json differing from BugReports: in the path's case
+    # is another address.
+    expect_flagged(
+        "codemeta-path-case",
+        "codemeta.json issueTracker is",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file(
+            "codemeta.json",
+            '{"issueTracker": "https://gitlab.com/Bart-Turczynski/fixture/-/work_items"}',
+        ),
     )
 
     # NEGATIVE: BugReports: with a .git suffix is not the canonical address,
@@ -871,6 +960,17 @@ def self_test() -> None:
         bugreports=dotgit,
         man_url=dotgit,
         human=with_file("codemeta.json", f'{{"issueTracker": "{dotgit}"}}'),
+    )
+
+    # NEGATIVE: the same, with no gitlab.com repository in URL: to compare it
+    # against; BugReports: alone shows the suffix.
+    expect_flagged(
+        "bugreports-dotgit-no-gitlab-url",
+        "a .git suffix",
+        bugreports=dotgit,
+        man_url=dotgit,
+        human=with_file("codemeta.json", f'{{"issueTracker": "{dotgit}"}}'),
+        url="https://example.org/fixture",
     )
 
     # NEGATIVE: a file naming the tracker only with a .git suffix.
