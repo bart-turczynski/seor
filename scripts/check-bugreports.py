@@ -338,7 +338,24 @@ def check_repo(root: Path) -> list[str]:
 
 # Cases that pin a known gap still open in check_repo(). A listed case must
 # fail; one that passes fails the self-test, so a fix has to drop its tag.
-XFAIL: frozenset[str] = frozenset()
+XFAIL: frozenset[str] = frozenset(
+    {
+        # SEOR-sgfvtzps, MR !139's second-pass review.
+        "legacy-issues-lookalikes",
+        "work-items-mixed-case-host",
+        "work-items-www-host",
+        "url-mixed-case-host",
+        "url-www-host",
+        "bugreports-mixed-case-host",
+        "bugreports-dotgit",
+        "contributing-dotgit-work-items",
+        "latin1-description",
+        "latin1-man",
+        "latin1-contributing-md",
+        "own-tracker-underivable-once",
+        "own-label-canonical",
+    }
+)
 
 
 def _fixture(
@@ -350,6 +367,7 @@ def _fixture(
     url: str = "https://gitlab.com/bart-turczynski/fixture",
     package: str = "fixture",
     r_encoding: str = "utf-8",
+    latin1: tuple[str, ...] = (),
 ) -> Path:
     """A throwaway package; `seealso` picks the R/<pkg>-package.R shape.
 
@@ -361,6 +379,8 @@ def _fixture(
     puts a # comment after the sentinel, "package-accented" carries a
     non-ASCII character (write it with `r_encoding` "latin-1" to get a byte
     that is not UTF-8), and "no-sentinel" documents no "_PACKAGE" at all.
+    Each file named in `latin1` (DESCRIPTION, the man page as "man", or a
+    human-facing file) gains a line with a Latin-1 byte that is not UTF-8.
     """
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "DESCRIPTION").write_text(
@@ -396,6 +416,10 @@ def _fixture(
         path = directory / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+    for name in latin1:
+        path = man_dir / f"{package}-package.Rd" if name == "man" else directory / name
+        with path.open("ab") as handle:
+            handle.write("Maintainer-Note: Café Ltd.\n".encode("latin-1"))
     return directory
 
 
@@ -413,7 +437,12 @@ def self_test() -> None:
     def run(tag: str, **kwargs) -> list[str]:
         ran.add(tag)
         with tempfile.TemporaryDirectory() as tmp:
-            return check_repo(_fixture(Path(tmp) / tag, **kwargs))
+            # A crash is a finding too, so one case's traceback cannot hide
+            # every case after it.
+            try:
+                return check_repo(_fixture(Path(tmp) / tag, **kwargs))
+            except Exception as exc:  # noqa: BLE001
+                return [f"check_repo() raised {exc!r}"]
 
     def record(tag: str, ok: bool, detail: str) -> None:
         if tag in XFAIL:
@@ -429,10 +458,12 @@ def self_test() -> None:
         found = run(tag, **kwargs)
         record(tag, not found, f"expected clean, got {found}")
 
-    def expect_flagged(tag: str, needle: str, **kwargs) -> None:
+    def expect_flagged(tag: str, needle: str, only: bool = False, **kwargs) -> None:
+        """`only`: the needle's finding must be the sole one."""
         counts["negative"] += 1
         found = run(tag, **kwargs)
-        record(tag, any(needle in f for f in found), f"expected {needle!r}, got {found}")
+        ok = any(needle in f for f in found) and (len(found) == 1 or not only)
+        record(tag, ok, f"expected {'only ' if only else ''}{needle!r}, got {found}")
 
     human_target = {
         "codemeta.json": f'{{"issueTracker": "{work_items}"}}',
@@ -739,6 +770,124 @@ def self_test() -> None:
         bugreports=work_items,
         man_url=work_items,
         human={**human_target, ".gitlab/issue_templates/Bug.md": f"Search {issues} first."},
+    )
+
+    # NEGATIVE: the legacy path without "/-/" ending the URL, at a sentence's
+    # full stop, or followed by one issue, a query or a fragment.
+    for tag, suffix in (
+        ("end", "issues."),
+        ("trailing-slash", "issues/ today"),
+        ("one-issue", "issues/42"),
+        ("query", "issues?state=opened"),
+        ("fragment", "issues#top"),
+    ):
+        expect_flagged(
+            f"legacy-issues-{tag}",
+            "README.md links a /-/issues form",
+            bugreports=work_items,
+            man_url=work_items,
+            human=with_file("README.md", f"See https://gitlab.com/bart-turczynski/fixture/{suffix}"),
+        )
+
+    # POSITIVE: a subgroup project named "issues", and a repository file
+    # named issues.md, are not the legacy /issues path.
+    expect_clean(
+        "legacy-issues-lookalikes",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file(
+            "README.md",
+            "Tracker of a sibling: <https://gitlab.com/some-group/sub/issues/-/work_items>. "
+            "Notes: <https://gitlab.com/bart-turczynski/fixture/blob/main/docs/issues.md>.",
+        ),
+    )
+
+    # POSITIVE: a work_items link on a mixed-case or www. host is the same
+    # tracker, as it is for the /-/issues ban.
+    for tag, host in (("mixed-case", "https://GitLab.com"), ("www", "https://www.gitlab.com")):
+        expect_clean(
+            f"work-items-{tag}-host",
+            bugreports=work_items,
+            man_url=work_items,
+            human=with_file(
+                "CONTRIBUTING.md",
+                f"Report bugs at <{host}/bart-turczynski/fixture/-/work_items>.",
+            ),
+        )
+
+    # POSITIVE: URL: names the repository on a www. or mixed-case host.
+    for tag, host in (("mixed-case", "https://GitLab.com"), ("www", "https://www.gitlab.com")):
+        expect_clean(
+            f"url-{tag}-host",
+            bugreports=work_items,
+            man_url=work_items,
+            human=human_target,
+            url=f"{host}/bart-turczynski/fixture",
+        )
+
+    # POSITIVE: BugReports: on a mixed-case host, the man page and
+    # codemeta.json naming the identical address.
+    upper = "https://GitLab.com/bart-turczynski/fixture/-/work_items"
+    expect_clean(
+        "bugreports-mixed-case-host",
+        bugreports=upper,
+        man_url=upper,
+        human=with_file("codemeta.json", f'{{"issueTracker": "{upper}"}}'),
+    )
+
+    # NEGATIVE: BugReports: with a .git suffix is not the canonical address,
+    # though URL: may carry one.
+    dotgit = f"{org}.git/-/work_items"
+    expect_flagged(
+        "bugreports-dotgit",
+        "a .git suffix",
+        bugreports=dotgit,
+        man_url=dotgit,
+        human=with_file("codemeta.json", f'{{"issueTracker": "{dotgit}"}}'),
+    )
+
+    # NEGATIVE: a file naming the tracker only with a .git suffix.
+    expect_flagged(
+        "contributing-dotgit-work-items",
+        "CONTRIBUTING.md does not name the project's /-/work_items",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file("CONTRIBUTING.md", f"Report bugs at <{dotgit}>."),
+    )
+
+    # POSITIVE: DESCRIPTION, the man page and a human-facing file with a byte
+    # that is not UTF-8 (R allows `Encoding: latin1`).
+    for name in ("DESCRIPTION", "man", "CONTRIBUTING.md"):
+        expect_clean(
+            f"latin1-{name.lower().replace('.', '-')}",
+            bugreports=work_items,
+            man_url=work_items,
+            human=human_target,
+            latin1=(name,),
+        )
+
+    # NEGATIVE: URL: names no gitlab.com repository; reported once, not
+    # again as a BugReports: mismatch.
+    expect_flagged(
+        "own-tracker-underivable-once",
+        "own tracker can't be derived",
+        only=True,
+        bugreports=work_items,
+        man_url=work_items,
+        human=human_target,
+        url="https://example.org/fixture",
+    )
+
+    # NEGATIVE: the own tracker shown in a finding is the canonical address,
+    # without URL:'s .git suffix or its owner's capitals.
+    expect_flagged(
+        "own-label-canonical",
+        f"CONTRIBUTING.md does not name the project's /-/work_items tracker link ({work_items})",
+        bugreports="",
+        man_url=None,
+        seealso="none",
+        human=with_file("CONTRIBUTING.md", f"Report bugs at <{foreign}>."),
+        url="https://gitlab.com/Bart-Turczynski/fixture.git",
     )
 
     unknown = sorted(XFAIL - ran)
