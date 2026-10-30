@@ -86,9 +86,10 @@ dependencies and (2) attach them all on `library(seor)`.
   `check-fleet-standard.py` is not stdlib-only: it reads CI with PyYAML
   ([ADR 0008](design/adr/0008-fleet-checker-reads-ci-with-pyyaml.md)). It
   follows one include, fleet-ci's template at a `v*`-tagged SHA, expanded
-  locally from a fleet-ci clone, and no other
-  ([ADR 0014](design/adr/0014-fleet-checker-follows-the-fleet-ci-include.md),
-  amending ADR 0008).
+  locally from a fleet-ci clone, and no other; every package includes it,
+  and a file without it is a gap
+  ([ADR 0015](design/adr/0015-every-package-includes-fleet-ci.md),
+  superseding ADR 0014 and amending ADR 0008).
   `check-toolchain.R`, which every member vendors, is not base R only either:
   it reads the pandoc pin in `.gitlab-ci.yml` with the yaml package
   ([ADR 0009](design/adr/0009-check-toolchain-reads-the-ci-pin-with-yaml.md)),

@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded-by: 0015
 date: 2026-10-29
 tracking: SEOR-sehpgsww, SEOR-qgjkyppc
 ---

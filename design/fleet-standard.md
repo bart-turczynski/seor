@@ -270,136 +270,54 @@ package includes that template.
   read fleet-ci, the schedule owner for the weekly runs. Forks and outside
   contributors cannot run T1, T2 or T3.
 
-**pandoc 3.10, pinned in the shared R setup.** pandoc's markdown writer
-reflows text and pads tables differently between versions, so `README.md` is
+**pandoc 3.10, pinned in the fleet image.** pandoc's markdown writer reflows
+text and pads tables differently between versions, so `README.md` is
 byte-stable only under the pandoc that knit it, and the README drift gate is
 only as good as the pin (SEOR-egfbijyi). apt's pandoc on the CI images is
 3.1.3; it reported drift in seor's README that 3.10 does not write.
 
-- Every job that runs R installs pandoc 3.10 in the setup they share: the
-  `before_script` of the template every R job extends. seor's `.r` template
-  is the model. One job pinning it for the readme gate is not enough: the
-  check, `coverage` and `pages` jobs render with it too. Not in `default:`:
-  the install needs Debian, `dpkg` and `curl`, and `default:` hands it to
-  every job, including ones on other images (seor's `citation-version` runs
-  on `python:3.14-alpine`).
-- The version is recorded once, as the `PANDOC_VERSION` CI variable. A
-  second assignment with another value, in any job, is a defect even where it
-  would win: a shell assignment overrides `variables:` at run time, so which
-  value a job installs would depend on where each sits. It is written as a
-  plain scalar, `PANDOC_VERSION: "3.10"`, or a shell assignment, never in
-  GitLab's expanded form (a mapping with `value:`, block or flow), which
-  `check-toolchain.R` does not read: it stops and asks for the plain scalar.
-  It parses `.gitlab-ci.yml` with the R yaml package
-  ([ADR 0009](adr/0009-check-toolchain-reads-the-ci-pin-with-yaml.md)), so
-  a key in any mapping, quoted or not, block or flow, behind an alias or a
-  merge key, is read, and so is a shell assignment in a script item,
-  wherever sh starts a command (after `if`, `while`, `time` or a `case`
-  pattern too). An input a `spec:` header declares is not a variable. It
-  stops when the file does not load (a duplicate `PANDOC_VERSION` key
-  included, which GitLab reads as the last), and the same way when
-  `.gitlab-ci.yml` uses `$PANDOC_VERSION` but holds no pin it reads, such
-  as one only in an included file. And it stops on any `PANDOC_VERSION`
-  value set in a spelling it does not read, whatever pin it reads elsewhere
-  and even when the value matches: a block scalar, a `!reference`, an empty
-  or computed value, an `env`, `local`, `for` or `read` setting, or any
-  mention under `eval` but a use (`eval "echo $PANDOC_VERSION"` sets
-  nothing). A job's `env PANDOC_VERSION=3.9 sh install.sh` beside a global
-  `PANDOC_VERSION: "3.10"` would read as 3.10 while that command installs
-  3.9. A null value (`PANDOC_VERSION:` bare, `~` or `null`) sets no
-  version.
-- The `.deb` comes from the pandoc GitHub release
-  (`https://github.com/jgm/pandoc/releases/download/<version>/pandoc-<version>-1-<arch>.deb`),
-  and `sha256sum -c` checks it against the release's published digest before
-  `dpkg -i` installs it over apt's `pandoc`. The install has one of two
-  shapes, and each step runs only when the one before it succeeded:
-
-  - one script item holding `if <download to FILE> && <sha256sum -c of FILE>
-    && dpkg -i FILE; then apt-mark hold pandoc; …; else <warn>; fi`, on one
-    line or in a `- |` block, as seor's `.r` does; or
-  - three script items in that order: the download, the `sha256sum -c`, the
-    `dpkg -i`, and `apt-mark hold pandoc` in an item after them. GitLab ends
-    the job when an item fails, so a mismatch stops it before the install.
-
-  Each step is one command or one pipeline, read by its last command, whose
-  exit status is the pipeline's: `… | sha256sum -c -` is a check, `sha256sum
-  -c … | tee log` is not. The check reads the pinned digest line that names
-  FILE, the digest a literal or a variable: on stdin from `echo` or `printf`
-  (`echo "<digest>  FILE" | sha256sum -c -`), or as a here-string. A digest
-  computed in the step, a line fetched or selected at run time, and
-  `sha256sum -c FILE` (which reads FILE as a list of sums) do not count
-  (SEOR-ltseyxpe). Nothing else counts, however it is chained: not
-  `|| true`, `;` or a newline inside one item, and not `set -e`, so the rule does not depend on how the runner
-  starts the shell. In the first shape a failed or mismatched download
-  warns and leaves apt's pandoc in place, so every gate still runs and
-  reports ([ADR 0005](adr/0005-cheap-ci-jobs-fold-into-one-gates-job.md)), but
-  nothing unverified is installed, and README drift reported after that
-  warning is suspect; in the second it fails the job. The download has a time
-  limit, so a stalled CDN reaches that warning instead of hanging every R
-  job: curl with `--max-time`, which bounds one attempt, plus, when it uses
-  `--retry` with a count above 0, `--retry-max-time`, which ends the retries
-  and makes curl skip a retry whose `Retry-After` wait would pass it; or curl
-  or wget under `timeout N`. A limit of 0 means none and does not count.
-  Between retries curl waits its own backoff, which stops growing at 600
-  seconds, or a fixed `--retry-delay`, which counts only up to 600 seconds.
-  The retry count is not capped, since a count does not bound the waits a
-  server's `Retry-After` asks for. wget counts only under `timeout`: its
-  `--timeout` and `-T` limit idle time, not the download. seor's curl sets
-  them all (`--retry 3 --retry-delay 5 --retry-max-time 300
-  --connect-timeout 20 --max-time 120`).
-- The install holds pandoc: `apt-mark hold pandoc` runs right after a
-  successful `dpkg -i`, in the `then` branch or in a script item after the
-  three. Without it the pin lasts only until a later apt step: where apt's
-  candidate pandoc is newer than the pin, as Debian's is on `r-base:latest`
-  (testing, at priority 990), an `apt-get install` or upgrade that reaches
-  pandoc replaces the `.deb` (SEOR-vzupmeqj). Only the success path holds:
-  a hold before the install, after `fi`, in the else branch or in an item
-  after the `if` also runs on the warn path and holds apt's pandoc, and none
-  of them counts, and neither does one after an apt install or upgrade in
-  that path, which may already have replaced the `.deb`. The hold is
-  `apt-mark hold` with `pandoc` among its packages (options such as `-qq`
-  or `-o Key=Value`, other packages, and a `sudo`, `env` or variable
-  prefix allowed), a command of its own in that branch or item, or the
-  first of an `&&`/`||` list, not one inside a nested `if`, group or
-  function. seor's writes `apt-mark hold pandoc || echo "WARNING: …"`: a
-  hold that fails only warns, as the rest of the block does, so it never
-  stops a gate.
-  `echo pandoc hold | dpkg --set-selections` sets the same selection but is
-  not read: write `apt-mark`. A bump needs nothing for the hold: an
-  explicit `dpkg -i` ignores it (dpkg(1), "hold": "When these actions are
-  requested explicitly, the hold package selection state always gets
-  ignored") and leaves the package unheld, so the line after it holds the
-  new version, and every CI job starts from a fresh image anyway.
-- Locally, `scripts/check-toolchain.R` reads `PANDOC_VERSION` from
-  `.gitlab-ci.yml` and fails the pre-push gate when
-  `rmarkdown::pandoc_version()` differs. rmarkdown takes the newest pandoc on
+- The pin is the fleet-r image's pandoc: `ARG PANDOC_VERSION` in fleet-ci's
+  `image/fleet-r/Dockerfile`, beside the sha256 digests (amd64, arm64) the
+  image build checks the pandoc `.deb` against before it installs and holds
+  it. fleet-ci's `images.lock` records the pandoc each image carries and
+  refuses a line whose pandoc is not the Dockerfile's. The gate, T2 and T3
+  all run in that image or a variant built from it, so no package installs
+  pandoc and no package's `.gitlab-ci.yml` names a pin.
+- A package gets the pin through `.fleet-ci/toolchain`, the one line
+  `PANDOC_VERSION=<version>` that fleet-ci's `bin/vendor` writes from that
+  Dockerfile at the pinned SHA, from fleet-ci v1.1.0 on.
+- Locally, `scripts/check-toolchain.R` compares `rmarkdown::pandoc_version()`
+  with `.fleet-ci/toolchain` and fails the push when they differ. It runs on
+  the host, outside the image, as a pre-push hook every package carries
+  (see "Local pre-push gate"). rmarkdown takes the newest pandoc on
   `RSTUDIO_PANDOC`, `PATH` and `~/opt/pandoc`, so a Homebrew upgrade past the
-  pin otherwise knits a README that CI then reports as drift. Reading the
-  variable from the environment is not that check: nothing sets it locally.
-  A package migrated to fleet-ci (ADR 0012) has no pin in `.gitlab-ci.yml`:
-  the fleet-ci image installs pandoc. Migrated is decided as the fleet
-  checker and fleet-ci's `bin/gate` decide it, by the include of the project
+  pin otherwise knits a README that the gate's drift check then reports.
+  Reading the variable from the environment is not that check: nothing sets
+  it locally. A package is migrated as the fleet checker and fleet-ci's
+  `bin/gate` decide it, by the include of the project
   `bart-turczynski/fleet-ci` in `.gitlab-ci.yml`; a stray `.fleet-ci/`
-  without it is not read. There `.fleet-ci/VERSION` must be the SHA the
-  include's `ref:` pins, else the gate fails and asks for `bin/vendor` at
-  that SHA, and the script reads the pin from `.fleet-ci/toolchain`, the one
-  line `PANDOC_VERSION=<version>` that fleet-ci's `bin/vendor` writes from
-  fleet-ci v1.1.0 on, and ignores `.gitlab-ci.yml` for pandoc. A missing,
-  unreadable or malformed `.fleet-ci/toolchain` fails the gate and asks for
-  a re-vendor, after bumping an include older than v1.1.0 (SEOR-bkwtrvhh).
-  It needs the R package yaml 2.2.1 or later, which rmarkdown and knitr
-  already import, and stops in one line naming it when it is missing or
-  older.
+  without it is not read. Its `.fleet-ci/VERSION` must be the SHA the
+  include's `ref:` pins, else the check fails and asks for `bin/vendor` at
+  that SHA. A missing, unreadable or malformed `.fleet-ci/toolchain` fails
+  it and asks for a re-vendor, after bumping an include older than v1.1.0
+  (SEOR-bkwtrvhh). `.gitlab-ci.yml` is not read for pandoc there. The script
+  also compares the installed roxygen2 with `Config/roxygen2/version`. It
+  needs the R package yaml 2.2.1 or later, which rmarkdown and knitr already
+  import, and stops in one line naming it when it is missing or older.
   The script is vendored: every package carries seor's copy byte for byte,
-  so a change to it is copied into each repository.
+  so a change to it is copied into each repository. Its reader of a
+  `PANDOC_VERSION` pin in `.gitlab-ci.yml`
+  ([ADR 0009](adr/0009-check-toolchain-reads-the-ci-pin-with-yaml.md),
+  [ADR 0010](adr/0010-check-toolchain-allows-shell-mentions-it-reads.md))
+  serves only a repository without the include; no fleet package is one.
 
-A bump moves together, in one change per repository: `PANDOC_VERSION`, the
-two sha256 digests (amd64, arm64), a re-knit of `README.md`, and, once for
-the fleet, `PANDOC_PIN` in `scripts/check-fleet-standard.py`. For migrated
-packages it moves `ARG PANDOC_VERSION` in fleet-ci's
-`image/fleet-r/Dockerfile`, then a new fleet-ci tag, then in each package the
-include's `ref:` bumped to that tag's SHA, `.fleet-ci/` re-vendored and
-`README.md` re-knit.
+A bump moves together: in fleet-ci, `ARG PANDOC_VERSION` and its two digests
+in `image/fleet-r/Dockerfile`, the rebuilt images' `images.lock` lines, and a
+new fleet-ci tag; then in each package the include's `ref:` bumped to that
+tag's SHA, `.fleet-ci/` re-vendored (which rewrites `.fleet-ci/toolchain`)
+and `README.md` re-knit; and, once for the fleet, `PANDOC_PIN` in
+`scripts/check-fleet-standard.py`, which checks the Dockerfile at each
+package's pinned SHA.
 
 Every pipeline on `main` runs `coverage`. The coverage badge reads the latest
 successful pipeline on `main`, so a green pipeline without it turns the badge
@@ -441,12 +359,14 @@ the owner deletes it (SEOR-uldurjev).
 - ASAN/UBSAN sanitizer legs for the packages with compiled code: punycoder,
   pslr and robotstxtr.
 
-### `dependency-audit`
+### The audits, in `deep-check`
 
 `osv-audit` and `security-audit`, in seor's shape: each advisory reported needs
 an explicit disposition row, and a row nobody reports any more fails
-(`tests/testthat/helper-security.R`, SEOR-fkvlzltx). Under the tiers the jobs
-run in T2 and T3.
+(`tests/testthat/helper-security.R`, SEOR-fkvlzltx). The jobs run in T2, on
+the `deep-check` schedule, and in T3. The `dependency-audit` schedule that
+once ran them runs nothing now: the template creates no pipeline for it, and
+the owner deletes it (SEOR-uldurjev).
 `security-audit` fails when its OSS Index credentials are missing instead of
 skipping green. Never add an allow-list row ahead of the advisory it answers:
 an anticipatory row fails as stale on the day it lands.
@@ -490,7 +410,12 @@ it checked zero URLs, and nothing is exempt: `BugReports:` names `/-/work_items`
 (ADR 0011).
 
 Also added: `check-toolchain`'s pandoc check, which compares the local pandoc
-with the CI pin (see the pandoc rule under "Verification tiers").
+with the fleet image's, `.fleet-ci/toolchain` (see the pandoc rule under
+"Verification tiers"). Every package keeps `check-toolchain` as a pre-push
+hook in `.pre-commit-config.yaml`, running `Rscript
+scripts/check-toolchain.R`: the gate runs in the image, so this host-side
+comparison of pandoc and roxygen2 is what keeps a local `build_readme()` or
+`document()` writing what the gate accepts. The fleet checker requires it.
 
 Also added: a generated-docs drift check (SEOR-nwfmerhu). A stale `.Rd` is
 still valid `.Rd`, so lint, spelling and `R CMD check` all pass it; the logo
@@ -704,23 +629,26 @@ alias) leaves every CI rule of that package not judged; the other areas are
 still judged.
 
 It follows one include, fleet-ci's
-([ADR 0014](adr/0014-fleet-checker-follows-the-fleet-ci-include.md), amending
-ADR 0008), and no other. Every package includes fleet-ci's project and is
-judged on the merged configuration: the template at the pinned SHA, with the
-package's file merged over it as GitLab merges an include, expanded locally
-(GitLab's CI lint is not asked). A `.gitlab-ci.yml` without that include is
-one gap, and its CI and local gate are not judged further: the checks of the
-hand-written CI each package carried before ADR 0012 are gone
-(SEOR-jlsdnsjd). The include must be one entry, `templates/r-package.yml`,
+([ADR 0015](adr/0015-every-package-includes-fleet-ci.md), superseding
+ADR 0014 and amending ADR 0008), and no other. Every package includes
+fleet-ci's project and is judged on the merged configuration: the template
+at the pinned SHA, with the package's file merged over it as GitLab merges
+an include, expanded locally (GitLab's CI lint is not asked). A
+`.gitlab-ci.yml` without that include is one gap, and its CI and local gate
+are not judged further; one that does not load leaves both not judged and
+the run incomplete. The checks of the hand-written CI each package carried
+before ADR 0012 are gone (SEOR-jlsdnsjd). The include must be one entry, `templates/r-package.yml`,
 at a 40-hex SHA that a fleet-ci `v*` tag points at. `.fleet-ci/` must be
 byte for byte what fleet-ci's `bin/vendor` writes at that SHA, and
 `.fleet-ci.yml` must load as fleet-ci's classifier reads it there
 (`bin/classify --config-json`). This needs a fleet-ci clone (`--fleet-ci`,
 else `FLEET_CI_DIR`), git and Ruby; a SHA the clone lacks is a gap (an
 unknown fleet-ci commit) and leaves the rest of that package's CI not
-judged. The self-test needs the same, since every repository row it judges
-includes a fixture fleet-ci, and fails without them unless
-`SEOR_SKIP_FLEET_CI_SELFTEST=1`, which skips those rows, loudly. A
+judged. The self-test's CI and local-gate rows need the same, since they
+include a fixture fleet-ci; without them it fails unless
+`SEOR_SKIP_FLEET_CI_SELFTEST=1`, which skips those rows, loudly. Its content
+rows (badges, README, logo, files, `DESCRIPTION`, seor's own logos) need no
+clone and run either way. A
 package's `scripts/check-toolchain.R` is not compared with seor's copy yet:
 seor's copy reads a package's pandoc pin from `.fleet-ci/toolchain`, which
 `bin/vendor` writes from fleet-ci v1.1.0 on, so the comparison waits on each
@@ -782,11 +710,17 @@ What it checks, section by section:
   audit test files are there.
 - **Local gate.** fleet-ci's: `.fleet-ci.yml`, validated as above, lists
   `scripts/check-docs-drift.R` among the cheap gates and a URL check in a
-  gate list. The NEWS check is a `.fleet-ci.yml` gate or a pre-push hook (its
+  gate list. Its gate lists (`docs_gates`, `cheap_gates`, `host_gates`) also
+  hold T1's other cheap gates, each found by a token in a command, case
+  aside, not in the scripts it runs: README drift (`readme`), NEWS version
+  (`news`, in a command other than the terseness check), lint (`lint`) and
+  spelling (`spell`). The NEWS check is a `.fleet-ci.yml` gate or a pre-push hook (its
   own `stages`, else `default_stages`, else every stage) that runs
   `scripts/check-news.py` on `NEWS.md`, in its `entry` and `args` or in an R
   or shell script it calls; the self-test alone does not count, and the port
-  is not compared with seor's copy. `.pre-commit-config.yaml` has no
+  is not compared with seor's copy. A pre-push hook, read the same way, runs
+  `scripts/check-toolchain.R`, not only its self-test.
+  `.pre-commit-config.yaml` has no
   `verify` hook and no hook running `.fleet-ci/gate`; `.Rbuildignore`
   excludes `.fleet-ci` and `.fleet-ci.yml`. `scripts/check-docs-drift.R` is
   there and matches seor's copy (line endings aside); a missing copy is a
@@ -799,5 +733,6 @@ It does not check whether a tag pipeline fails on "already on CRAN", how the
 URL check treats zero URLs or the `BugReports:` 404, how `security-audit`
 treats missing OSS Index credentials, the GitLab project badges, or employer
 names. Review those by hand. The pre-push hook runs `--self-test`, in an
-environment with the pinned PyYAML, whenever the script or `check-toolchain.R`
-changes.
+environment with the pinned PyYAML, whenever the script or an input of its
+self-test changes: `logo-metadata.py`, seor's logos and `DESCRIPTION`, and
+`check-docs-drift.R`.
