@@ -44,10 +44,11 @@ def git(*args: str) -> str | None:
     # flake8-bandit flags every subprocess call. `shell=False` (the default) is
     # S603's premise, not its answer: with no shell in the picture the risk that
     # remains is argument injection, because git reads any argv element starting
-    # with `-` as an option. Not every argument here is a literal - `upstream`,
+    # with `-` as an option. Not every argument here is a literal - `ref`,
     # `base` and `rel` are all parsed back out of git's own output - so the thing
     # that actually makes this safe is that none of them can lead with `-`: git
-    # refuses to create a ref name that does, `base` is a SHA from merge-base,
+    # refuses to create a ref name that does (and for-each-ref prints full
+    # `refs/...` names), `base` is a SHA from merge-base,
     # and `rel` only ever reaches git embedded as f"{base}:{rel}". Keep that true
     # when adding callers. S607: `git` is resolved from PATH on purpose, so the
     # script runs wherever the checkout does - CI images, Homebrew, Nix, Windows.
@@ -102,15 +103,46 @@ def check_frontmatter(root: Path, errors: list[str]) -> None:
                 )
 
 
+def adr_base() -> str | None:
+    """The commit committed HEAD's ADRs are judged against, or None.
+
+    The merge-base with the tracking branch; failing that (a new branch's
+    first push has no upstream yet), with the remote's default branch:
+    origin/HEAD, then origin/main or origin/master, then any remote's
+    HEAD, main or master, then any remote-tracking ref. None only when no
+    remote-tracking ref shares history with HEAD.
+    """
+    candidates: list[str] = []
+    upstream = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    if upstream:
+        candidates.append(upstream)
+    candidates += [
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/master",
+    ]
+    listed = git("for-each-ref", "--format=%(refname)", "refs/remotes")
+    remote_refs = listed.splitlines() if listed else []
+    for suffix in ("/HEAD", "/main", "/master"):
+        candidates += [ref for ref in remote_refs if ref.endswith(suffix)]
+    candidates += remote_refs
+    for ref in candidates:
+        base = git("merge-base", "HEAD", ref)
+        if base:
+            return base
+    return None
+
+
 def check_adr_immutability(root: Path, errors: list[str]) -> None:
     """An accepted ADR may be superseded, never edited.
 
-    Compares against the merge-base with the tracking branch. A freshly
-    generated project has no remote yet, so the check no-ops rather than
-    failing - there is no history to be immutable against.
+    Compares committed HEAD against adr_base(): the merge-base with the
+    tracking branch, or with the remote's default branch when there is no
+    upstream yet. A freshly generated project has no remote yet, so the
+    check no-ops rather than failing - there is no history to be immutable
+    against.
     """
-    upstream = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-    base = git("merge-base", "HEAD", upstream) if upstream else None
+    base = adr_base()
     if base is None:
         return
 
