@@ -74,9 +74,10 @@ WHAT IT CHECKS, by section of the standard.
   ignored); `Language: en-US`; a declared R floor; `X-schema.org-keywords`
   with at least five tokens besides `r`, `rstats`, `r-stats` and `r-package`,
   which r-universe drops, and none of those four.
-* .gitlab-ci.yml. It includes fleet-ci's template (ADR 0012): a file
-  without that include is one gap, and its CI and local gate are not judged
-  further. The rest is under CI AND THE LOCAL GATE, below.
+* .gitlab-ci.yml. It includes fleet-ci's template (ADR 0012, ADR 0015): a
+  file without that include is one gap, and its CI and local gate are not
+  judged further; a file that does not load leaves both not judged and the
+  run incomplete. The rest is under CI AND THE LOCAL GATE, below.
 * Local gate. fleet-ci's, as below. scripts/check-docs-drift.R is there and
   matches seor's copy, line endings aside: one canonical copy, vendored byte
   for byte (check_docs_drift_copy(), SEOR-lyciowif). And the NEWS
@@ -101,13 +102,13 @@ does not load (a YAML error, another unknown tag, a scalar its tag cannot
 hold such as `2026-02-30`, a recursive alias, another document shape)
 leaves every CI rule of that package not judged and the run incomplete;
 the other areas are still judged. `include:` is followed for fleet-ci's
-alone (ADR 0014). Not checked: whether a tag pipeline fails on "already on
+alone (ADR 0015). Not checked: whether a tag pipeline fails on "already on
 CRAN", whether the URL check fails on zero URLs and has no exemption (ADR
 0011), how security-audit treats missing OSS Index credentials, the GitLab
 project badges, and that no employer is named as copyright holder or
 funder. Those stay review items.
 
-CI AND THE LOCAL GATE (ADR 0012, ADR 0014). The include is one entry,
+CI AND THE LOCAL GATE (ADR 0012, ADR 0015). The include is one entry,
 `templates/r-package.yml` at a 40-hex SHA the fleet-ci clone (FLEET_CI_DIR,
 `--fleet-ci`) holds (else a gap, an unknown fleet-ci commit), and a v* tag
 of the clone points at that SHA (a gap when the clone holds v* tags, none
@@ -143,20 +144,26 @@ file that cannot be read. The merged configuration is the local
 expansion; GitLab's CI lint is not asked. The local gate is fleet-ci's
 (check_local_gate_migrated()): `.fleet-ci.yml` loading as fleet-ci's own
 classifier at the pinned SHA reads it (`bin/classify --config-json`, in a
-subprocess), with scripts/check-docs-drift.R in `cheap_gates` and a URL
-check in a gate list; the NEWS check a pre-push hook or a gate; no
-`verify` hook and no hook running `.fleet-ci/gate` in
-.pre-commit-config.yaml; `^\\.fleet-ci$` and `^\\.fleet-ci\\.yml$` in
-.Rbuildignore. R CMD check and the local pandoc are the gate's own, in
-the image.
+subprocess), with scripts/check-docs-drift.R in `cheap_gates`, a URL
+check in a gate list, and T1's README drift, NEWS version, lint and
+spelling gates, each a gate-list command naming "readme", "news" (not
+the terseness check), "lint" or "spell" (T1_GATES); the NEWS check a
+pre-push hook or a gate; a pre-push hook running
+scripts/check-toolchain.R, the host's pandoc against .fleet-ci/toolchain
+and its roxygen2 against Config/roxygen2/version; no `verify` hook and no
+hook running `.fleet-ci/gate` in .pre-commit-config.yaml; `^\\.fleet-ci$`
+and `^\\.fleet-ci\\.yml$` in .Rbuildignore. R CMD check is the gate's
+own, in the image.
 
 Needs PyYAML (pinned at 6.0.3 in the pre-commit hook, which installs it); a run
 without it exits 2 with an install hint. `glab` must be on PATH and
-authenticated unless `--offline`. Every package, and the self-test, need
-git, Ruby and a fleet-ci clone; the self-test builds its fixture fleet-ci
-from the clone's FLEET_CI_FIXTURE_BASE commit, and without the clone, that
-commit or Ruby it fails, naming the fix; SEOR_SKIP_FLEET_CI_SELFTEST=1
-instead reports its repository rows SKIPPED, loudly, and passes.
+authenticated unless `--offline`. Every package needs git, Ruby and a
+fleet-ci clone. So do the self-test's CI and local-gate rows, which build
+a fixture fleet-ci from the clone's FLEET_CI_FIXTURE_BASE commit; without
+the clone, that commit or Ruby the self-test fails, naming the fix;
+SEOR_SKIP_FLEET_CI_SELFTEST=1 instead reports those rows SKIPPED, loudly,
+and passes. The content rows (badges, README, logo, files, DESCRIPTION,
+seor's own logos) need no clone and run either way (ADR 0015).
 """
 
 from __future__ import annotations
@@ -176,6 +183,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from enum import Enum
 from functools import cache
 from html.parser import HTMLParser
 from pathlib import Path
@@ -581,13 +589,21 @@ def drop_opt_in_stages(text: str) -> str:
 
 
 PATH_TOKEN = re.compile(r"(?<![\w$/.-])((?:\.?[\w-]+/)+[\w.-]+)")
-# Python is not followed: the seor-family scripts a job names (check-citation,
-# check-bugreports) quote `R CMD check --as-cran` in their prose.
+# Python is not followed: seor's Python checks (check-citation,
+# check-bugreports, check-news) name other scripts and commands in their
+# prose, which would read as commands they run.
 SCRIPT_SUFFIXES = {"", ".R", ".r", ".sh", ".yml", ".yaml"}
 
 
 def inline_scripts(text: str, source, depth: int = 2, seen: set[str] | None = None) -> list[tuple[str, str]]:
     """(path, text) for each repository script `text` names, followed `depth` levels.
+
+    `text` is a .fleet-ci.yml gate command or a pre-commit hook's command;
+    the local-gate rules read what they run (the docs-drift, URL, NEWS and
+    toolchain checks). Comment lines are dropped, and so are the opt-in
+    stages of an R stage table (drop_opt_in_stages()), a `name = list(...,
+    default = FALSE)` entry, since a stage that runs only on request is no
+    gate.
 
     ProbeError when a named script cannot be read: a view without it would
     judge the rules it holds as missing.
@@ -1268,32 +1284,42 @@ def check_audit_files(source, report: Report) -> None:
         report.gap("ci", f"audit jobs lack seor's disposition-row shape: missing {', '.join(missing)}")
 
 
+class CIShape(Enum):
+    """What check_ci() found, which check_local_gate() reads: .gitlab-ci.yml
+    loaded with fleet-ci's include, loaded (or is missing) without it, or
+    did not load."""
+    FLEET_CI = "fleet-ci"
+    NO_INCLUDE = "no-include"
+    UNLOADED = "unloaded"
+
+
 def check_ci(pkg: str, source, state: State, floor: str | None, report: Report,
-             fleet: FleetCI | None = None) -> bool:
-    """The CI rules: every package includes fleet-ci's template (ADR 0012)
-    and is judged on the merged configuration (check_ci_migrated()). True
-    when it does, which the local gate then reads; a file without the
-    include is one gap, and the rest of its CI is not judged."""
+             fleet: FleetCI | None = None) -> CIShape:
+    """The CI rules: every package includes fleet-ci's template (ADR 0012,
+    ADR 0015) and is judged on the merged configuration (check_ci_migrated()).
+    A file without the include is one gap, and the rest of its CI is not
+    judged; a file that does not load leaves its CI not judged and the run
+    incomplete."""
     text = source.read(".gitlab-ci.yml")
     if text is None:
         report.gap("ci", "no .gitlab-ci.yml")
-        return False
+        return CIShape.NO_INCLUDE
     try:
         load_ci(text, references=True)
     except (CIError, RecursionError) as error:
         report.skip("ci", f"could not read .gitlab-ci.yml ({error}), so none of its CI rules is judged",
                     incomplete=True)
         check_audit_files(source, report)
-        return False
+        return CIShape.UNLOADED
     migrated = fleet_ci_include(text)
     if migrated is None:
         report.gap("ci", f".gitlab-ci.yml does not include fleet-ci's {FLEET_CI_TEMPLATE} (project "
-                         f"{FLEET_CI_PROJECT}); every package does (ADR 0012), so its CI and local gate are not "
+                         f"{FLEET_CI_PROJECT}); every package does (ADR 0015), so its CI and local gate are not "
                          "judged further")
         check_audit_files(source, report)
-        return False
+        return CIShape.NO_INCLUDE
     check_ci_migrated(pkg, source, state, floor, text, *migrated, fleet or FLEET_CI, report)
-    return True
+    return CIShape.FLEET_CI
 
 
 # --- CI, migrated: a package that includes fleet-ci's template (ADR 0012) ----------
@@ -1869,6 +1895,18 @@ FLEET_CI_GATE_KEYS = ("docs_gates", "cheap_gates", "host_gates")
 FLEET_CI_HOOK = ".fleet-ci/pre-push"
 FLEET_CI_GATE_RE = re.compile(r"\.fleet-ci/gate\b")
 DOCS_DRIFT_SCRIPT_RE = re.compile(r"\bscripts/check-docs-drift\.R\b")
+# T1's other cheap gates (design/fleet-standard.md, "Verification tiers"),
+# each found by a stable token, case aside, in a command a .fleet-ci.yml gate
+# list holds: the command itself, not the scripts it runs. The NEWS version
+# gate is a command naming "news" that is not the terseness check
+# (runs_news_check()), which is judged on its own.
+T1_GATES = (
+    ("readme", "README drift (README.md matches a fresh knit of README.Rmd)", "sh scripts/check-readme-drift.sh"),
+    ("news", "NEWS version (NEWS.md's top heading names DESCRIPTION's Version)", "sh scripts/check-news-version.sh"),
+    ("lint", "lint", "Rscript -e 'lintr::lint_package()'"),
+    ("spell", "spelling", "Rscript -e 'spelling::spell_check_package()'"),
+)
+TOOLCHAIN_SCRIPT_RE = re.compile(r"\bscripts/check-toolchain\.R\b")
 # fleet-ci README, "Adopting the template", step 1.
 FLEET_CI_RBUILDIGNORE = (r"^\.fleet-ci$", r"^\.fleet-ci\.yml$")
 
@@ -1917,12 +1955,15 @@ def check_local_gate_migrated(source, report: Report, fleet: FleetCI | None = No
     what is left lives in .fleet-ci.yml, validated by fleet-ci's own
     classifier at the pinned SHA (FleetCI.config()): the generated-docs
     drift check, scripts/check-docs-drift.R, in `cheap_gates` (it needs the
-    dependencies), and a URL check in a gate list (the gate turns remote
-    incoming, which checks URLs, off). The NEWS check stays a pre-commit
-    pre-push hook, which the fleet-ci hook runs, or is a .fleet-ci.yml gate.
-    .Rbuildignore keeps .fleet-ci and .fleet-ci.yml out of the build, and
-    pre-commit no longer runs the old gate. The hook, .fleet-ci/pre-push, is
-    judged with the rest of .fleet-ci/, under ci."""
+    dependencies), a URL check in a gate list (the gate turns remote
+    incoming, which checks URLs, off), and T1's README drift, NEWS version,
+    lint and spelling gates in a gate list (T1_GATES). The NEWS check stays
+    a pre-commit pre-push hook, which the fleet-ci hook runs, or is a
+    .fleet-ci.yml gate. A pre-push hook runs scripts/check-toolchain.R on
+    the host (check_toolchain_hook()). .Rbuildignore keeps .fleet-ci and
+    .fleet-ci.yml out of the build, and pre-commit no longer runs the old
+    gate. The hook, .fleet-ci/pre-push, is judged with the rest of
+    .fleet-ci/, under ci."""
     fleet = fleet or FLEET_CI
     try:
         config_text = source.read(FLEET_CI_CONFIG)
@@ -1938,6 +1979,7 @@ def check_local_gate_migrated(source, report: Report, fleet: FleetCI | None = No
             report.gap("local gate", f".Rbuildignore lacks `{pattern}` (fleet-ci README, \"Adopting the template\", "
                                      "step 1)")
     check_old_gate_hooks(precommit, report)
+    check_toolchain_hook(precommit, source, report)
     config: dict | None = None
     if config_text is None:
         report.gap("local gate", f"no {FLEET_CI_CONFIG}, which the fleet-ci gate reads its gates from")
@@ -1985,6 +2027,13 @@ def check_local_gate_migrated(source, report: Report, fleet: FleetCI | None = No
     if not any(URL_CHECK_RE.search(chunk) for _, chunk in gates):
         report.gap("local gate", f"no URL check in {FLEET_CI_CONFIG}'s gates ({', '.join(FLEET_CI_GATE_KEYS)}); the "
                                  "fleet-ci gate's R CMD check runs with remote incoming, and so its URL check, off")
+    commands = [command for key in FLEET_CI_GATE_KEYS for command in gate_list(key)]
+    for token, gate, example in T1_GATES:
+        if not any(token in command.lower() and not (token == "news" and runs_news_check(command))
+                   for command in commands):
+            report.gap("local gate", f"no {gate} gate in {FLEET_CI_CONFIG}'s gates ({', '.join(FLEET_CI_GATE_KEYS)}): "
+                                     f"no command naming {token!r}, such as `{example}`; T1 runs it (design/"
+                                     "fleet-standard.md, \"Verification tiers\")")
     if any(runs_news_check(chunk) for _, chunk in gates):
         return
     if precommit is None:
@@ -1995,14 +2044,20 @@ def check_local_gate_migrated(source, report: Report, fleet: FleetCI | None = No
     check_news_hook(precommit, source, report)
 
 
-def check_local_gate(source, report: Report, migrated: bool, fleet: FleetCI | None = None) -> None:
-    """The local gate, fleet-ci's (check_local_gate_migrated()); not judged
-    for a package without the include, whose gap check_ci() reports."""
-    if not migrated:
+def check_local_gate(source, report: Report, shape: CIShape, fleet: FleetCI | None = None) -> None:
+    """The local gate, fleet-ci's (check_local_gate_migrated()), as
+    check_ci() found .gitlab-ci.yml (`shape`). Not judged without the
+    include, whose gap check_ci() reports; not judged, and the run
+    incomplete, when the file did not load, since whether it includes
+    fleet-ci is then unknown."""
+    if shape is CIShape.UNLOADED:
+        report.skip("local gate", "not judged: .gitlab-ci.yml did not load, so whether it includes fleet-ci's "
+                                  "template is unknown (under ci)", incomplete=True)
+    elif shape is CIShape.NO_INCLUDE:
         report.skip("local gate", "not judged: .gitlab-ci.yml does not include fleet-ci's template (under ci)",
                     incomplete=False)
-        return
-    check_local_gate_migrated(source, report, fleet)
+    else:
+        check_local_gate_migrated(source, report, fleet)
 
 
 AGENT_FILES = ("AGENTS.md", "AGENTS_LANG.md", "CLAUDE.md")
@@ -2067,33 +2122,64 @@ def pre_push_hooks(config: str) -> list[dict]:
     return hooks
 
 
-def check_news_hook(config: str, source, report: Report) -> None:
-    """The NEWS check in the pre-push gate (SEOR-mjrpwnqz): a hook that runs at
-    pre-push (pre_push_hooks()) whose `entry` and `args` run check-news.py on
-    NEWS.md, or call an R or shell script, followed three levels deep, that
-    does. Its self-test alone, a hook on another stage, or check-news.py named
-    only in a `name:` or a comment is no check. A remote repository's hook
-    carries no `entry` here, so it never counts."""
+def pre_push_runs(config: str, source, runs_it: Callable[[str], bool], report: Report) -> bool | None:
+    """Whether a hook that runs at pre-push (pre_push_hooks()) runs a check:
+    `runs_it` holds for its `entry` and `args`, or for an R or shell script
+    they call, followed three levels deep. None when that is not judged (the
+    hooks or a script could not be read), which this reports. A remote
+    repository's hook carries no `entry` here, so it never counts."""
     try:
         hooks = pre_push_hooks(config)
     except (yaml.YAMLError, ValueError) as error:
         report.skip("local gate", f"could not read the hooks of .pre-commit-config.yaml ({error})", incomplete=True)
-        return
+        return None
     for hook in hooks:
         args = hook.get("args") or []
         command = " ".join(str(part) for part in [hook.get("entry") or "", *(args if isinstance(args, list) else [args])])
-        if runs_news_check(command):
-            return
+        if runs_it(command):
+            return True
         try:
             scripts = [s for path, s in inline_scripts(command, source, depth=3)
                        if Path(path).suffix in ("", ".R", ".r", ".sh")]
         except ProbeError as error:
             report.skip("local gate", f"could not read a script the pre-push gate runs ({error})", incomplete=True)
-            return
-        if any(runs_news_check(script) for script in scripts):
-            return
-    report.gap("local gate", "no NEWS terseness check in the pre-push gate: a `news-terse` hook running "
-                             "scripts/check-news.py NEWS.md at pre-push, ported from seor's")
+            return None
+        if any(runs_it(script) for script in scripts):
+            return True
+    return False
+
+
+def check_news_hook(config: str, source, report: Report) -> None:
+    """The NEWS check in the pre-push gate (SEOR-mjrpwnqz): a pre-push hook
+    that runs check-news.py on NEWS.md (pre_push_runs()). Its self-test
+    alone, a hook on another stage, or check-news.py named only in a `name:`
+    or a comment is no check."""
+    if pre_push_runs(config, source, runs_news_check, report) is False:
+        report.gap("local gate", "no NEWS terseness check in the pre-push gate: a `news-terse` hook running "
+                                 "scripts/check-news.py NEWS.md at pre-push, ported from seor's")
+
+
+def runs_toolchain_check(text: str) -> bool:
+    """A line of `text`, outside comment lines, runs scripts/check-toolchain.R,
+    and not its `--self-test`."""
+    return any(TOOLCHAIN_SCRIPT_RE.search(line) and "--self-test" not in line
+               for line in strip_comment_lines(text).splitlines())
+
+
+def check_toolchain_hook(config: str | None, source, report: Report) -> None:
+    """The host-side toolchain check: a pre-push hook (pre_push_runs()) runs
+    scripts/check-toolchain.R, which compares this machine's pandoc with
+    .fleet-ci/toolchain and its roxygen2 with Config/roxygen2/version. The
+    gate runs in the fleet image, so nothing else compares the host's
+    pandoc and roxygen2, which a local build_readme() or document() uses.
+    Its self-test alone, or a hook on another stage, is no check."""
+    want = ("no host toolchain check in the pre-push gate: a `check-toolchain` hook running "
+            "`Rscript scripts/check-toolchain.R` at pre-push, which compares the local pandoc with "
+            ".fleet-ci/toolchain and roxygen2 with Config/roxygen2/version")
+    if config is None:
+        report.gap("local gate", f"{want}; there is no .pre-commit-config.yaml")
+    elif pre_push_runs(config, source, runs_toolchain_check, report) is False:
+        report.gap("local gate", want)
 
 
 TOOLCHAIN_PENDING = ("scripts/check-toolchain.R not compared with seor's copy: pending SEOR-bkwtrvhh "
@@ -2141,9 +2227,24 @@ def check_schedules(state: State, report: Report, pkg: str = "") -> None:
 def check_repo(pkg: str, source, state: State,
                fetch: Callable[[str], tuple[int, str, bytes]] | None = None,
                fleet: FleetCI | None = None) -> Report:
-    """One package's report. `fleet` is the fleet-ci clone the pinned
-    template is read from (FLEET_CI when None)."""
+    """One package's report: its content (check_content()), then its CI and
+    local gate. `fleet` is the fleet-ci clone the pinned template is read
+    from (FLEET_CI when None)."""
     report = Report(pkg)
+    floor = check_content(pkg, source, state, fetch, report)
+    shape = check_ci(pkg, source, state, floor, report, fleet)
+    check_local_gate(source, report, shape, fleet)
+    check_toolchain_copy(report)
+    return report
+
+
+def check_content(pkg: str, source, state: State, fetch: Callable[[str], tuple[int, str, bytes]] | None,
+                  report: Report) -> str | None:
+    """The judgments that need no fleet-ci clone: badges and their images,
+    README, logo, files, DESCRIPTION, the NEWS rule, the docs-drift copy and
+    the schedules. Returns DESCRIPTION's R floor, which the CI rules read.
+    The self-test judges its content rows with this alone when the clone is
+    missing."""
     for area, error in state.errors:
         report.skip(area, f"probe failed: {error}", incomplete=True)
     images = check_badges(pkg, source, state, report)
@@ -2155,13 +2256,10 @@ def check_repo(pkg: str, source, state: State,
     check_logo(pkg, source, report)
     check_files(source, report)
     floor = check_description(pkg, source, state, report)
-    migrated = check_ci(pkg, source, state, floor, report, fleet)
-    check_local_gate(source, report, migrated, fleet)
     check_news_rule(source, report)
     check_docs_drift_copy(source, report)
-    check_toolchain_copy(report)
     check_schedules(state, report, pkg)
-    return report
+    return floor
 
 
 def run_one(pkg: str, local: Path | None, offline: bool) -> Report:
@@ -2209,10 +2307,10 @@ def fixture_badges(pkg: str, on_cran: bool, release: bool, doi: str | None) -> s
     return "\n".join(rows[n] for n in order)
 
 
-# An R stage table, whose opt-in stages drop_opt_in_stages() drops from a
-# script inline_scripts() follows.
+# An R stage table, as a gate command or hook may run one, whose opt-in
+# stages drop_opt_in_stages() drops from a script inline_scripts() follows.
 FIXTURE_GATES_R = """\
-# Gates the CI runs.
+# Gates a wrapper script runs.
 stages = list(
   lint = list(default = TRUE, run = function() lintr::lint_package()),
   spelling = list(default = TRUE, run = function() spelling::spell_check_package()),
@@ -2221,7 +2319,6 @@ stages = list(
     h <- readLines("NEWS.md")[1]
     stopifnot(grepl("(development version)", h, fixed = TRUE))
   }),
-  citation = list(default = TRUE, run = function() system("python3 scripts/check-citation.py")),
   coverage = list(default = FALSE, run = function() covr::package_coverage())
 )
 """
@@ -2238,6 +2335,9 @@ def fixture_readme_body(pkg: str, on_cran: bool) -> str:
             "```{r}\n# Development\nx <- 1\n```\n\n~~~\n## Setup\n~~~\n\n## Learn more\n\nSee the vignettes.\n")
 
 
+# A package's pre-push hooks: check-toolchain, the host-side pandoc and
+# roxygen2 check (check_toolchain_hook()), and the NEWS check
+# (check_news_hook()). The gate itself is .fleet-ci/pre-push's, never a hook.
 FIXTURE_PRECOMMIT = """\
 repos:
   - repo: local
@@ -2260,9 +2360,12 @@ def fixture_files(pkg: str, ref: str, vendored: dict[str, bytes], on_cran: bool 
                   doi: str | None = "10.5281/zenodo.111", variables: str = "", jobs: str = "") -> dict:
     """A conforming package that includes fleet-ci's template at `ref`, with
     .fleet-ci/ as `vendored` (what bin/vendor writes there), .fleet-ci.yml
-    carrying the docs-drift and URL gates, the NEWS check a pre-push hook,
-    .Rbuildignore keeping .fleet-ci and .fleet-ci.yml out of the build;
-    `variables` and `jobs` go into its .gitlab-ci.yml (fixture_consumer())."""
+    carrying the docs-drift, URL and T1 gates, the toolchain and NEWS checks
+    pre-push hooks, .Rbuildignore keeping .fleet-ci and .fleet-ci.yml out of
+    the build; `variables` and `jobs` go into its .gitlab-ci.yml
+    (fixture_consumer()). The content rows build it without a fleet-ci
+    clone, on a placeholder `ref` and no `vendored` files, which only the CI
+    and local-gate rules read."""
     urls = [f"https://{OWNER}.gitlab.io/{pkg}/", f"https://gitlab.com/{OWNER}/{pkg}",
             f"https://{OWNER}.r-universe.dev/{pkg}"] + ([f"https://CRAN.R-project.org/package={pkg}"] if on_cran else [])
     files = {path: "x\n" for path in REQUIRED_FILES}
@@ -2287,7 +2390,6 @@ def fixture_files(pkg: str, ref: str, vendored: dict[str, bytes], on_cran: bool 
         FLEET_CI_CONFIG: FIXTURE_FLEET_CI_YML,
         "scripts/check-urls.R": "db <- tools:::url_db_from_package_sources('.')\nbad <- tools:::check_url_db(db)\n",
         ".Rbuildignore": "^.*\\.Rproj$\n^\\.fleet-ci$\n^\\.fleet-ci\\.yml$\n",
-        "scripts/check-citation.py": "print('ok')\n",
         ".gitlab/issue_templates/Bug.md": "x\n",
         ".gitlab/merge_request_templates/Default.md": "x\n",
         # The docs-drift check every member vendors: seor's, byte for byte.
@@ -2386,13 +2488,22 @@ x-fossa:
 """
 
 
-# A package's .fleet-ci.yml: the docs-drift and URL gates.
-FIXTURE_FLEET_CI_YML = """\
+# A package's .fleet-ci.yml: spelling as a docs gate; the docs-drift, lint,
+# README drift, NEWS version and URL gates as cheap gates.
+FIXTURE_SPELL_GATE = "  - Rscript -e 'spelling::spell_check_package()'\n"
+FIXTURE_T1_GATES = {
+    "readme": "  - sh scripts/check-readme-drift.sh\n",
+    "news": "  - sh scripts/check-news-version.sh\n",
+    "lint": "  - Rscript -e 'lintr::lint_package()'\n",
+    "spell": FIXTURE_SPELL_GATE,
+}
+FIXTURE_FLEET_CI_YML = f"""\
 version: 1
 variant: fleet-r
-cheap_gates:
+docs_gates:
+{FIXTURE_SPELL_GATE}cheap_gates:
   - Rscript scripts/check-docs-drift.R .
-  - Rscript scripts/check-urls.R
+{FIXTURE_T1_GATES["lint"]}{FIXTURE_T1_GATES["readme"]}{FIXTURE_T1_GATES["news"]}  - Rscript scripts/check-urls.R
 """
 
 
@@ -2462,28 +2573,44 @@ def fixture_fleet_ci(clone: Path, dest: Path) -> dict[str, str]:
 Judge = Callable[[Report], None]
 
 
-def self_test_rows(base: FleetCI, shas: dict[str, str], fixture_dir: Path, fleets: list[FleetCI],
+# The include ref of the content rows' fixture when there is no fleet-ci
+# clone: a well-formed SHA no rule reads, since those rows are then judged
+# by check_content() alone.
+CONTENT_FIXTURE_REF = "f" * 40
+
+
+def self_test_rows(base: FleetCI | None, shas: dict[str, str] | None, fixture_dir: Path, fleets: list[FleetCI],
                    tally: dict[str, int]) -> list[str]:
     """The repository rows, each a package that includes fleet-ci's template
     from the fixture fleet-ci `base` (its commits by name, `shas`), pinned at
     `v1` unless the row says otherwise. Each row is queued with its judge
     (run()); once all are built, each is checked and judged. Clones a row
     builds go under `fixture_dir` and into `fleets`, which self_test()
-    cleans up. Every row judged counts in tally["rows"]."""
+    cleans up. Every row judged counts in tally["rows"].
+
+    With `base` None (no fleet-ci clone), only the content rows run: badges,
+    README, logo, files, DESCRIPTION, the NEWS rule, the docs-drift copy,
+    schedules and seor's own logos, each judged by check_content() on a
+    fixture at CONTENT_FIXTURE_REF with no .fleet-ci/. The CI and local-gate
+    rows need the clone and are left out; self_test() reports them."""
     failures: list[str] = []
-    queued: list[tuple[str, DictSource, State, object, Judge, FleetCI]] = []
-    v1 = shas["v1"]
-    known = set(shas.values())
+    queued: list[tuple[str, DictSource, State, object, Judge, FleetCI | None, bool]] = []
+    v1 = shas["v1"] if shas else CONTENT_FIXTURE_REF
+    known = set(shas.values()) if shas else set()
 
     def run(pkg: str, files: dict | DictSource, state: State, fetch=None, judge: Judge | None = None,
-            fleet: FleetCI | None = None) -> None:
+            fleet: FleetCI | None = None, full: bool = False) -> None:
+        """Queue a row. Without a fleet-ci clone it is judged by
+        check_content() alone, unless `full`: a row whose CI rules stop
+        before fleet-ci is read (a file that does not load, no fleet-ci
+        include) runs check_repo() either way."""
         source = files if isinstance(files, DictSource) else DictSource(files)
-        queued.append((pkg, source, state, fetch, judge or (lambda report: None), fleet or base))
+        queued.append((pkg, source, state, fetch, judge or (lambda report: None), fleet or base, full))
 
     def fixture_repo(pkg: str, on_cran: bool = True, release: bool = True,
                      doi: str | None = "10.5281/zenodo.111") -> dict:
         """A conforming package at `v1`; a FOSSA package carries x-fossa."""
-        return fixture_files(pkg, v1, base.vendored(v1), on_cran, release, doi,
+        return fixture_files(pkg, v1, base.vendored(v1) if base else {}, on_cran, release, doi,
                              jobs=FIXTURE_FOSSA_JOB if pkg in FOSSA_PACKAGES else "")
 
     def loads(tag: str, report: Report) -> None:
@@ -2500,15 +2627,16 @@ def self_test_rows(base: FleetCI, shas: dict[str, str], fixture_dir: Path, fleet
         run(pkg, files, state, fetch, judge)
 
     def expect_gap(tag: str, needle: str, pkg: str, files: dict, state: State, fetch=None,
-                   then: Judge | None = None) -> None:
-        """A row whose report holds a gap with `needle`; `then` judges the report further."""
+                   then: Judge | None = None, full: bool = False) -> None:
+        """A row whose report holds a gap with `needle`; `then` judges the
+        report further; `full` as run() reads it."""
         def judge(report: Report) -> None:
             loads(tag, report)
             if not any(needle in text for _, text in report.gaps):
                 failures.append(f"{tag}: expected a gap containing {needle!r}, got {report.gaps}")
             if then is not None:
                 then(report)
-        run(pkg, files, state, fetch, judge)
+        run(pkg, files, state, fetch, judge, full=full)
 
     def edit(files: dict, path: str, old: str, new: str) -> dict:
         if old not in files[path]:
@@ -2882,32 +3010,38 @@ def self_test_rows(base: FleetCI, shas: dict[str, str], fixture_dir: Path, fleet
                           ("a syntax error", "include:\n", "include: [\n"),
                           ("an impossible date", "variables:\n", "released: 2026-02-30\nvariables:\n"),
                           ("a recursive alias", "    - echo renovate\n", "    - &loop [*loop]\n")):
+        # The local gate is not judged either: whether the file includes
+        # fleet-ci is unknown, so the run is incomplete (CIShape.UNLOADED).
         def load_error(report: Report, tag: str = tag) -> None:
             if (any(area == "ci" for area, _ in report.gaps)
                     or not any("missing ARCHITECTURE.md" in t for _, t in report.gaps)
                     or not any(area == "ci" and "could not read .gitlab-ci.yml" in t for area, t in report.unjudged)
+                    or not any(area == "local gate" and ".gitlab-ci.yml did not load" in t
+                               for area, t in report.unjudged)
                     or exit_status([Report("x", unjudged=report.unjudged, incomplete=report.incomplete)]) != 2):
-                failures.append(f"load error: {tag}: expected CI not judged and exit 2, got {report.gaps} / "
-                                f"{report.unjudged}")
+                failures.append(f"load error: {tag}: expected CI and the local gate not judged and exit 2, got "
+                                f"{report.gaps} / {report.unjudged}")
 
-        run("punycoder", edit(no_arch, ci, old, new), fixture_state(), judge=load_error)
+        run("punycoder", edit(no_arch, ci, old, new), fixture_state(), judge=load_error, full=True)
 
     # A file that loads but does not include fleet-ci's template: one CI gap,
-    # and the local gate, fleet-ci's, not judged.
+    # and the local gate, fleet-ci's, not judged, the run still complete.
     no_include = "does not include fleet-ci's templates/r-package.yml"
 
     def not_migrated(report: Report) -> None:
         if ([area for area, _ in report.gaps] != ["ci"]
-                or not any(area == "local gate" and "not judged" in t for area, t in report.unjudged)):
-            failures.append(f"no fleet-ci include: expected the one CI gap and the local gate not judged, got "
-                            f"{report.gaps} / {report.unjudged}")
+                or not any(area == "local gate" and "does not include fleet-ci's template" in t
+                           for area, t in report.unjudged)
+                or report.incomplete):
+            failures.append(f"no fleet-ci include: expected the one CI gap, the local gate not judged and the run "
+                            f"complete, got {report.gaps} / {report.unjudged}")
 
     expect_gap("no include at all", no_include, "punycoder",
                dict(cran, **{ci: "stages: [check]\ncheck:\n  script:\n    - R CMD check --as-cran x.tar.gz\n"}),
-               fixture_state(), then=not_migrated)
+               fixture_state(), then=not_migrated, full=True)
     expect_gap("another project's include", no_include, "punycoder",
                edit(cran, ci, "project: bart-turczynski/fleet-ci", "project: bart-turczynski/other-ci"),
-               fixture_state(), then=not_migrated)
+               fixture_state(), then=not_migrated, full=True)
 
     # NEGATIVE: local gate and schedules.
     # check-docs-drift.R is vendored (SEOR-lyciowif): every member carries
@@ -2945,60 +3079,87 @@ def self_test_rows(base: FleetCI, shas: dict[str, str], fixture_dir: Path, fleet
     expect_clean("the NEWS rule in AGENTS.md instead", "punycoder",
                  dict({k: v for k, v in cran.items() if k != "AGENTS_LANG.md"}, **{"AGENTS.md": FIXTURE_NEWS_RULE}),
                  fixture_state())
-    expect_gap("no news-terse hook", no_news_hook, "punycoder",
-               edit(cran, ".pre-commit-config.yaml", "python3 scripts/check-news.py NEWS.md", "true"), fixture_state(),
-               then=one_gap(no_news_hook))
-    expect_gap("check-news.py named only in a comment", no_news_hook, "punycoder",
-               edit(cran, ".pre-commit-config.yaml", "      - id: news-terse\n        entry: python3 scripts/check-news.py NEWS.md\n",
-                    "      # scripts/check-news.py is not wired yet\n      - id: news-terse\n        entry: true\n"),
-               fixture_state(), then=one_gap(no_news_hook))
-    # A pre-push hook that calls a shell script running the check counts.
-    news_wrapped = edit(cran, ".pre-commit-config.yaml", "python3 scripts/check-news.py NEWS.md", "sh tools/news.sh")
-    expect_clean("check-news.py run from a script a hook calls", "punycoder",
-                 dict(news_wrapped, **{"tools/news.sh": "python3 scripts/check-news.py NEWS.md\n"}), fixture_state())
-    # The hook runs the check on NEWS.md, at pre-push.
-    news_hook = "        entry: python3 scripts/check-news.py NEWS.md\n        language: system\n        stages: [pre-push]\n"
-    expect_gap("only check-news.py's self-test ported", no_news_hook, "punycoder",
-               edit(cran, ".pre-commit-config.yaml", news_hook, news_hook.replace("NEWS.md", "--self-test")),
-               fixture_state(), then=one_gap(no_news_hook))
-    expect_gap("the news-terse hook on the pre-commit stage", no_news_hook, "punycoder",
-               edit(cran, ".pre-commit-config.yaml", news_hook, news_hook.replace("pre-push", "pre-commit")),
-               fixture_state(), then=one_gap(no_news_hook))
-    expect_gap("check-news.py named only in the hook's name", no_news_hook, "punycoder",
-               edit(cran, ".pre-commit-config.yaml", news_hook,
-                    "        name: python3 scripts/check-news.py NEWS.md\n        entry: 'true'\n"
-                    "        language: system\n        stages: [pre-push]\n"),
-               fixture_state(), then=one_gap(no_news_hook))
-    expect_gap("a script a hook calls that runs only check-news.py's self-test", no_news_hook, "punycoder",
-               dict(news_wrapped, **{"tools/news.sh": "python3 scripts/check-news.py --self-test  # NEWS.md\n"}),
-               fixture_state(), then=one_gap(no_news_hook))
-    expect_clean("the news-terse hook inherits pre-push from default_stages", "punycoder",
-                 dict(cran, **{".pre-commit-config.yaml": "default_stages: [pre-push]\n" + cran[".pre-commit-config.yaml"]
-                               .replace(news_hook, news_hook.replace("        stages: [pre-push]\n", ""))}),
-                 fixture_state())
-    expect_gap("the news-terse hook inherits pre-commit from default_stages", no_news_hook, "punycoder",
-               dict(cran, **{".pre-commit-config.yaml": "default_stages: [pre-commit]\n" + cran[".pre-commit-config.yaml"]
-                             .replace(news_hook, news_hook.replace("        stages: [pre-push]\n", ""))}),
-               fixture_state(), then=one_gap(no_news_hook))
-    expect_clean("the news-terse hook with NEWS.md in args", "punycoder",
-                 edit(cran, ".pre-commit-config.yaml", news_hook,
-                      news_hook.replace(" NEWS.md\n", "\n        args: [NEWS.md]\n")), fixture_state())
+    # The NEWS hook half, and the toolchain hook beside it, are judged in the
+    # local gate, so these rows need the fleet-ci clone.
+    if base is not None:
+        expect_gap("no news-terse hook", no_news_hook, "punycoder",
+                   edit(cran, ".pre-commit-config.yaml", "python3 scripts/check-news.py NEWS.md", "true"), fixture_state(),
+                   then=one_gap(no_news_hook))
+        expect_gap("check-news.py named only in a comment", no_news_hook, "punycoder",
+                   edit(cran, ".pre-commit-config.yaml", "      - id: news-terse\n        entry: python3 scripts/check-news.py NEWS.md\n",
+                        "      # scripts/check-news.py is not wired yet\n      - id: news-terse\n        entry: true\n"),
+                   fixture_state(), then=one_gap(no_news_hook))
+        # A pre-push hook that calls a shell script running the check counts.
+        news_wrapped = edit(cran, ".pre-commit-config.yaml", "python3 scripts/check-news.py NEWS.md", "sh tools/news.sh")
+        expect_clean("check-news.py run from a script a hook calls", "punycoder",
+                     dict(news_wrapped, **{"tools/news.sh": "python3 scripts/check-news.py NEWS.md\n"}), fixture_state())
+        # The hook runs the check on NEWS.md, at pre-push.
+        news_hook = "        entry: python3 scripts/check-news.py NEWS.md\n        language: system\n        stages: [pre-push]\n"
+        expect_gap("only check-news.py's self-test ported", no_news_hook, "punycoder",
+                   edit(cran, ".pre-commit-config.yaml", news_hook, news_hook.replace("NEWS.md", "--self-test")),
+                   fixture_state(), then=one_gap(no_news_hook))
+        expect_gap("the news-terse hook on the pre-commit stage", no_news_hook, "punycoder",
+                   edit(cran, ".pre-commit-config.yaml", news_hook, news_hook.replace("pre-push", "pre-commit")),
+                   fixture_state(), then=one_gap(no_news_hook))
+        expect_gap("check-news.py named only in the hook's name", no_news_hook, "punycoder",
+                   edit(cran, ".pre-commit-config.yaml", news_hook,
+                        "        name: python3 scripts/check-news.py NEWS.md\n        entry: 'true'\n"
+                        "        language: system\n        stages: [pre-push]\n"),
+                   fixture_state(), then=one_gap(no_news_hook))
+        expect_gap("a script a hook calls that runs only check-news.py's self-test", no_news_hook, "punycoder",
+                   dict(news_wrapped, **{"tools/news.sh": "python3 scripts/check-news.py --self-test  # NEWS.md\n"}),
+                   fixture_state(), then=one_gap(no_news_hook))
+        expect_clean("the news-terse hook inherits pre-push from default_stages", "punycoder",
+                     dict(cran, **{".pre-commit-config.yaml": "default_stages: [pre-push]\n" + cran[".pre-commit-config.yaml"]
+                                   .replace(news_hook, news_hook.replace("        stages: [pre-push]\n", ""))}),
+                     fixture_state())
+        expect_gap("the news-terse hook inherits pre-commit from default_stages", no_news_hook, "punycoder",
+                   dict(cran, **{".pre-commit-config.yaml": "default_stages: [pre-commit]\n" + cran[".pre-commit-config.yaml"]
+                                 .replace(news_hook, news_hook.replace("        stages: [pre-push]\n", ""))}),
+                   fixture_state(), then=one_gap(no_news_hook))
+        expect_clean("the news-terse hook with NEWS.md in args", "punycoder",
+                     edit(cran, ".pre-commit-config.yaml", news_hook,
+                          news_hook.replace(" NEWS.md\n", "\n        args: [NEWS.md]\n")), fixture_state())
+        # The host toolchain check: a pre-push hook runs check-toolchain.R,
+        # the local pandoc against .fleet-ci/toolchain (check_toolchain_hook()).
+        no_toolchain_hook = "no host toolchain check in the pre-push gate"
+        toolchain_hook = "        entry: Rscript scripts/check-toolchain.R\n        language: system\n        stages: [pre-push]\n"
+        expect_gap("no check-toolchain hook", no_toolchain_hook, "punycoder",
+                   edit(cran, ".pre-commit-config.yaml", "      - id: check-toolchain\n" + toolchain_hook, ""),
+                   fixture_state(), then=one_gap(no_toolchain_hook))
+        expect_gap("the check-toolchain hook on the pre-commit stage", no_toolchain_hook, "punycoder",
+                   edit(cran, ".pre-commit-config.yaml", toolchain_hook, toolchain_hook.replace("pre-push", "pre-commit")),
+                   fixture_state(), then=one_gap(no_toolchain_hook))
+        expect_gap("only check-toolchain.R's self-test", no_toolchain_hook, "punycoder",
+                   edit(cran, ".pre-commit-config.yaml", "Rscript scripts/check-toolchain.R\n",
+                        "Rscript scripts/check-toolchain.R --self-test\n"),
+                   fixture_state(), then=one_gap(no_toolchain_hook))
+        expect_gap("no .pre-commit-config.yaml, so no check-toolchain hook", no_toolchain_hook, "punycoder",
+                   {k: v for k, v in cran.items() if k != ".pre-commit-config.yaml"}, fixture_state())
+        toolchain_wrapped = edit(cran, ".pre-commit-config.yaml", "Rscript scripts/check-toolchain.R\n",
+                                 "sh tools/toolchain.sh\n")
+        expect_clean("check-toolchain.R run from a script a hook calls", "punycoder",
+                     dict(toolchain_wrapped, **{"tools/toolchain.sh": "Rscript scripts/check-toolchain.R\n"}),
+                     fixture_state())
+        expect_clean("the check-toolchain hook with its script in args", "punycoder",
+                     edit(cran, ".pre-commit-config.yaml", "entry: Rscript scripts/check-toolchain.R\n",
+                          "entry: Rscript\n        args: [scripts/check-toolchain.R]\n"), fixture_state())
 
-    # An agent file that cannot be read is skipped: the hook half is still judged.
-    class UnreadableAgents(DictSource):
-        def read(self, path: str) -> str | None:
-            if path == "AGENTS.md":
-                raise ProbeError("reading AGENTS.md: 503")
-            return super().read(path)
+        # An agent file that cannot be read is skipped: the hook half is still judged.
+        class UnreadableAgents(DictSource):
+            def read(self, path: str) -> str | None:
+                if path == "AGENTS.md":
+                    raise ProbeError("reading AGENTS.md: 503")
+                return super().read(path)
 
-    def hook_judged(report: Report) -> None:
-        if (not any(no_news_hook in t for _, t in report.gaps)
-                or not any("could not read AGENTS.md" in t for _, t in report.unjudged)):
-            failures.append(f"an unreadable agent file: expected the hook gap and the skip, got "
-                            f"{report.gaps} / {report.unjudged}")
+        def hook_judged(report: Report) -> None:
+            if (not any(no_news_hook in t for _, t in report.gaps)
+                    or not any("could not read AGENTS.md" in t for _, t in report.unjudged)):
+                failures.append(f"an unreadable agent file: expected the hook gap and the skip, got "
+                                f"{report.gaps} / {report.unjudged}")
 
-    run("punycoder", UnreadableAgents(edit(cran, ".pre-commit-config.yaml", "python3 scripts/check-news.py NEWS.md",
-                                           "true")), fixture_state(), judge=hook_judged)
+        run("punycoder", UnreadableAgents(edit(cran, ".pre-commit-config.yaml", "python3 scripts/check-news.py NEWS.md",
+                                               "true")), fixture_state(), judge=hook_judged)
     no_deep = fixture_state()
     no_deep.schedules = no_deep.schedules[1:]
     expect_gap("deep-check schedule missing", "no deep-check schedule", "punycoder", cran, no_deep)
@@ -3238,6 +3399,37 @@ def self_test_rows(base: FleetCI, shas: dict[str, str], fixture_dir: Path, fleet
         files[FLEET_CI_CONFIG] = FIXTURE_FLEET_CI_YML.replace("  - Rscript scripts/check-urls.R\n", "")
         migrated("migrated, no URL check gate", "punycoder", files,
                  needles=(f"no URL check in {FLEET_CI_CONFIG}'s gates",))
+        # T1's README drift, NEWS version, lint and spelling gates, each found
+        # by its token in a gate list's command. Missing: a gap. Moved to
+        # host_gates, in another spelling: still found.
+        others = ("readme", "news", "lint", "spell")
+        respelled = {"readme": "  - Rscript tools/README-check.R\n", "news": "  - Rscript tools/NEWS_version.R\n",
+                     "lint": "  - Rscript -e 'lintr::lint_dir(\"R\")'\n", "spell": "  - Rscript tools/Spelling.R\n"}
+        for token, gate, _ in T1_GATES:
+            line = FIXTURE_T1_GATES[token]
+            without = FIXTURE_FLEET_CI_YML.replace("docs_gates:\n" + line if token == "spell" else line, "")
+            files = migrated_repo("punycoder")
+            files[FLEET_CI_CONFIG] = without
+            needle = f"no {gate} gate in {FLEET_CI_CONFIG}'s gates"
+            migrated(f"migrated, no {token} gate", "punycoder", files, needles=(needle,),
+                     then=one_gap(needle))
+            files = migrated_repo("punycoder")
+            files[FLEET_CI_CONFIG] = without + "host_gates:\n" + respelled[token]
+            migrated(f"migrated, the {token} gate a host gate, spelled otherwise", "punycoder", files)
+            if any(other != token and other in respelled[token].lower() for other in others):
+                raise SystemExit(f"self-test fixture: the respelled {token} gate names another token")
+        # The terseness check is not the NEWS version gate, though it names NEWS.
+        files = migrated_repo("punycoder")
+        files[FLEET_CI_CONFIG] = (FIXTURE_FLEET_CI_YML.replace(FIXTURE_T1_GATES["news"], "")
+                                  + "host_gates:\n  - python3 scripts/check-news.py NEWS.md\n")
+        news_version = f"no {T1_GATES[1][1]} gate in {FLEET_CI_CONFIG}'s gates"
+        migrated("migrated, only the NEWS terseness gate, no NEWS version gate", "punycoder", files,
+                 needles=(news_version,), then=one_gap(news_version))
+        # seor's disposition-row audit test files (osv-audit, security-audit).
+        files = migrated_repo("punycoder")
+        del files["tests/testthat/helper-security.R"]
+        audit_shape = "audit jobs lack seor's disposition-row shape: missing tests/testthat/helper-security.R"
+        migrated("audit shape", "punycoder", files, needles=(audit_shape,), then=one_gap(audit_shape))
         files = migrated_repo("punycoder")
         del files[FLEET_CI_CONFIG]
         migrated("migrated, no .fleet-ci.yml", "punycoder", files,
@@ -3300,9 +3492,15 @@ def self_test_rows(base: FleetCI, shas: dict[str, str], fixture_dir: Path, fleet
         migrated("migrated, a .fleet-ci file unreadable", "punycoder", UnreadableGate(migrated_repo("punycoder")),
                  skips=("could not read a file of the package (reading .fleet-ci/gate: 503)",))
 
-    queue_migrated(base)
-    for pkg, source, state, fetch, judge, fleet in queued:
-        judge(check_repo(pkg, source, state, fetch, fleet))
+    if base is not None:
+        queue_migrated(base)
+    for pkg, source, state, fetch, judge, fleet, full in queued:
+        if fleet is None and not full:
+            report = Report(pkg)
+            check_content(pkg, source, state, fetch, report)
+        else:
+            report = check_repo(pkg, source, state, fetch, fleet)
+        judge(report)
         tally["rows"] += 1
     return failures
 
@@ -3310,11 +3508,12 @@ def self_test_rows(base: FleetCI, shas: dict[str, str], fixture_dir: Path, fleet
 def self_test(skipped: list[str] | None = None, tally: dict[str, int] | None = None) -> list[str]:
     """The fixtures, in one pass: the case tables, then the repository rows
     (self_test_rows()) on a fixture fleet-ci built from the local clone
-    (fixture_fleet_ci()). The rows need the private fleet-ci clone
-    (FLEET_CI: --fleet-ci, else FLEET_CI_DIR) holding
-    FLEET_CI_FIXTURE_BASE, and Ruby; without any of them the self-test
-    FAILS, naming the fix, unless SEOR_SKIP_FLEET_CI_SELFTEST=1, which
-    appends them to `skipped`, never to the failures. Everything from the
+    (fixture_fleet_ci()). The CI and local-gate rows need the private
+    fleet-ci clone (FLEET_CI: --fleet-ci, else FLEET_CI_DIR) holding
+    FLEET_CI_FIXTURE_BASE, and Ruby; without any of them the content rows
+    still run, judged by check_content(), and the self-test FAILS, naming
+    the fix, unless SEOR_SKIP_FLEET_CI_SELFTEST=1, which appends the CI and
+    local-gate rows to `skipped`, never to the failures. Everything from the
     fixture's temporary directory on runs inside one try/finally, which
     removes it. `tally` gets the number of repository rows judged ("rows")
     and of case-table entries checked ("cases"), which main() prints."""
@@ -3382,12 +3581,15 @@ def self_test(skipped: list[str] | None = None, tally: dict[str, int] | None = N
                 failures += self_test_rows(fixture_fleet, shas, fixture_dir, fleets, tally)
             except FleetCIError as error:
                 failures.append(f"the fixture fleet-ci was not built, or a row not queued ({error})")
-        elif os.environ.get("SEOR_SKIP_FLEET_CI_SELFTEST") == "1":
-            skipped.append(f"the repository rows, every one on the fixture fleet-ci: {missing} "
-                           "(SEOR_SKIP_FLEET_CI_SELFTEST=1)")
         else:
-            failures.append(f"the repository rows cannot run: {missing}. Fix that, or set "
-                            "SEOR_SKIP_FLEET_CI_SELFTEST=1 to skip them on this machine")
+            # The content rows need no clone: they run either way.
+            failures += self_test_rows(None, None, fixture_dir, fleets, tally)
+            if os.environ.get("SEOR_SKIP_FLEET_CI_SELFTEST") == "1":
+                skipped.append(f"the CI and local-gate rows, which need the fixture fleet-ci: {missing} "
+                               "(SEOR_SKIP_FLEET_CI_SELFTEST=1)")
+            else:
+                failures.append(f"the CI and local-gate rows cannot run: {missing}. Fix that, or set "
+                                "SEOR_SKIP_FLEET_CI_SELFTEST=1 to skip them on this machine")
     except Exception as error:  # noqa: BLE001 - a crash is a failure line, and the finally still cleans up
         failures.append(f"the self-test crashed: {type(error).__name__}: {error}")
     finally:
