@@ -49,19 +49,26 @@ dependencies and (2) attach them all on `library(seor)`.
   shared template, pinned by SHA.
   [ADR 0013](design/adr/0013-fleet-ci-is-private.md) amends it: fleet-ci is
   private, so its template and images need authenticated reads.
-- `scripts/` — repository hygiene checks that run from the pre-push hook and CI.
+- `.gitlab-ci.yml`, `.fleet-ci.yml`, `.fleet-ci/` — CI and the local gate
+  ([`design/ci.md`](design/ci.md)). `.gitlab-ci.yml` includes fleet-ci's
+  template at a pinned SHA and sets only seor's switches and its `x-*` jobs;
+  `.fleet-ci.yml` holds the local gate's settings; `.fleet-ci/` is fleet-ci's
+  vendored gate, rewritten only by fleet-ci's `bin/vendor`.
+- `scripts/` — repository hygiene checks that run from the pre-push hooks and
+  the local gate, and the fleet's shared tooling.
   `check-design.py` owns design-doc hygiene; `check-citation.py` owns the
   agreement between `CITATION.cff`, `.zenodo.json` and `DESCRIPTION`. Both are
-  offline and stdlib-only, so they also run as cheap CI jobs.
+  offline and stdlib-only pre-push hooks, and T2's `citation-version` job runs
+  `check-citation.py` too.
   `check-bugreports.py`, also offline and stdlib-only, holds `BugReports:`,
   the package help page and every tracker link on `/-/work_items`, and
   `check-urls.R` fetches every declared URL with no exemption
   ([ADR 0011](design/adr/0011-bugreports-names-work-items.md)).
-  `docs-drift.sh` runs `check-docs-drift.R`, which fails when `man/`,
-  `NAMESPACE` or `DESCRIPTION` differ from what the pinned roxygen2
-  regenerates, on a `git archive` export of the pushed commit. CI's
-  `docs-drift` job runs `check-docs-drift.R` too, with roxygen2 at the pin,
-  so drift that skipped the hook still fails on main.
+  `check-docs-drift.R` fails when `man/`, `NAMESPACE` or `DESCRIPTION` differ
+  from what the pinned roxygen2 regenerates; the local gate runs it, with
+  `check-urls.R`, `check-readme-drift.sh` and `check-news-version.sh`, on
+  its export of the pushed commit. `check-fleet-hook.sh` warns when a
+  clone's pre-push hook is not fleet-ci's.
   `bestpractices-url.py` is a maintainer tool, not a check. It turns
   `.bestpractices.json` into bestpractices.dev edit links and verifies the live
   entry against the file. It reads the network, and only its offline
@@ -91,7 +98,7 @@ dependencies and (2) attach them all on `library(seor)`.
   `logo-metadata.py` writes every member's logo metadata, keywords copied
   from `DESCRIPTION`. Its `--self-test` and `--check seor man/figures`, which
   fails when seor's own logo has drifted from `DESCRIPTION`, run from the
-  hook and in CI's `citation-version` job.
+  pre-push hooks.
 - `CITATION.cff`, `.zenodo.json` — publication metadata, kept out of the CRAN
   tarball via `.Rbuildignore`. The version they carry is governed by
   [ADR 0002](design/adr/0002-citation-urls-are-the-ones-about-this-package.md),
@@ -115,30 +122,24 @@ dependencies and (2) attach them all on `library(seor)`.
   imported from" — because members are attached at runtime rather than
   `importFrom`'d. This is inherent to the metapackage pattern (`tidyverse` gets
   the same NOTE) and is safe to leave.
-- **The verify gate suppresses CRAN incoming feasibility here, and only here.**
-  Incoming always ERRORs for a metapackage whose members are off CRAN, so
-  `_R_CHECK_CRAN_INCOMING_ = "false"` is deliberate and is not to be removed to
-  fix a red gate. Every other repository in the fleet runs the check, because it
-  is what surfaces dead `URL:`/`BugReports:` links. The exception was decided
-  in [ADR 0004](design/adr/0004-cran-incoming-runs-everywhere-except-seor.md),
+- **seor's `t2-ascran` runs with CRAN incoming feasibility off, and only
+  seor's.** Incoming always ERRORs for a metapackage whose members are off
+  CRAN, so `FLEET_INCOMING: "false"` in `.gitlab-ci.yml` is deliberate and is
+  not to be removed to fix a red pipeline. Every other repository in the fleet
+  runs the check there, because it is what surfaces dead `URL:`/`BugReports:`
+  links; for seor, the local gate's `check-urls.R` is the only URL check. The
+  exception was decided in
+  [ADR 0004](design/adr/0004-cran-incoming-runs-everywhere-except-seor.md),
   now superseded by
   [ADR 0012](design/adr/0012-verification-tiers-replace-per-push-ci.md), which
-  carries seor's exception forward: once seor moves to fleet-ci's template it
-  is `FLEET_INCOMING="false"` in the T2 and T3 runs, and the local gate runs no
-  incoming check at all.
-- **seor's cheap CI jobs are deliberately not folded into one.** The fleet folded
-  its cheap verify jobs into a single `gates` job to buy wall time; seor did not,
-  because fixing the cache took the six jobs a merge pipeline runs here from
-  24.5m of compute to 5.5m without touching job structure. See
-  [ADR 0005](design/adr/0005-cheap-ci-jobs-fold-into-one-gates-job.md) for the
-  decision and its boundary, and
-  [ADR 0003](design/adr/0003-fleet-ci-runs-on-self-hosted-runners.md) for the
-  cache mechanism. ADR 0005 is superseded by ADR 0012, which replaces these
-  per-push jobs once seor moves to fleet-ci's template. Until then its rules
-  apply here even though seor was not folded: never fold jobs for compute
-  reasons, and a job carrying its own `image:` cannot be folded into one that
-  does not — `glab ci lint` passes on that bug. ADR 0012 carries the second
-  forward.
+  carries it forward. The local gate runs no incoming check for any package.
+- **CI is fleet-ci's template, not jobs of seor's own.** A push to `main`, a
+  branch push and a merge request create no pipeline; the merge gate is the
+  local gate, and CI runs only T2 (the weekly `deep-check` schedule) and T3
+  (release runs). seor adds only `x-floor` and `x-fossa`, and never writes
+  `rules`, `when` or `workflow` (ADR 0012). ADR 0005's rule that a job
+  carrying its own `image:` cannot be folded into one that does not still
+  holds for those two.
 
 ## Membership and CRAN status
 

@@ -12,13 +12,15 @@ package dependencies, so they are not in `DESCRIPTION`.
   `testthat::test_local(filter = "matcher")` (matches `test-matcher.R`).
 - Regenerate docs: `devtools::document()` — rebuilds `man/` and `NAMESPACE` from
   the roxygen comments in `R/`.
-- Verify gate: the command is in `CONTRIBUTING.md`; the pre-push hook runs
-  exactly that chain, and so does CI.
+- Verify gate: `.fleet-ci/gate auto`, fleet-ci's local gate, which the
+  pre-push hook runs in the fleet image (`CONTRIBUTING.md`, `design/ci.md`).
+  Its checks are listed in `.fleet-ci.yml`.
 
-  Its `env =` argument disables only the CRAN incoming-feasibility step, which
+  Its `R CMD check --as-cran` runs with CRAN incoming feasibility off, and
+  seor's `t2-ascran` does too (`FLEET_INCOMING: "false"`), because that step
   always ERRORs for this metapackage while its members are off CRAN. Every
-  other `--as-cran` check still runs. Do not drop it to "fix" a red gate — see
-  the comment in `.pre-commit-config.yaml`.
+  other `--as-cran` check still runs. Do not turn it on to "fix" anything —
+  see the comment in `.gitlab-ci.yml`.
 
 - When no R REPL is available, run snippets with `Rscript -e "..."`.
 
@@ -131,7 +133,8 @@ unexpected (e.g. misspelled) arguments — for instance with
   ("`NEWS.md` bullets" in `design/fleet-standard.md`), and the `news-terse`
   pre-push hook (`scripts/check-news.py NEWS.md`) refuses a bullet that
   breaks it.
-- The `news-version` gate (`scripts/gates.sh`) passes when the top `NEWS.md`
+- The `news-version` gate (`scripts/check-news-version.sh`, a cheap gate of
+  the local gate) passes when the top `NEWS.md`
   heading reads "(development version)" or names the `DESCRIPTION`
   `Version`; the release checklist renames it at release.
 - Never hand-edit generated files: `NAMESPACE` or anything under `man/`. Edit
@@ -139,12 +142,15 @@ unexpected (e.g. misspelled) arguments — for instance with
 
 ### A red gate on an untouched tree
 
-Toolchain drift makes the verify gate go red on a tree nobody changed, and it
-looks exactly like a defect in the change being made. `scripts/check-toolchain.R`
-runs ahead of the expensive step and names it in one line: roxygen2's installed
-version against this package's `Config/roxygen2/version`, and any installed
-package built under a newer R than the one running. Both have happened, and both
-cost an afternoon (SEOR-tcytizic).
+The gate runs in the image the fleet-ci pin names, so this machine's R
+library cannot turn it red. A dependency that moved on CRAN can: the gate
+resolves the dependencies afresh on every run. The pre-push `check-toolchain`
+hook (`scripts/check-toolchain.R`) still checks this machine: roxygen2's
+installed version against this package's `Config/roxygen2/version`, any
+installed package built under a newer R than the one running, and the local
+pandoc against the fleet image's, so a local `devtools::document()` or
+`build_readme()` writes what the gate accepts (SEOR-tcytizic).
 
-If that check passes and the gate is still red on a tree you have not touched,
-say so and keep the evidence rather than assuming your change caused it.
+If the gate is red on a tree you have not touched, say so and keep the
+evidence (`FLEET_GATE_KEEP=<dir>` keeps the container's output) rather than
+assuming your change caused it.

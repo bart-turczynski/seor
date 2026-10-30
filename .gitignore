@@ -45,6 +45,12 @@ vignettes/*.html
 vignettes/*.pdf
 site/
 public/
+# The library fleet-ci's t2-sanitizers installs into, and where its pages job
+# moves the unpublished top-level .md files.
+.fleet-lib/
+.fleet-agent-md/
+# The former CI job library and pak cache, which no job writes since the
+# fleet-ci migration.
 .r-lib/
 .pak-cache/
 doc/

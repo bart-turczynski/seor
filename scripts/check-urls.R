@@ -1,15 +1,17 @@
 #!/usr/bin/env Rscript
 
-# scripts/check-urls.R -- the `urls` stage of the pre-push gate.
+# scripts/check-urls.R -- the URL check, a cheap gate of the fleet-ci local
+# gate (.fleet-ci.yml).
 #
 #   Rscript scripts/check-urls.R              # fetch every declared URL
 #   Rscript scripts/check-urls.R --self-test  # the offline classifier test only
 #
 # Fetches every URL the package declares and fails on a dead one, which
-# nothing else in the gate does. In other fleet packages `R CMD check
-# --as-cran` fetches them too -- `checking CRAN incoming feasibility` calls
-# this same check_url_db() -- but only as a NOTE; seor's `verify` turns that
-# step off entirely (design/adr/0004), so here this is the only URL check.
+# nothing else in the gate does. `R CMD check --as-cran` fetches them too --
+# `checking CRAN incoming feasibility` calls this same check_url_db() -- but
+# only as a NOTE, and the gate's check runs with incoming off; seor's
+# t2-ascran turns it off as well (design/adr/0004, FLEET_INCOMING), so for
+# seor this is the only URL check anywhere.
 # The fleet standard adds this stage to every package
 # (design/fleet-standard.md, "Local pre-push gate"). Copied from punycoder's
 # scripts/check-urls.R, itself ported from sitemapr's `urls` stage in
@@ -17,9 +19,9 @@
 # verify_url_self_test() and verify_urls(), unchanged apart from these
 # comments.
 #
-# It runs as its own pre-push hook (`check-urls` in .pre-commit-config.yaml)
-# ahead of `verify`, so a dead link is reported in seconds rather than after
-# the full check.
+# The gate runs it in its full tier, ahead of R CMD check. Its offline
+# self-test is the `check-urls-self-test` pre-push hook, when this file
+# changes.
 
 # Sort the rows `tools:::check_url_db()` returns into what they mean for the
 # gate: "red" (a real defect: fail) or "warn" (no answer at all: report,
