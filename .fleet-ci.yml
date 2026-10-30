@@ -1,0 +1,70 @@
+# The fleet-ci local gate's settings: T0 (docs) and T1 (full) before every
+# push, run by .fleet-ci/gate in the fleet image (fleet-ci README, "The
+# .fleet-ci.yml file"; ADR 0012). Read from the pushed commit. The t2-locale
+# and pages CI jobs read it too. It replaces the former `verify` pre-push
+# hook chain and scripts/gates.sh; design/ci.md has the tiers and the gaps.
+version: 1
+
+# The image the gate runs in. It must be .gitlab-ci.yml's
+# FLEET_RELEASE_VARIANT (default fleet-r).
+variant: fleet-r
+
+# Allowlisted paths a gate or a hook here reads, so a change to them is
+# never docs-only: scripts/check-bugreports.py (a pre-push hook) reads
+# _pkgdown.yml for tracker links, as in punycoder. scripts/check-design.py
+# (a pre-push hook) reads design/adr/ and design/specs/, but it runs on every
+# push whatever the tier, and excluding them would put an R CMD check on the
+# design-only merges T0 exists for (ADR 0012), so they stay docs. No script
+# under tests/, scripts/ or tools/, nor any other hook, reads an allowlisted
+# path: the other design/ names there are comments or the codespell
+# excludes, and codespell also runs on every push.
+docs_exclude:
+  - _pkgdown.yml
+
+# T0, and the start of T1. spelling reads DESCRIPTION, roxygen, vignettes,
+# README and NEWS; genuine terms go in inst/WORDLIST (SEOR-mtbzfroz). The
+# former `spelling` pre-push hook and gates.sh's spelling gate.
+docs_gates:
+  - Rscript -e 'bad <- spelling::spell_check_package(); if (nrow(bad)) { print(bad); quit(status = 1) }'
+
+# T1, in the container after the dependency install, each run whatever the
+# others report. The former pre-push chain bar R CMD check (the gate's own),
+# spelling (docs_gates above) and the host-side hooks that stay in
+# .pre-commit-config.yaml: lintr (the former `verify` hook's first half);
+# man/, NAMESPACE and DESCRIPTION against a fresh run of the pinned roxygen2
+# (the former `docs-drift` hook, SEOR-nwfmerhu; the export is the pushed
+# commit, so no git archive step is needed); every declared URL (the former
+# `check-urls` hook: the gate's R CMD check runs with incoming off, ADR
+# 0004, so nothing else fetches them); then the two gates.sh ran in CI on
+# every push to main: README.md against a fresh knit of README.Rmd, and the
+# NEWS heading against the version.
+cheap_gates:
+  - Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }'
+  - Rscript scripts/check-docs-drift.R .
+  - Rscript scripts/check-urls.R
+  - sh scripts/check-readme-drift.sh
+  - sh scripts/check-news-version.sh
+
+# The gate runs R CMD check with NOT_CRAN=true, so skip_on_cran() no longer
+# keeps these out of it. T2 runs both, as osv-audit and security-audit (and
+# in every T2 leg that runs the suite; design/ci.md, "Gaps accepted").
+exclude_tests:
+  - path: tests/testthat/test-osv.R
+    why: queries osv.dev over the network; the osv-audit job runs it in T2
+  - path: tests/testthat/test-security.R
+    why: queries Sonatype OSS Index with credentials the gate does not have; the security-audit job runs it in T2
+
+# The top-level .md files the pkgdown site publishes; every other one (the
+# agent files among them) is moved out before build_site() (SEOR-wqxhftpv).
+# The former pages job's KEEP list, unchanged: the pages live on 2026-09-24,
+# with CHANGELOG.md since taken down. cran-comments.md is on pkgdown's own
+# skip list either way.
+pages_keep:
+  - README.md
+  - NEWS.md
+  - LICENSE.md
+  - CONTRIBUTING.md
+  - SECURITY.md
+  - CODE_OF_CONDUCT.md
+  - ACKNOWLEDGMENTS.md
+  - ARCHITECTURE.md

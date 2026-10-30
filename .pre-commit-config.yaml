@@ -8,20 +8,28 @@ repos:
     hooks:
       - id: check-added-large-files
         args: ['--maxkb=5120']
+      # .fleet-ci/ is fleet-ci's bin/vendor output, which seor's fleet
+      # checker requires byte for byte; re-run bin/vendor rather than
+      # editing it, so no fixer or formatter touches it.
       - id: end-of-file-fixer
+        exclude: '^\.fleet-ci/'
       - id: trailing-whitespace
+        exclude: '^\.fleet-ci/'
       - id: check-merge-conflict
       - id: check-yaml
       - id: mixed-line-ending
+        exclude: '^\.fleet-ci/'
       - id: check-case-conflict
   # Air (https://posit-dev.github.io/air/) formats R sources on commit. The
   # hook bootstraps its own R-free binary, so no global install is needed.
   # Air owns layout; the local `verify` lintr gate below owns logic lints.
-  # Only Air >= 0.8.2 can be pinned as a pre-commit rev.
+  # Only Air >= 0.8.2 can be pinned as a pre-commit rev. Not .fleet-ci/
+  # (above): Air would reformat the vendored gate-run.R.
   - repo: https://github.com/posit-dev/air-pre-commit
     rev: 0.12.0
     hooks:
       - id: air-format
+        exclude: '^\.fleet-ci/'
   # The `spelling` hook below reads DESCRIPTION, roxygen, vignettes, README
   # and NEWS, but not code, comments, string literals or tooling. This covers
   # those for British spellings (SEOR-xtmnpmae; design/fleet.md "Prose
