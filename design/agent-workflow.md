@@ -42,7 +42,7 @@ pre-commit install
 .fleet-ci/pre-push --install
 ```
 
-`pre-commit install` writes both hook types (`default_install_hook_types`); `.fleet-ci/pre-push --install` then replaces the pre-push one with fleet-ci's, which runs the gate and then pre-commit's pre-push stage. `pre-commit install -f`, and `pre-commit install -f --hook-type pre-push`, drop the gate again: re-run `.fleet-ci/pre-push --install` after either. Until it is installed, the warn-only `fleet-ci-hook-installed` hook prints a WARNING on every push. `design/ci.md` has the details.
+`pre-commit install` writes both hook types (`default_install_hook_types`); `.fleet-ci/pre-push --install` then replaces the pre-push one with fleet-ci's, which runs the gate and then pre-commit's pre-push stage. `pre-commit install -f`, and `pre-commit install -f --hook-type pre-push`, drop the gate again: re-run `.fleet-ci/pre-push --install` after either. Until it is installed, the `fleet-ci-hook-installed` hook refuses every push. `design/ci.md` has the details.
 
 `pre-commit` is a Python tool. For non-Python templates, install it with `uv tool install pre-commit` or `pipx install pre-commit`. The gate needs Docker and `docker login registry.gitlab.com` (fleet-ci is private, ADR 0013).
 

@@ -67,8 +67,8 @@ dependencies and (2) attach them all on `library(seor)`.
   `check-docs-drift.R` fails when `man/`, `NAMESPACE` or `DESCRIPTION` differ
   from what the pinned roxygen2 regenerates; the local gate runs it, with
   `check-urls.R`, `check-readme-drift.sh` and `check-news-version.sh`, on
-  its export of the pushed commit. `check-fleet-hook.sh` warns when a
-  clone's pre-push hook is not fleet-ci's.
+  its export of the pushed commit. `check-fleet-hook.sh` refuses a push
+  when a clone's pre-push hook is not fleet-ci's.
   `bestpractices-url.py` is a maintainer tool, not a check. It turns
   `.bestpractices.json` into bestpractices.dev edit links and verifies the live
   entry against the file. It reads the network, and only its offline
