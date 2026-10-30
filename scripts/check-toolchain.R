@@ -59,9 +59,10 @@
 #    README that CI's readme gate reports as drift, after the push passed.
 #    This check reads the pin from `PANDOC_VERSION` in .gitlab-ci.yml, the
 #    value CI installs; two different values there are reported, not
-#    resolved. Its reader is the fleet's only one: check-fleet-standard.py
-#    runs `--pandoc-assignments` (below) instead of parsing the pin itself,
-#    and `--pandoc-unread` for the unread settings this check stops on.
+#    resolved. `--pandoc-assignments` and `--pandoc-unread` (below) print
+#    what this reader finds. check-fleet-standard.py ran them while it
+#    judged CI that pinned pandoc in .gitlab-ci.yml; since every package
+#    includes fleet-ci it reads no CI pin and runs neither (SEOR-jlsdnsjd).
 #    It parses the file with the yaml package (v4, SEOR-bqroclcz, ADR 0009)
 #    and reads shell assignments in its script items; a file that does not
 #    load stops it. GitLab's expanded form, a `value:` mapping, is an error
@@ -322,9 +323,10 @@ run_stale_check <- function(root) {
 
 # --- Check 4: pandoc matches the CI pin ---------------------------------------
 
-# The pin's spellings. This is the only reader of them: check-fleet-standard.py
-# runs this script with --pandoc-assignments and judges what it prints, so the
-# fleet checker and this check cannot disagree on a pin (SEOR-xhyrogfm).
+# The pin's spellings. This is the only reader of them. check-fleet-standard.py
+# ran this script with --pandoc-assignments so the two could not disagree on a
+# pin (SEOR-xhyrogfm); it reads no CI pin since every package includes
+# fleet-ci (SEOR-jlsdnsjd).
 #
 # .gitlab-ci.yml is parsed with the yaml package (ADR 0009) as YAML 1.1, the
 # way GitLab reads it: quoting, comments, flow and block collections,
@@ -1167,10 +1169,8 @@ read_pandoc <- function(lines) {
 # and lines numbered from 1: `<text>\t<line>\t<value>` per pin, then
 # `unread\t<text>\t<line>` per line read_pandoc() finds unread, the setting
 # pinned_pandoc() refuses whatever pin it reads (SEOR-mcstkogt), or in
-# GitLab's expanded form at any depth (check-fleet-standard.py finds that
-# form itself only in the global and top-level `variables:`, and reports its
-# own gap in place of this one there; elsewhere, such as a `rules:` entry's
-# variables, this line is the gap it reports), and
+# GitLab's expanded form at any depth (a `rules:` entry's variables
+# included), and
 # `unloadable\t<text>\t<line>\t<message>` for a text that does not load (line
 # 0 when the parser names none). The words keep these apart from a pin's
 # line when both flags are given.
@@ -1762,8 +1762,7 @@ self_test <- function() {
       c("job:", "  before_script: ['PANDOC_VERSION=3.10', 'echo hi']"),
       "3.10"
     ),
-    # The builtins that assign in the current shell: check-fleet-standard.py's
-    # pin_assignment() reads them too (SEOR-bqroclcz).
+    # The builtins that assign in the current shell (SEOR-bqroclcz).
     `readonly` = list(job("readonly PANDOC_VERSION=3.10"), "3.10"),
     `declare -x` = list(job("declare -x PANDOC_VERSION=3.10"), "3.10"),
     `typeset -x` = list(job("typeset -x PANDOC_VERSION=3.10"), "3.10"),
@@ -2961,9 +2960,8 @@ self_test <- function() {
   case("pandoc-yaml-old", grepl("yaml 999.0 or later, but", why, fixed = TRUE))
   case("pandoc-yaml-old", grepl("install.packages", why, fixed = TRUE))
 
-  # check-fleet-standard.py reads the pin through --pandoc-assignments and
-  # --pandoc-unread: these texts, separated by a form feed and numbered as
-  # in their files, are what it judges.
+  # --pandoc-assignments and --pandoc-unread print these texts, separated by
+  # a form feed and numbered as in their files.
   assignments <- function(lines) pandoc_report(lines, unread = FALSE)
   unread_lines <- function(lines) pandoc_report(lines, assignments = FALSE)
   case(
@@ -3002,9 +3000,9 @@ self_test <- function() {
     "pandoc-report: unread key",
     identical(assignments(beside("PANDOC_VERSION: \"\"")), "1\t2\t3.10")
   )
-  # --pandoc-unread prints that refusal's lines, numbered as above, so the
-  # fleet checker reports what this check stops on (SEOR-mcstkogt), and a
-  # text that does not load, with the line the parser names.
+  # --pandoc-unread prints that refusal's lines, numbered as above, so a
+  # caller sees what this check stops on (SEOR-mcstkogt), and a text that
+  # does not load, with the line the parser names.
   case(
     "pandoc-report: unread",
     identical(
@@ -3048,8 +3046,7 @@ self_test <- function() {
     !length(unread_lines(c(global, "\f", read$variables[[1L]])))
   )
   # The expanded form, which pinned_pandoc() stops on, prints its line at
-  # any depth: check-fleet-standard.py finds it itself only in the global
-  # and top-level `variables:`, so a `rules:` entry's is its gap this way.
+  # any depth, a `rules:` entry's included.
   case(
     "pandoc-report: unread, the expanded form",
     identical(
@@ -3392,8 +3389,9 @@ self_test <- function() {
 # --pandoc-assignments is the exception: it reads .gitlab-ci.yml texts on
 # stdin, separated by a line holding a form feed, and prints each pin they
 # assign as `<text>\t<line>\t<value>`, nothing else.
-# check-fleet-standard.py reads the pin this way rather than with a parser of
-# its own, and runs it with every fixture of its self-test at once.
+# check-fleet-standard.py read the pin this way, rather than with a parser of
+# its own, while packages pinned pandoc in .gitlab-ci.yml; it no longer calls
+# either flag (SEOR-jlsdnsjd), which stay for reading a pin by hand.
 # --pandoc-unread reads the same and prints `unread\t<text>\t<line>` per line
 # that sets a value in a spelling the reader does not read or in GitLab's
 # expanded form, and
