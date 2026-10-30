@@ -1,7 +1,22 @@
-# Overrides the shared config: the shared `verify` hook wraps the command in a
-# bash invocation that breaks on R's verify command (it contains the double
-# quotes from the rcmdcheck --as-cran argument). Here the R code is passed as a
-# single argv element, so no shell quoting is involved.
+# The hygiene hooks and the shared fleet tooling's self-tests, at commit and
+# at push. Install with `pre-commit install` (both hook types, from
+# default_install_hook_types below), then `.fleet-ci/pre-push --install`,
+# which replaces pre-commit's pre-push hook with fleet-ci's: that hook runs
+# the fleet-ci local gate (.fleet-ci/gate, settings in .fleet-ci.yml) on each
+# pushed ref's tip, then this file's pre-push stage. The gate itself (lintr,
+# spelling, docs drift, the URL, README and NEWS-heading checks, R CMD check;
+# the former `verify`, `docs-drift`, `check-urls` and `spelling` hooks and
+# scripts/gates.sh) is in .fleet-ci.yml, never here: this file must not run
+# .fleet-ci/gate (fleet-ci README, "The local gate").
+#
+# Over fleet-ci's hook, `pre-commit install` and
+# `pre-commit install --hook-type pre-push` without -f move it to
+# hooks/pre-push.legacy (pre-commit's migration mode), which still runs the
+# gate first. `pre-commit install -f` (both types, from
+# default_install_hook_types) and `pre-commit install -f --hook-type pre-push`
+# delete it and drop the gate; `-f --hook-type pre-commit` leaves it alone.
+# Re-run `.fleet-ci/pre-push --install` after either of the two.
+default_install_hook_types: [pre-commit, pre-push]
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -22,20 +37,21 @@ repos:
       - id: check-case-conflict
   # Air (https://posit-dev.github.io/air/) formats R sources on commit. The
   # hook bootstraps its own R-free binary, so no global install is needed.
-  # Air owns layout; the local `verify` lintr gate below owns logic lints.
-  # Only Air >= 0.8.2 can be pinned as a pre-commit rev. Not .fleet-ci/
-  # (above): Air would reformat the vendored gate-run.R.
+  # Air owns layout; the gate's lintr (a cheap gate in .fleet-ci.yml) owns
+  # logic lints. Only Air >= 0.8.2 can be pinned as a pre-commit rev. Not
+  # .fleet-ci/ (above): Air would reformat the vendored gate-run.R.
   - repo: https://github.com/posit-dev/air-pre-commit
     rev: 0.12.0
     hooks:
       - id: air-format
         exclude: '^\.fleet-ci/'
-  # The `spelling` hook below reads DESCRIPTION, roxygen, vignettes, README
-  # and NEWS, but not code, comments, string literals or tooling. This covers
-  # those for British spellings (SEOR-xtmnpmae; design/fleet.md "Prose
-  # language"). Skipped: generated man/ and docs/, .bestpractices.json (it
-  # mirrors the live bestpractices.dev entry), and accepted ADRs 0003 and 0005,
-  # which scripts/check-design.py keeps immutable. The British forms
+  # The gate's spelling check (docs_gates in .fleet-ci.yml) reads
+  # DESCRIPTION, roxygen, vignettes, README and NEWS, but not code, comments,
+  # string literals or tooling. This covers those for British spellings
+  # (SEOR-xtmnpmae; design/fleet.md "Prose language"). Skipped: generated man/
+  # and docs/, .bestpractices.json (it mirrors the live bestpractices.dev
+  # entry), accepted ADRs 0003 and 0005, which scripts/check-design.py keeps
+  # immutable, and .fleet-ci/ (bin/vendor's output). The British forms
   # design/fleet.md quotes on purpose carry inline codespell:ignore comments.
   - repo: https://github.com/codespell-project/codespell
     rev: v2.4.3
@@ -44,7 +60,7 @@ repos:
         name: codespell (British spellings, en-GB_to_en-US; SEOR-xtmnpmae)
         args: [--builtin, en-GB_to_en-US]
         stages: [pre-commit, pre-push]
-        exclude: '^(man/|docs/|\.bestpractices\.json$|design/adr/0003-fleet-ci-runs-on-self-hosted-runners\.md$|design/adr/0005-cheap-ci-jobs-fold-into-one-gates-job\.md$)'
+        exclude: '^(\.fleet-ci/|man/|docs/|\.bestpractices\.json$|design/adr/0003-fleet-ci-runs-on-self-hosted-runners\.md$|design/adr/0005-cheap-ci-jobs-fold-into-one-gates-job\.md$)'
   - repo: local
     hooks:
       - id: check-design
@@ -57,7 +73,8 @@ repos:
       # CITATION.cff and .zenodo.json duplicate the version and the project
       # URLs out of DESCRIPTION, and nothing asserted either copy. Offline,
       # stdlib-only and instant. The rule it enforces is
-      # design/adr/0001-citation-metadata-names-the-release.md.
+      # design/adr/0001-citation-metadata-names-the-release.md. T2's
+      # citation-version job runs it too.
       - id: check-citation
         name: citation metadata vs DESCRIPTION
         entry: python3 scripts/check-citation.py
@@ -123,8 +140,7 @@ repos:
       # logo has drifted from DESCRIPTION, so an edit to the keywords without
       # regenerating the logo does not pass (SEOR-zgsfwyjk). The check runs on
       # every push, like check-citation: it takes milliseconds, and drift that
-      # reached main some other way, or a deleted logo, is caught too. CI's
-      # citation-version job runs both.
+      # reached main some other way, or a deleted logo, is caught too.
       - id: logo-metadata-self-test
         name: logo-metadata self-test
         entry: python3 scripts/logo-metadata.py --self-test
@@ -158,23 +174,26 @@ repos:
         files: ^(scripts/(check-fleet-standard\.py|check-toolchain\.R|logo-metadata\.py|check-docs-drift\.R)|man/figures/logo\.(svg|png)|DESCRIPTION)$
         stages: [pre-push]
         verbose: true
-      # seor is a metapackage whose members `sitemapr`, `robotstxtr` and `ssrfr`
-      # are not yet on CRAN, so `--as-cran`'s "CRAN incoming feasibility" step always
-      # reports an ERROR: non-mainstream strong dependencies, the `Remotes:` field, and
-      # the archived `seoR` name clash. That is a true statement about CRAN readiness
-      # and a permanent one until the members are published, so running it as a
-      # per-push gate encodes a known failure rather than catching a regression. The
-      # step is disabled here and only here; every other `--as-cran` check still runs.
-      # Re-enable it as part of the first CRAN submission, when `Remotes:` is dropped.
-      # Toolchain drift makes the gate red on a tree nobody changed, and it
-      # arrives disguised as a code defect: a roxygen2 skew aborts the docs
-      # guard, and a package built under a newer R than this one surfaces as an
-      # R CMD check WARNING minutes into the expensive step below. This is
-      # quick (one request, for CRAN's package index, which the check for a
-      # dependency older than CRAN's reads: SEOR-hxxxkmws), and it runs ahead
-      # of that step so the machine is
-      # named as the cause in one line rather than found by elimination
-      # (SEOR-tcytizic).
+      # Warns, loudly, when this clone's pre-push hook is not fleet-ci's, so
+      # the push ran without the gate. Warn-only by decision, time-boxed until
+      # the hook is installed fleet-wide, then it fails (SEOR-cjxarlcq). It
+      # only reads the hook file; it never runs .fleet-ci/gate.
+      - id: fleet-ci-hook-installed
+        name: fleet-ci pre-push hook is installed (warn-only)
+        entry: sh scripts/check-fleet-hook.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        verbose: true
+        stages: [pre-push]
+      # This machine's R toolchain against what the package pins: roxygen2
+      # against Config/roxygen2/version, installed packages built under a newer
+      # R, and the local pandoc against the fleet image's (.fleet-ci/toolchain),
+      # so a local devtools::document() or build_readme() writes what the gate
+      # accepts. The gate itself runs in the fleet image and does not depend
+      # on this machine's library. Quick: one request, for CRAN's package
+      # index, which the check for a dependency older than CRAN's reads
+      # (SEOR-hxxxkmws, SEOR-tcytizic).
       - id: check-toolchain
         name: toolchain matches what this package pins
         entry: Rscript scripts/check-toolchain.R
@@ -183,7 +202,8 @@ repos:
         always_run: true
         stages: [pre-push]
       # check-docs-drift.R is the one copy every package vendors
-      # (SEOR-lyciowif). Its self-test runs it on throwaway fixture packages
+      # (SEOR-lyciowif); the gate runs it on seor itself (a cheap gate in
+      # .fleet-ci.yml). Its self-test runs it on throwaway fixture packages
       # (docs missing, changed, stale and in sync, with git on PATH and
       # without), only when the script changes; it takes seconds.
       - id: check-docs-drift-self-test
@@ -193,59 +213,12 @@ repos:
         pass_filenames: false
         files: ^scripts/check-docs-drift\.R$
         stages: [pre-push]
-      # A stale .Rd is still valid .Rd, so lint, spelling and R CMD check all
-      # pass it. This regenerates man/, NAMESPACE and DESCRIPTION with the
-      # pinned roxygen2 in a `git archive` export of the commit being pushed
-      # (PRE_COMMIT_TO_REF, else HEAD) and fails on any difference
-      # (SEOR-nwfmerhu). The hooks around it read the working tree and this one
-      # the pushed commit, so on a push of another branch their verdicts can
-      # differ. CI's `docs-drift` job runs the same check with the pinned
-      # roxygen2, for changes that reach main without this hook (SEOR-fhrisfpt).
-      - id: docs-drift
-        name: generated docs match roxygen (man/, NAMESPACE, DESCRIPTION)
-        entry: sh scripts/docs-drift.sh
+      # check-urls.R's offline classifier test, when the script changes. The
+      # live URL check is a cheap gate in .fleet-ci.yml.
+      - id: check-urls-self-test
+        name: check-urls self-test
+        entry: Rscript scripts/check-urls.R --self-test
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^scripts/check-urls\.R$
         stages: [pre-push]
-      # Fetches every URL the package declares (DESCRIPTION, man/,
-      # inst/CITATION, NEWS, README.md) and fails on a dead one: `verify` runs
-      # --as-cran with CRAN incoming OFF (ADR 0004), so nothing else in this
-      # gate fetches them at all. A URL that cannot be reached at all only
-      # warns, so a network blip never rejects a push; zero URLs checked
-      # fails; nothing is exempt (ADR 0011). The fleet standard's URL check, copied
-      # from punycoder's scripts/check-urls.R (sitemapr's `urls` stage).
-      - id: check-urls
-        name: declared URLs resolve
-        entry: Rscript scripts/check-urls.R
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]
-      # R CMD check skips its DESCRIPTION spelling check on a machine with no
-      # English aspell/hunspell dictionary, so a typo first shows up in
-      # win-builder's incoming NOTE. spelling bundles its own hunspell
-      # dictionaries and also reads man/, vignettes, README and NEWS
-      # (SEOR-mtbzfroz). Genuine terms go in inst/WORDLIST.
-      - id: spelling
-        name: spelling (en-US, inst/WORDLIST)
-        entry: Rscript -e
-        args:
-          - 'bad <- spelling::spell_check_package(); if (nrow(bad)) { print(bad); quit(status = 1) }'
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]
-      # rcmdcheck reads a check that halted partway as 0/0/0 and returns
-      # normally, so the gate also fails on R CMD check's own exit status
-      # (SEOR-maavnxdm).
-      - id: verify
-        name: verify (mirrors CI)
-        entry: Rscript -e
-        args:
-          - 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }; res <- rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false")); if (!identical(as.integer(res$status), 0L)) stop("R CMD check exited with status ", res$status, "; the run did not complete.", call. = FALSE)'
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]
-        verbose: true

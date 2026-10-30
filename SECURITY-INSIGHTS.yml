@@ -75,22 +75,19 @@ repository:
         integration:
           adhoc: true
           ci: true
-          release: false
+          release: true
         results: {}
         comment: |
-          The osv-audit job in .gitlab-ci.yml audits the runtime dependency
-          closure against the OSV database (osv.dev). No account or secrets
+          The osv-audit job (fleet-ci's template, included by .gitlab-ci.yml)
+          audits the runtime dependency closure against the OSV database
+          (osv.dev) through tests/testthat/test-osv.R. No account or secrets
           required.
 
-          It has no automatic trigger. The job extends .scheduled-or-manual,
-          and this project has no pipeline schedules at all (measured
-          2026-09-23: pipeline_schedules returns []), so it runs only when a
-          pipeline is started by hand from the web UI. It is excluded from
-          .on-mr-and-main, so it does not run on a merge request or a push to
-          the default branch either. Creating the schedule is an owner action,
-          tracked as SEOR-tzxuisnf; the cadence it will take is decided in
-          SEOR-ihmntqzm. This comment states the trigger the job actually has
-          and must be updated in the same change that gives it a schedule.
+          It runs in T2 and T3 (ADR 0012): the weekly deep-check schedule,
+          every RELEASE=1 pre-submission web pipeline and every v* tag
+          pipeline. It no longer has a schedule of its own; the
+          dependency-audit schedule starts no pipeline. The local pre-push
+          gate leaves test-osv.R out (.fleet-ci.yml, exclude_tests).
       - name: oysteR (Sonatype OSS Index)
         type: SCA
         rulesets:
@@ -98,17 +95,20 @@ repository:
         integration:
           adhoc: true
           ci: true
-          release: false
+          release: true
         results: {}
         comment: |
-          The security-audit job in .gitlab-ci.yml audits declared dependencies
-          against the Sonatype OSS Index.
+          The security-audit job (fleet-ci's template, included by
+          .gitlab-ci.yml) audits declared dependencies against the Sonatype
+          OSS Index through tests/testthat/test-security.R.
 
-          It has no automatic trigger, for the same reason as osv-audit above:
-          .scheduled-or-manual plus no pipeline schedules means hand-started
-          web pipelines only. It additionally needs the OSSINDEX_USER
-          (the literal `x`, not the account email) and OSSINDEX_TOKEN (a
-          Sonatype Guide personal access token) CI/CD variables. Both are set
-          on the project (listed 2026-09-30; SEOR-ipgxtzca). seor's pre-push gate does not reach this audit
-          either: it runs rcmdcheck under rcmd_safe_env(), so skip_on_cran()
-          fires first.
+          It runs where osv-audit runs, in T2 and T3. It additionally needs
+          the OSSINDEX_USER (the literal `x`, not the account email) and
+          OSSINDEX_TOKEN (a Sonatype Guide personal access token) CI/CD
+          variables, and sets OSSINDEX_AUDIT_REQUIRED=true, so it fails
+          rather than passing having audited nothing. Both are set on the
+          project (listed 2026-09-30; SEOR-ipgxtzca). The local pre-push gate
+          leaves test-security.R out (.fleet-ci.yml, exclude_tests). The
+          other T2 legs run it with NOT_CRAN=true and the project variables
+          in scope, so they call OSS Index too (design/ci.md, "Gaps
+          accepted").

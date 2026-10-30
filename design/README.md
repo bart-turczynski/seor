@@ -16,7 +16,10 @@ mkdocs/sphinx/docusaurus, handwritten publisher docs in a browser extension.
 - [`specs/`](specs/) — durable specs: the *what*, as accepted. Point-in-time
   records, frozen once shipped.
 - [`agent-workflow.md`](agent-workflow.md) — where files belong, the design
-  checks, git hooks and the pages `KEEP` list.
+  checks, git hooks and the pages keep list.
+- [`ci.md`](ci.md) — seor's verification tiers: the local gate, what CI
+  runs, the project settings it depends on and the gaps the fleet-ci
+  migration accepted.
 - [`fleet.md`](fleet.md) — the fleet tracker convention, the per-repository
   instruction drift table and the pipeline schedule table.
 - [`fleet-standard.md`](fleet-standard.md) — what every fleet package

@@ -6,7 +6,7 @@ privately as described in `SECURITY.md`. Send changes as merge requests on
 GitLab; the GitHub repository is a read-only mirror.
 
 New code needs tests, and each user-facing change needs one `NEWS.md` bullet.
-A merge request must pass the verification command below.
+A merge request must pass the local gate below.
 
 Install dependencies:
 
@@ -14,19 +14,45 @@ Install dependencies:
 Rscript -e 'pak::local_install_deps(dependencies = TRUE)'
 ```
 
-Run verification:
+Verification is fleet-ci's local gate, which runs in the fleet Docker image
+(settings in `.fleet-ci.yml`; it needs Docker and a `docker login
+registry.gitlab.com`). Install the hooks once per clone, from the package
+root:
 
 ```sh
-Rscript -e 'lints <- lintr::lint_package(); if (length(lints)) { print(lints); quit(status = 1) }' && Rscript -e 'res <- rcmdcheck::rcmdcheck(args = "--as-cran", error_on = "warning", env = c(callr::rcmd_safe_env(), "_R_CHECK_CRAN_INCOMING_" = "false")); if (!identical(as.integer(res$status), 0L)) stop("R CMD check exited with status ", res$status, "; the run did not complete.", call. = FALSE)'
+pre-commit install
+.fleet-ci/pre-push --install
 ```
 
-The `env =` argument disables only the CRAN incoming-feasibility step. seor is a
-metapackage with members that are not yet on CRAN, so that step always reports an
-ERROR (non-mainstream dependencies, the `Remotes:` field, the archived `seoR` name
+From then on the gate runs on every push, on each pushed ref's tip, followed
+by the pre-commit pre-push hooks. `pre-commit install -f` (which installs
+both hook types, from `.pre-commit-config.yaml`'s
+`default_install_hook_types`) and `pre-commit install -f --hook-type
+pre-push` replace that hook and drop the gate; re-run
+`.fleet-ci/pre-push --install` after either. Without `-f`,
+`pre-commit install` keeps the gate (pre-commit's migration mode). To run the
+gate by hand on `HEAD`:
+
+```sh
+.fleet-ci/gate auto
+```
+
+The gate checks the committed tree, never uncommitted edits: commit the output
+of `devtools::document()` before pushing. A docs-only change runs spelling and
+`pkgdown::check_pkgdown()`; any other runs lintr, the docs-drift (`man/`,
+`NAMESPACE` and `DESCRIPTION` must match what the pinned roxygen2
+regenerates), URL, README and NEWS-heading checks, then `R CMD check
+--as-cran` with the testthat suite, failing on any ERROR or WARNING.
+
+The gate's check runs with CRAN incoming feasibility off, and so does seor's
+`t2-ascran` in CI (`FLEET_INCOMING: "false"`). seor is a metapackage with
+members that are not yet on CRAN, so that step always reports an ERROR
+(non-mainstream dependencies, the `Remotes:` field, the archived `seoR` name
 clash) — a permanent, known state rather than a regression. Every other
 `--as-cran` check still runs. For the first CRAN submission, run the incoming
-check separately (step 5 in the release deltas below); leave the gate's
-setting alone.
+check separately (step 5 in the release deltas below). See
+[`design/ci.md`](https://gitlab.com/bart-turczynski/seor/-/blob/main/design/ci.md)
+for the tiers and what CI runs.
 
 The source and test layout, and durable project context, live in
 `ARCHITECTURE.md` and `design/`: the CRAN release deltas in
