@@ -47,11 +47,14 @@ WHAT IT CHECKS.
 1. `DESCRIPTION`'s `BugReports:` is the `/-/work_items` address,
    optionally with a trailing slash, of the gitlab.com repository that
    `DESCRIPTION`'s `URL:` names, and `codemeta.json`'s `"issueTracker"`
-   is the same address. Repositories compare case-insensitively, and the
-   host may be `GitLab.com` or `www.gitlab.com` (both resolve). `URL:` may
-   name the repository with a `.git` suffix (a clone address);
-   `BugReports:` and every tracker link may not, as
-   `.../<project>.git/-/work_items` is not the canonical address.
+   is the same address (the host's case aside). Repositories compare
+   case-insensitively and the host may be spelt `GitLab.com`, but
+   `BugReports:` and `URL:` may not use `www.gitlab.com`: it answers with
+   a 308 permanent redirect, which CRAN's URL check reports as moved. A
+   tracker link in another file may use it. `URL:` may name the repository
+   with a `.git` suffix (a clone address); `BugReports:` and every tracker
+   link may not, as `.../<project>.git/-/work_items` is not the canonical
+   address.
 2. `man/<pkg>-package.Rd`'s "Report bugs at" link, when present, is
    IDENTICAL to `DESCRIPTION`'s `BugReports:` value; when absent, the
    `"_PACKAGE"` file declares the `@seealso` that suppresses it.
@@ -61,11 +64,13 @@ WHAT IT CHECKS.
    none of them carries a `/-/issues` link. That ban covers `http://` and
    `https://`, a subgroup project, any host case, `www.gitlab.com`, and the
    legacy path without `/-/` (`.../<project>/issues`, which redirects to
-   `/-/issues`) where that path ends: at the URL's end, `/new`,
-   `/<number>`, a query or a fragment. A subgroup project named `issues`
-   (`.../group/sub/issues/-/...`) or a file such as `.../blob/main/issues.md`
-   is not that path; a subgroup project named `issues` linked bare
-   (`.../group/sub/issues`) is indistinguishable from it and is flagged:
+   `/-/issues`) wherever its `issues` segment ends (`/new`, `/42/notes`,
+   `/service_desk`, a query, a fragment, a quote or punctuation). A subgroup
+   project named `issues` (`.../group/sub/issues/-/...`) and a folder or
+   file (`.../blob/main/issues.md`) in a `blob/`, `tree/`, `raw/` or
+   `wikis/` path are not that path; a subgroup project named `issues`
+   linked bare (`.../group/sub/issues`) is indistinguishable from it and is
+   flagged:
      - codemeta.json (`"issueTracker"`)
      - .bestpractices.json
      - CONTRIBUTING.md (where to report a bug)
@@ -112,25 +117,32 @@ from pathlib import Path
 # A GitLab path segment cannot start with "-", so "/-/" ends the path.
 _SEGMENT = r"[\w.][\w.-]*"
 _PATH = rf"/{_SEGMENT}(?:/{_SEGMENT})+"
-# Hosts are case-insensitive and www.gitlab.com redirects to gitlab.com, so
-# every pattern takes both; repositories are then compared by _repo_key().
-_HOST = r"(?i:https://(?:www\.)?gitlab\.com)"
-# Where a URL ends in running text: the end, white space, a closing
-# delimiter, or punctuation that ends the sentence rather than the path.
-_DELIM = r"""[\s<>()\[\]{}`'"*|\\]"""
-_URL_END = rf"(?:$|{_DELIM}|[.,;:!](?:$|{_DELIM}))"
+# Hosts are case-insensitive, so every pattern takes any case; repositories
+# are then compared by _repo_key(). www.gitlab.com answers with a 308
+# permanent redirect to gitlab.com: a link a reader follows may use it, but
+# CRAN's URL check reports a DESCRIPTION address on it as moved, so
+# BugReports: and URL: may not.
+_HOST = r"(?i:https://gitlab\.com)"
+_LINK_HOST = r"(?i:https://(?:www\.)?gitlab\.com)"
+WWW_RE = re.compile(r"https?://www\.gitlab\.com\b", re.IGNORECASE)
+
+# A repository-content path (a file or folder in blob/, tree/ or raw/, a
+# wiki page) is not the project path, so it stops the legacy /issues match.
+_CONTENT = r"(?!(?:blob|tree|raw|wikis)/)"
+_ISSUES_PATH = rf"/{_SEGMENT}(?:/{_CONTENT}{_SEGMENT})+"
 
 # Over http:// too: it redirects to the same 404ing https:// address. The
-# legacy path without "/-/" redirects to /-/issues; it counts only where the
-# issues path ends (the URL's end, /new, /<number>, a query or a fragment),
-# so a subgroup project named "issues" or a file named issues.md is not it.
+# legacy path without "/-/" redirects to /-/issues; it counts wherever the
+# "issues" segment ends (any character but a word character or "-"),
+# except where it is a subgroup project named "issues" (issues/-/...) or a
+# file or folder in the repository's content (blob/main/docs/issues.md).
 ISSUES_RE = re.compile(
-    rf"https?://(?:www\.)?gitlab\.com{_PATH}/"
-    rf"(?:-/issues(?![\w-])|issues(?:/new|/\d+)?/?(?=[?#]|{_URL_END}))",
+    rf"https?://(?:www\.)?gitlab\.com{_ISSUES_PATH}/"
+    r"(?:-/issues(?![\w-])|issues(?![\w-]|/-/))",
     re.IGNORECASE,
 )
 # Group 1 is the repository the tracker belongs to.
-WORK_ITEMS_RE = re.compile(rf"({_HOST}{_PATH})/-/work_items\b")
+WORK_ITEMS_RE = re.compile(rf"({_LINK_HOST}{_PATH})/-/work_items\b")
 
 # DESCRIPTION's BugReports: value, in full, must match this.
 BUGREPORTS_RE = re.compile(rf"^({_HOST}{_PATH})/-/work_items/?$")
@@ -173,6 +185,13 @@ def _repo_key(repo: str, url_field: bool = False) -> str:
     if url_field and repo.endswith(".git"):
         repo = repo[: -len(".git")]
     return repo
+
+
+def _address_key(address: str) -> str:
+    """An address as codemeta.json is compared with BugReports:: the scheme
+    and host case-folded, the path exact, without a trailing "/"."""
+    origin, path = re.match(r"((?:[^/]*//)?[^/]*)(.*)", address.rstrip("/")).groups()
+    return origin.casefold() + path
 
 
 def _read(path: Path) -> str:
@@ -255,7 +274,16 @@ def check_repo(root: Path) -> list[str]:
     own = {bug_repo} if bug_repo in url_repos else url_repos
     own_label = ", ".join(f"{repo}/-/work_items" for repo in sorted(own)) or "none in URL:"
 
-    if not own:
+    url_www = WWW_RE.search(desc.get("URL", ""))
+    if url_www:
+        errors.append(
+            "DESCRIPTION URL: names a repository on www.gitlab.com, which "
+            "answers with a 308 permanent redirect that CRAN's URL check "
+            "reports as moved. Name it on gitlab.com."
+        )
+    # A www. URL: is reported above; that its repository is not derivable is
+    # the same finding.
+    if not own and not url_www:
         errors.append(
             "DESCRIPTION's URL: names no gitlab.com repository that BugReports: "
             "agrees with, so this package's own tracker can't be derived and no "
@@ -263,21 +291,28 @@ def check_repo(root: Path) -> list[str]:
             "repository to URL:."
         )
 
-    if bugreports and match is None:
+    if bugreports and match is None and WWW_RE.match(bugreports):
+        errors.append(
+            f"DESCRIPTION BugReports: is '{bugreports}', on www.gitlab.com, "
+            f"which answers with a 308 permanent redirect that CRAN's URL "
+            f"check reports as moved. Name it on gitlab.com."
+        )
+    elif bugreports and match is None:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', which is not a "
             f"gitlab.com /-/work_items address. /-/issues 404s for CRAN's URL "
             f"check, and CRAN accepts /-/work_items (Uwe Ligges, 2026-10-23; "
             f"SEOR-sptibjph)."
         )
-    # With no repository in URL: at all, the finding above already says so.
-    elif match is not None and url_repos and _repo_key(match.group(1), url_field=True) in url_repos - {bug_repo}:
+    # BugReports: alone shows a .git suffix, whatever URL: names.
+    elif match is not None and bug_repo.endswith(".git"):
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', which names the "
             f"repository with a .git suffix. Name it as "
             f"'{_repo_key(match.group(1), url_field=True)}/-/work_items', the "
             f"canonical address."
         )
+    # With no repository in URL: at all, a finding above already says so.
     elif match is not None and url_repos and bug_repo not in url_repos:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', but URL: names no "
@@ -288,7 +323,7 @@ def check_repo(root: Path) -> list[str]:
     codemeta = root / "codemeta.json"
     if bugreports and codemeta.exists():
         tracker = ISSUE_TRACKER_RE.search(_read(codemeta))
-        if tracker is None or tracker.group(1).rstrip("/") != bugreports.rstrip("/"):
+        if tracker is None or _address_key(tracker.group(1)) != _address_key(bugreports):
             found = tracker.group(1) if tracker else "nothing"
             errors.append(
                 f"codemeta.json issueTracker is '{found}', but DESCRIPTION's "
@@ -382,21 +417,7 @@ def check_repo(root: Path) -> list[str]:
 
 # Cases that pin a known gap still open in check_repo(). A listed case must
 # fail; one that passes fails the self-test, so a fix has to drop its tag.
-XFAIL: frozenset[str] = frozenset(
-    {
-        # SEOR-sgfvtzps, the review of fix/bugreports-hardening.
-        "legacy-issues-smart-quotes",
-        "legacy-issues-ellipsis",
-        "legacy-issues-html-entity",
-        "legacy-issues-issue-notes",
-        "legacy-issues-service-desk",
-        "legacy-issues-repo-paths",
-        "url-www-host",
-        "bugreports-www-host",
-        "bugreports-mixed-case-host",
-        "bugreports-dotgit-no-gitlab-url",
-    }
-)
+XFAIL: frozenset[str] = frozenset()
 
 
 def _fixture(
