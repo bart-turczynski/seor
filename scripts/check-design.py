@@ -10,11 +10,13 @@ Three hard checks (exit 1 on failure):
 Plus one non-blocking warning: drafts left untouched in `_scratch/`.
 
 Stdlib only, so it runs in R, Python, TypeScript, and extension repos alike
-without adding a CI dependency. Invoke as `python3 scripts/check-design.py`.
+without adding a CI dependency. Invoke as `python3 scripts/check-design.py`,
+or `python3 scripts/check-design.py --self-test` for the offline self-test.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -172,7 +174,119 @@ def warn_stale_scratch(root: Path) -> list[str]:
     )
 
 
+# --- self-test (ADR immutability against throwaway repos, offline) -----------
+
+ADR_ACCEPTED = "---\nstatus: accepted\n---\n\n# 0001 Decision\n\nWe decide A.\n"
+ADR_EDITED = "---\nstatus: accepted\n---\n\n# 0001 Decision\n\nWe decide B.\n"
+ADR_SUPERSEDED = (
+    "---\nstatus: superseded\nsuperseded-by: 0002\n---\n\n# 0001 Decision\n\nWe decide A.\n"
+)
+ADR_REL = "design/adr/0001-decision.md"
+
+
+def _run(cwd: Path, *args: str) -> None:
+    subprocess.run(  # noqa: S603 - literal git argv on a throwaway repo
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],  # noqa: S607
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def _commit_adr(repo: Path, text: str, message: str) -> None:
+    (repo / ADR_REL).write_text(text, encoding="utf-8")
+    _run(repo, "add", ADR_REL)
+    _run(repo, "commit", "-q", "-m", message)
+
+
+def _adr_errors(repo: Path) -> list[str]:
+    errors: list[str] = []
+    previous = Path.cwd()
+    os.chdir(repo)
+    try:
+        check_adr_immutability(repo, errors)
+    finally:
+        os.chdir(previous)
+    return errors
+
+
+def _fixture(tmp: Path, name: str) -> tuple[Path, Path]:
+    """An origin repo with an accepted ADR on main, and a clone of it."""
+    origin = tmp / f"{name}-origin"
+    origin.mkdir()
+    _run(origin, "init", "-q", "-b", "main")
+    (origin / "design" / "adr").mkdir(parents=True)
+    _commit_adr(origin, ADR_ACCEPTED, "accept ADR 0001")
+    clone = tmp / f"{name}-clone"
+    _run(tmp, "clone", "-q", str(origin), str(clone))
+    return origin, clone
+
+
+def self_test() -> None:
+    import tempfile
+
+    # A hook runs us with GIT_DIR and friends set; the fixtures need their own.
+    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+        os.environ.pop(var, None)
+
+    failures: list[str] = []
+
+    def expect(name: str, errors: list[str], fails: bool) -> None:
+        if bool(errors) != fails:
+            want = "an error" if fails else "no error"
+            failures.append(f"{name}: wanted {want}, got {errors!r}")
+
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str).resolve()
+
+        # Tracking branch set: the edit is caught (the behavior before the fix).
+        _, repo = _fixture(tmp, "tracking")
+        _run(repo, "checkout", "-q", "-b", "edit", "--track", "origin/main")
+        _commit_adr(repo, ADR_EDITED, "edit ADR body")
+        expect("tracking branch edits accepted ADR", _adr_errors(repo), True)
+
+        # A new branch's first push: no upstream yet (SEOR-fnemeutq).
+        _, repo = _fixture(tmp, "no-upstream")
+        _run(repo, "checkout", "-q", "--no-track", "-b", "edit", "origin/main")
+        _commit_adr(repo, ADR_EDITED, "edit ADR body")
+        expect("no-upstream branch edits accepted ADR", _adr_errors(repo), True)
+
+        # No upstream and no origin/HEAD: origin/main still anchors it.
+        _, repo = _fixture(tmp, "no-origin-head")
+        _run(repo, "remote", "set-head", "origin", "-d")
+        _run(repo, "checkout", "-q", "--no-track", "-b", "edit", "origin/main")
+        _commit_adr(repo, ADR_EDITED, "edit ADR body")
+        expect("no-upstream, no origin/HEAD, edits ADR", _adr_errors(repo), True)
+
+        # No upstream, but superseding (a status change) is allowed.
+        _, repo = _fixture(tmp, "supersede")
+        _run(repo, "checkout", "-q", "--no-track", "-b", "edit", "origin/main")
+        _commit_adr(repo, ADR_SUPERSEDED, "supersede ADR 0001")
+        expect("no-upstream branch supersedes ADR", _adr_errors(repo), False)
+
+        # No upstream, ADR untouched.
+        _, repo = _fixture(tmp, "untouched")
+        _run(repo, "checkout", "-q", "--no-track", "-b", "edit", "origin/main")
+        expect("no-upstream branch leaves ADR alone", _adr_errors(repo), False)
+
+        # Fresh project: no remote-tracking ref at all, so nothing to compare.
+        origin, _ = _fixture(tmp, "fresh")
+        _commit_adr(origin, ADR_EDITED, "edit ADR body")
+        expect("fresh project with no remote", _adr_errors(origin), False)
+
+    if failures:
+        print("check-design self-test failed:", file=sys.stderr)
+        for failure in failures:
+            print(f"  - {failure}", file=sys.stderr)
+        raise SystemExit(1)
+    print("check-design self-test: ok")
+
+
 def main() -> int:
+    if sys.argv[1:] == ["--self-test"]:
+        self_test()
+        return 0
     root_str = git("rev-parse", "--show-toplevel")
     root = Path(root_str) if root_str else Path.cwd()
 
