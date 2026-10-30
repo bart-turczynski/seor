@@ -72,6 +72,15 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
+      # Its offline self-test (ADR immutability against throwaway repos,
+      # SEOR-fnemeutq) runs when the script changes.
+      - id: check-design-self-test
+        name: check-design self-test
+        entry: python3 scripts/check-design.py --self-test
+        language: system
+        pass_filenames: false
+        files: ^scripts/check-design\.py$
+        stages: [pre-push]
       # check-citation.py (CITATION.cff and .zenodo.json against DESCRIPTION;
       # design/adr/0001-citation-metadata-names-the-release.md) and
       # check-bugreports.py (every tracker link names /-/work_items; ADR 0011)
