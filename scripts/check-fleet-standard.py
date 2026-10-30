@@ -4264,14 +4264,18 @@ def fixture_fleet_ci(clone: Path, dest: Path) -> dict[str, str]:
 Judge = Callable[[Report], None]
 
 
-def self_test(skipped: list[str] | None = None) -> list[str]:
+def self_test(skipped: list[str] | None = None, tally: dict[str, int] | None = None) -> list[str]:
     """The fixtures, in one pass. Each repository row is queued with its
     judge (run()); once all are built, check-toolchain.R reads every queued
     .gitlab-ci.yml's pin in one Rscript run, not one per fixture
     (SEOR-xhyrogfm), and each row is checked with that read and judged.
     A group of rows that cannot run on this machine (no fleet-ci clone, no
-    Ruby) is appended to `skipped`, never to the failures."""
+    Ruby) is appended to `skipped`, never to the failures. `tally` gets the
+    number of repository rows judged ("rows") and of case-table entries
+    checked ("cases"), which main() prints."""
     skipped = [] if skipped is None else skipped
+    tally = {} if tally is None else tally
+    tally.update(rows=0, cases=0)
     failures: list[str] = []
     queued: list[tuple[str, DictSource, State, object, Judge, FleetCI | None]] = []
 
@@ -4322,6 +4326,7 @@ def self_test(skipped: list[str] | None = None) -> list[str]:
         ('$CI_PIPELINE_SOURCE !~ /^sched/', False),
         ('($CRAN_PREP == "1" || $SCHEDULE_KIND == "deep-check") && $CI_PIPELINE_SOURCE != "push"', True),
     ):
+        tally["cases"] += 1
         if evaluate(expr, env) is not want:
             failures.append(f"evaluate({expr!r}) should be {want}")
 
@@ -5046,6 +5051,7 @@ def self_test(skipped: list[str] | None = None) -> list[str]:
 
     # The install reader through its interface: shell items in, state out.
     for name, entries, want in PANDOC_INSTALL_CASES:
+        tally["cases"] += 1
         got = pandoc_install_state(entries)
         if got != want:
             failures.append(f"pandoc install case {name!r}: expected {want}, got {got}")
@@ -5220,6 +5226,7 @@ def self_test(skipped: list[str] | None = None) -> list[str]:
          lambda c: list(c.jobs["job"].view), ["R CMD check $A x.tar.gz\nB=--as-cran\nA=${B} -v"]),
     )
     for tag, text, probe, want in reader_cases:
+        tally["cases"] += 1
         try:
             got = probe(ci_of(text))
         except Exception as error:  # noqa: BLE001 - a reader that raises fails the row
@@ -5954,6 +5961,7 @@ def self_test(skipped: list[str] | None = None) -> list[str]:
             return [f"the pandoc pin reader did not run: {error}"]
         for pkg, source, state, fetch, judge, fleet in queued:
             judge(check_repo(pkg, source, state, fetch, pins, fleet))
+            tally["rows"] += 1
     except Exception as error:  # noqa: BLE001 - a crash is a failure line, and the finally still cleans up
         failures.append(f"the self-test crashed: {type(error).__name__}: {error}")
     finally:
@@ -5985,7 +5993,10 @@ def main(argv: list[str]) -> int:
         return 2
     if args.self_test:
         skipped: list[str] = []
-        failures = self_test(skipped)
+        tally: dict[str, int] = {}
+        failures = self_test(skipped, tally)
+        print(f"check-fleet-standard self-test: {tally['rows']} repository row(s) judged, {tally['cases']} "
+              "case-table entr(ies) checked.")
         if skipped:
             banner = "!" * 78
             print(banner, file=sys.stderr)
