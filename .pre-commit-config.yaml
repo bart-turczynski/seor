@@ -4,9 +4,11 @@
 # which replaces pre-commit's pre-push hook with fleet-ci's: that hook runs
 # the fleet-ci local gate (.fleet-ci/gate, settings in .fleet-ci.yml) on each
 # pushed ref's tip, then this file's pre-push stage. The gate itself (lintr,
-# spelling, docs drift, the URL, README and NEWS-heading checks, R CMD check;
-# the former `verify`, `docs-drift`, `check-urls` and `spelling` hooks and
-# scripts/gates.sh) is in .fleet-ci.yml, never here: this file must not run
+# spelling, docs drift, the URL, README and NEWS-heading checks, the
+# citation, BugReports and logo-metadata checks, R CMD check; the former
+# `verify`, `docs-drift`, `check-urls`, `spelling`, `check-citation`,
+# `check-bugreports` and `logo-metadata-check` hooks and scripts/gates.sh)
+# is in .fleet-ci.yml, never here: this file must not run
 # .fleet-ci/gate (fleet-ci README, "The local gate").
 #
 # Over fleet-ci's hook, `pre-commit install` and
@@ -70,35 +72,32 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-push]
-      # CITATION.cff and .zenodo.json duplicate the version and the project
-      # URLs out of DESCRIPTION, and nothing asserted either copy. Offline,
-      # stdlib-only and instant. The rule it enforces is
-      # design/adr/0001-citation-metadata-names-the-release.md. T2's
-      # citation-version job runs it too.
-      - id: check-citation
-        name: citation metadata vs DESCRIPTION
-        entry: python3 scripts/check-citation.py
+      # check-citation.py (CITATION.cff and .zenodo.json against DESCRIPTION;
+      # design/adr/0001-citation-metadata-names-the-release.md) and
+      # check-bugreports.py (every tracker link names /-/work_items; ADR 0011)
+      # are host_gates in .fleet-ci.yml, so the gate's full tier judges the
+      # pushed commit with them; T2's citation-version job runs
+      # check-citation.py too. A docs-only push cannot change what either
+      # reads. Their offline self-tests run here, when the script changes.
+      - id: check-citation-self-test
+        name: check-citation self-test
+        entry: python3 scripts/check-citation.py --self-test
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^scripts/check-citation\.py$
         stages: [pre-push]
-      # DESCRIPTION's BugReports:, man/seor-package.Rd and every tracker link
-      # (codemeta.json, .bestpractices.json, CONTRIBUTING.md, SECURITY.md)
-      # name /-/work_items, and no human-facing file may carry a /-/issues
-      # link (ADR 0011). Offline, stdlib-only, same shape as check-citation.
-      - id: check-bugreports
-        name: BugReports and tracker links name /-/work_items
-        entry: python3 scripts/check-bugreports.py
+      - id: check-bugreports-self-test
+        name: check-bugreports self-test
+        entry: python3 scripts/check-bugreports.py --self-test
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^scripts/check-bugreports\.py$
         stages: [pre-push]
       # check-news.py refuses a NEWS.md bullet that wraps, runs past its word
       # limit or names only housekeeping, and any Internal heading
       # (design/fleet-standard.md, "NEWS.md bullets"; SEOR-mjrpwnqz). It is
-      # the reference copy members port. The check runs on every push, like
-      # check-citation: it takes milliseconds. Its self-test runs when the
-      # script changes.
+      # the reference copy members port. The check runs on every push: it
+      # takes milliseconds. Its self-test runs when the script changes.
       - id: news-terse
         name: NEWS.md bullets are one terse line
         entry: python3 scripts/check-news.py NEWS.md
@@ -136,24 +135,16 @@ repos:
         stages: [pre-push]
       # logo-metadata.py writes the fleet's logo metadata, keywords copied from
       # DESCRIPTION's X-schema.org-keywords (SEOR-qoqmestu). Its offline
-      # self-test runs when the script changes; --check fails when seor's own
-      # logo has drifted from DESCRIPTION, so an edit to the keywords without
-      # regenerating the logo does not pass (SEOR-zgsfwyjk). The check runs on
-      # every push, like check-citation: it takes milliseconds, and drift that
-      # reached main some other way, or a deleted logo, is caught too.
+      # self-test runs when the script changes. Its --check, which fails when
+      # seor's own logo has drifted from DESCRIPTION (SEOR-zgsfwyjk), is a
+      # host_gate in .fleet-ci.yml, so the gate's full tier judges the pushed
+      # commit with it.
       - id: logo-metadata-self-test
         name: logo-metadata self-test
         entry: python3 scripts/logo-metadata.py --self-test
         language: system
         pass_filenames: false
         files: ^scripts/logo-metadata\.py$
-        stages: [pre-push]
-      - id: logo-metadata-check
-        name: logo-metadata check (seor's logo matches DESCRIPTION)
-        entry: python3 scripts/logo-metadata.py --check seor man/figures
-        language: system
-        pass_filenames: false
-        always_run: true
         stages: [pre-push]
       # check-fleet-standard.py tests a fleet package against
       # design/fleet-standard.md and reads GitLab and the web, so the hook runs

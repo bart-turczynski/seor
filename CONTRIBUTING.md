@@ -39,10 +39,11 @@ gate by hand on `HEAD`:
 
 The gate checks the committed tree, never uncommitted edits: commit the output
 of `devtools::document()` before pushing. A docs-only change runs spelling and
-`pkgdown::check_pkgdown()`; any other runs lintr, the docs-drift (`man/`,
-`NAMESPACE` and `DESCRIPTION` must match what the pinned roxygen2
-regenerates), URL, README and NEWS-heading checks, then `R CMD check
---as-cran` with the testthat suite, failing on any ERROR or WARNING.
+`pkgdown::check_pkgdown()`; any other runs T0's checks, then lintr, the
+docs-drift (`man/`, `NAMESPACE` and `DESCRIPTION` must match what the pinned
+roxygen2 regenerates), URL, README, NEWS-heading, citation, BugReports and
+logo-metadata checks, then `R CMD check --as-cran` with the testthat suite,
+failing on any ERROR or WARNING.
 
 The gate's check runs with CRAN incoming feasibility off, and so does seor's
 `t2-ascran` in CI (`FLEET_INCOMING: "false"`). seor is a metapackage with

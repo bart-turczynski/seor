@@ -10,8 +10,9 @@ version: 1
 variant: fleet-r
 
 # Allowlisted paths a gate or a hook here reads, so a change to them is
-# never docs-only: scripts/check-bugreports.py (a pre-push hook) reads
-# _pkgdown.yml for tracker links, as in punycoder. scripts/check-design.py
+# never docs-only: scripts/check-bugreports.py (a host gate below, which
+# runs in T1 only) reads _pkgdown.yml for /-/issues links, so a change to
+# it needs T1, as in punycoder. scripts/check-design.py
 # (a pre-push hook) reads design/adr/ and design/specs/, but it runs on every
 # push whatever the tier, and excluding them would put an R CMD check on the
 # design-only merges T0 exists for (ADR 0012), so they stay docs. No script
@@ -27,10 +28,21 @@ docs_exclude:
 docs_gates:
   - Rscript -e 'bad <- spelling::spell_check_package(); if (nrow(bad)) { print(bad); quit(status = 1) }'
 
+# T1, on the host, in a detached worktree of the pushed commit, before the
+# container step, each run whatever the others report, so they judge the
+# pushed commit, not the working tree (design/fleet-standard.md puts
+# citation-version among T1's cheap gates). Offline and stdlib-only. The
+# former `check-citation`, `check-bugreports` and `logo-metadata-check`
+# pre-push hooks; T2's citation-version job runs check-citation.py too.
+host_gates:
+  - python3 scripts/check-citation.py
+  - python3 scripts/check-bugreports.py
+  - python3 scripts/logo-metadata.py --check seor man/figures
+
 # T1, in the container after the dependency install, each run whatever the
 # others report. The former pre-push chain bar R CMD check (the gate's own),
-# spelling (docs_gates above) and the host-side hooks that stay in
-# .pre-commit-config.yaml: lintr (the former `verify` hook's first half);
+# spelling (docs_gates above), the host_gates above and the host-side hooks
+# that stay in .pre-commit-config.yaml: lintr (the former `verify` hook's first half);
 # man/, NAMESPACE and DESCRIPTION against a fresh run of the pinned roxygen2
 # (the former `docs-drift` hook, SEOR-nwfmerhu; the export is the pushed
 # commit, so no git archive step is needed); every declared URL (the former

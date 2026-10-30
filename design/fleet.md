@@ -159,7 +159,7 @@ ssrfr's re-measured 2026-09-30 after its own gate landed (SSRF-bdeefzlj):
 
 | repo       | `AGENTS_LANG.md` | spelling gate                     | `.pre-commit-config.yaml` | pre-push verify entry                   | CRAN incoming in the gate | codespell hook          |
 |------------|------------------|-----------------------------------|---------------------------|-----------------------------------------|---------------------------|-------------------------|
-| seor       | yes              | yes (pre-commit `spelling` hook)  | yes                       | inline R                                | off: the named exception  | yes                     |
+| seor       | yes              | yes (`.fleet-ci.yml` docs_gates)  | yes                       | `.fleet-ci/gate`                        | off: the named exception  | yes                     |
 | punycoder  | no               | yes (pre-commit `spelling` hook)  | yes                       | inline R                                | on                        | yes                     |
 | raddr      | no               | yes (`data-raw/verify.sh`)        | yes                       | `data-raw/verify.sh`                    | on                        | yes                     |
 | robotstxtr | no               | yes (`dev/gates.R spelling`)      | yes                       | `dev/verify.sh`                         | on                        | yes                     |
@@ -266,8 +266,8 @@ self-hosted project runners don't draw on.
 | pagerankr  | dependency-audit | osv-audit, security-audit                    | Wed 11:17     | Wed 12:00 | 4467475 | 9 min       |
 | pagerankr  | deep-check       | full-check (3 legs), floor-check             | Wed 21:00     | Wed 21:00 | 4467476 | 18 min      |
 | pslr       | dependency-audit | osv-audit, security-audit                    | Thu 10:17     | Thu 11:00 | 4467477 | 13 min      |
-| seor       | dependency-audit | osv-audit, security-audit                    | Thu 11:17     | Thu 12:00 | 4467483 | 33 min      |
-| seor       | deep-check       | full-check (3 legs), floor-check             | Thu 21:00     | Thu 21:00 | 4467484 | 16 min      |
+| seor       | dependency-audit | none: creates no pipeline (SEOR-uldurjev)    | Thu 11:17     | none      | 4467483 | 0 min       |
+| seor       | deep-check       | T2, with the audits and x-floor (`ci.md`)    | Thu 21:00     | Thu 21:00 | 4467484 | unmeasured  |
 | robotstxtr | deep-check       | full-check (3 legs), floor-check, sanitizers | Mon 22:00     | Mon 22:00 | 4472810 | 35 min      |
 | sitemapr   | deep-check       | deep-check (3 legs), floor-check             | Tue 22:00     | Tue 22:00 | 4472811 | 31 min      |
 | pslr       | deep-check       | full-check (4 legs), sanitizers              | Wed 22:00     | Wed 22:00 | 4472812 | 29 min      |

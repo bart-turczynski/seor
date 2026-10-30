@@ -97,5 +97,5 @@ Each member has its own site, and an `llms.txt` there for agents.
 
 - The site: <https://bart-turczynski.gitlab.io/seor/>
 - Getting started: `vignette("introduction", package = "seor")`
-- Contributing, including the development setup and the verify command:
+- Contributing, including the development setup and the local gate:
   [`CONTRIBUTING.md`](https://gitlab.com/bart-turczynski/seor/-/blob/main/CONTRIBUTING.md)

@@ -14,9 +14,9 @@ hook (lintr plus `R CMD check --as-cran`) with `docs-drift`, `check-urls` and
 
 | Tier | Where | What runs |
 | --- | --- | --- |
-| hygiene hooks | pre-commit, at commit and at push | `.pre-commit-config.yaml`. At commit: the whitespace fixers (`.fleet-ci/` excluded), the large-file, merge-conflict, YAML and case-conflict checks, Air and codespell. At push: codespell again, `check-design.py`, the citation, BugReports, NEWS-terseness, logo-metadata and toolchain checks, the warn-only `fleet-ci-hook-installed` check, and each shared fleet script's offline self-test when that script changes (`check-fleet-standard.py`, `check-news.py`, `bestpractices-url.py`, `check-citation-nonr.py`, `logo-metadata.py`, `check-docs-drift.R`, `check-urls.R`) |
-| T0 | every push whose diff against `main` is docs-only (`design/**/*.md`, `docs/**/*.md`, minus `.fleet-ci.yml`'s `docs_exclude`), locally, the pre-push hook | the gate's docs tier, `.fleet-ci/gate` in the fleet image (`fleet-r`): spelling, the pkgdown destination check and `pkgdown::check_pkgdown()` |
-| T1 | every other push, locally, the pre-push hook | the gate's full tier: T0's checks, then lintr, docs drift (`scripts/check-docs-drift.R`), the URL check (`scripts/check-urls.R`), README drift (`scripts/check-readme-drift.sh`), the NEWS heading (`scripts/check-news-version.sh`), and one `R CMD check --as-cran --no-manual` (`NOT_CRAN=true`, incoming checks off) that fails on an ERROR, a WARNING, a failed test or a skip not on `allowed_skips` |
+| hygiene hooks | pre-commit, at commit and at push | `.pre-commit-config.yaml`. At commit: the whitespace fixers (`.fleet-ci/` excluded), the large-file, merge-conflict, YAML and case-conflict checks, Air and codespell. At push: codespell again, `check-design.py`, the NEWS-terseness and toolchain checks, the warn-only `fleet-ci-hook-installed` check, and each shared fleet script's offline self-test when that script changes (`check-fleet-standard.py`, `check-news.py`, `bestpractices-url.py`, `check-citation.py`, `check-bugreports.py`, `check-citation-nonr.py`, `logo-metadata.py`, `check-docs-drift.R`, `check-urls.R`) |
+| T0 | every push whose diff against `main` is docs-only (every path on the classifier's `DOCS_ALLOWLIST`, `.fleet-ci/classify`, minus `.fleet-ci.yml`'s `docs_exclude`), locally, the pre-push hook | the gate's docs tier, `.fleet-ci/gate` in the fleet image (`fleet-r`): spelling, the pkgdown destination check and `pkgdown::check_pkgdown()` |
+| T1 | every other push, locally, the pre-push hook | the gate's full tier: T0's checks, then lintr, docs drift (`scripts/check-docs-drift.R`), the URL check (`scripts/check-urls.R`), README drift (`scripts/check-readme-drift.sh`), the NEWS heading (`scripts/check-news-version.sh`), and one `R CMD check --as-cran --no-manual` (`NOT_CRAN=true`, incoming checks off) that fails on an ERROR, a WARNING, a failed test or a skip not on `allowed_skips`. Before the container step, the citation, BugReports and logo-metadata checks run on the host as `host_gates`, in a worktree of the pushed commit |
 | T2 | the weekly `deep-check` schedule; every T3 run | `t2-check-release`, `t2-check-oldrel`, `t2-check-devel`, `x-floor` (R 4.1.3, in place of `t2-floor`), `t2-locale` (`R CMD check` under `LC_ALL=C`), `t2-ascran` (incoming off: `FLEET_INCOMING: "false"`), `coverage` (fails below 95%), `osv-audit`, `security-audit`, `citation-version`, `x-fossa` |
 | T3 | a `RELEASE=1` web pipeline on `main`; a `v*` tag | all of T2 plus `t3-manual` (the PDF manual); the tag, or `RELEASE=1` on a tag, adds `pages` |
 
@@ -157,8 +157,11 @@ would inherit it.
   BugReports, logo-metadata and NEWS-terseness checks with their self-tests,
   README drift, spelling, the NEWS heading and docs drift on every push to
   `main`, which caught a web edit, a server-side merge and a `--no-verify`
-  push. Those runs are gone; only the local gate and the pre-push hooks run
-  them, and T2's `citation-version` runs `check-citation.py` alone. The
+  push. Those runs are gone. The local gate runs the checks themselves
+  (T1's `cheap_gates` and `host_gates`, spelling in T0 too, NEWS
+  terseness as a pre-push hook); the pre-push hooks run the self-tests, each
+  only when its script changes; and T2's `citation-version` runs
+  `check-citation.py` alone, without its self-test. The
   scripts only the former shape called are retired with it:
   `scripts/gates.sh` (its README, spelling and NEWS-heading gates are now
   `check-readme-drift.sh`, `docs_gates` and `check-news-version.sh`) and
@@ -193,6 +196,15 @@ would inherit it.
 - **`fossa analyze` runs weekly and at each release** (`x-fossa`, ADR
   0012), no longer on every push to `main`, so the FOSSA badges can lag a
   merge by up to a week.
+- **`x-fossa` and `x-floor` run on `v*` tags and block `pages`.** Both are
+  on `.t2-job`, so a tag pipeline runs them, and `pages` (stage `deploy`)
+  waits on every `check` job; if either fails, the site is not deployed.
+  The recovery is a `PAGES=1` web pipeline on the tag, which runs `pages`
+  alone.
+- **The audits have no no-skip or zero-result guard** (SEOR-hpodlopi): an
+  `osv-audit` or `security-audit` run that skips its test, or audits
+  nothing, passes green. This stays until fleet-ci fixes it and seor
+  re-pins.
 - **Comments in `tests/` still name the former hook and jobs**
   (`test-osv.R`, `test-security.R`); a CI migration edits no `tests/`.
 - **Pandoc** comes from the fleet image (`.fleet-ci/toolchain`, 3.10), which
