@@ -3,7 +3,10 @@
 # packages' copies until SEOR-sptibjph reaches them: never re-port from those.
 # seor's copy also carries the SEOR-jjblyiyd hardening (own tracker address,
 # missing files, empty BugReports:, http:// and subgroup links, no seor-only
-# paths, the package block's @seealso); the members' ports predate it.
+# paths, the package block's @seealso) and the SEOR-sgfvtzps one (the legacy
+# /issues path only where it ends, any host case or www. in every pattern,
+# no .git in a tracker link, non-UTF-8 files read); the members' ports
+# predate both.
 """BugReports / tracker-link gate.
 
 WHY THIS EXISTS. CRAN runs two checks over a GitLab `BugReports:` URL and,
@@ -44,15 +47,25 @@ WHAT IT CHECKS.
 1. `DESCRIPTION`'s `BugReports:` is the `/-/work_items` address,
    optionally with a trailing slash, of the gitlab.com repository that
    `DESCRIPTION`'s `URL:` names, and `codemeta.json`'s `"issueTracker"`
-   is the same address.
+   is the same address. Repositories compare case-insensitively, and the
+   host may be `GitLab.com` or `www.gitlab.com` (both resolve). `URL:` may
+   name the repository with a `.git` suffix (a clone address);
+   `BugReports:` and every tracker link may not, as
+   `.../<project>.git/-/work_items` is not the canonical address.
 2. `man/<pkg>-package.Rd`'s "Report bugs at" link, when present, is
    IDENTICAL to `DESCRIPTION`'s `BugReports:` value; when absent, the
    `"_PACKAGE"` file declares the `@seealso` that suppresses it.
 3. Every file that carries the tracker link exists, names this package's own
    `/-/work_items` address (the repository `BugReports:` and `URL:` agree
    on; another project's tracker may appear beside it, never instead), and
-   none of them carries a `/-/issues` link (over `http://` or `https://`,
-   in a subgroup or not):
+   none of them carries a `/-/issues` link. That ban covers `http://` and
+   `https://`, a subgroup project, any host case, `www.gitlab.com`, and the
+   legacy path without `/-/` (`.../<project>/issues`, which redirects to
+   `/-/issues`) where that path ends: at the URL's end, `/new`,
+   `/<number>`, a query or a fragment. A subgroup project named `issues`
+   (`.../group/sub/issues/-/...`) or a file such as `.../blob/main/issues.md`
+   is not that path; a subgroup project named `issues` linked bare
+   (`.../group/sub/issues`) is indistinguishable from it and is flagged:
      - codemeta.json (`"issueTracker"`)
      - .bestpractices.json
      - CONTRIBUTING.md (where to report a bug)
@@ -62,7 +75,11 @@ WHAT IT CHECKS.
    requiring the new one; requiring it would force a link nobody asked for
    into them:
      - README.Rmd, README.md, SECURITY-INSIGHTS.yml, _pkgdown.yml,
-       vignettes/*.Rmd, .github/**
+       vignettes/*.Rmd, .github/**, .gitlab/**
+
+Every file is read as UTF-8 with an undecodable byte replaced, so a Latin-1
+DESCRIPTION (R allows `Encoding: latin1`) or man page is checked, not a
+traceback: every address compared is ASCII.
 
 WHAT IT DOES NOT CHECK, ON PURPOSE.
 
@@ -94,19 +111,31 @@ from pathlib import Path
 # A gitlab.com project path: a namespace, any subgroups, then the project.
 # A GitLab path segment cannot start with "-", so "/-/" ends the path.
 _SEGMENT = r"[\w.][\w.-]*"
-_PROJECT = rf"gitlab\.com/{_SEGMENT}(?:/{_SEGMENT})+"
+_PATH = rf"/{_SEGMENT}(?:/{_SEGMENT})+"
+# Hosts are case-insensitive and www.gitlab.com redirects to gitlab.com, so
+# every pattern takes both; repositories are then compared by _repo_key().
+_HOST = r"(?i:https://(?:www\.)?gitlab\.com)"
+# Where a URL ends in running text: the end, white space, a closing
+# delimiter, or punctuation that ends the sentence rather than the path.
+_DELIM = r"""[\s<>()\[\]{}`'"*|\\]"""
+_URL_END = rf"(?:$|{_DELIM}|[.,;:!](?:$|{_DELIM}))"
 
-# Over http:// too: it redirects to the same 404ing https:// address. Hosts
-# are case-insensitive and www.gitlab.com redirects to gitlab.com; the
-# legacy path without "/-/" redirects to /-/issues.
-ISSUES_RE = re.compile(rf"https?://(?:www\.)?{_PROJECT}/(?:-/)?issues(?![\w-])", re.IGNORECASE)
+# Over http:// too: it redirects to the same 404ing https:// address. The
+# legacy path without "/-/" redirects to /-/issues; it counts only where the
+# issues path ends (the URL's end, /new, /<number>, a query or a fragment),
+# so a subgroup project named "issues" or a file named issues.md is not it.
+ISSUES_RE = re.compile(
+    rf"https?://(?:www\.)?gitlab\.com{_PATH}/"
+    rf"(?:-/issues(?![\w-])|issues(?:/new|/\d+)?/?(?=[?#]|{_URL_END}))",
+    re.IGNORECASE,
+)
 # Group 1 is the repository the tracker belongs to.
-WORK_ITEMS_RE = re.compile(rf"(https://{_PROJECT})/-/work_items\b")
+WORK_ITEMS_RE = re.compile(rf"({_HOST}{_PATH})/-/work_items\b")
 
 # DESCRIPTION's BugReports: value, in full, must match this.
-BUGREPORTS_RE = re.compile(rf"^(https://{_PROJECT})/-/work_items/?$")
+BUGREPORTS_RE = re.compile(rf"^({_HOST}{_PATH})/-/work_items/?$")
 # A gitlab.com repository address in DESCRIPTION's URL: field.
-REPO_URL_RE = re.compile(rf"(https://gitlab\.com/{_SEGMENT}(?:/{_SEGMENT})+?)/?(?=[\s,]|$)")
+REPO_URL_RE = re.compile(rf"({_HOST}/{_SEGMENT}(?:/{_SEGMENT})+?)/?(?=[\s,]|$)")
 ISSUE_TRACKER_RE = re.compile(r'"issueTracker"\s*:\s*"([^"]*)"')
 
 # Files beside DESCRIPTION that carry the tracker link; each must name
@@ -135,20 +164,30 @@ NO_ISSUES_GLOBS = (
 PACKAGE_SENTINEL_RE = re.compile(r"""^\s*["']_PACKAGE["']\s*(?:#.*)?$""", re.MULTILINE)
 
 
-def _repo_key(repo: str) -> str:
-    """A repository address as compared: case-folded, without a trailing
-    "/" or ".git"."""
-    repo = repo.rstrip("/")
-    if repo.lower().endswith(".git"):
+def _repo_key(repo: str, url_field: bool = False) -> str:
+    """A repository address as compared and shown: case-folded, on
+    gitlab.com without www., without a trailing "/". A ".git" suffix goes
+    only from `URL:`'s repository (`url_field`), where a clone address is
+    fine; on a tracker link it is not the canonical address."""
+    repo = repo.rstrip("/").casefold().replace("://www.", "://", 1)
+    if url_field and repo.endswith(".git"):
         repo = repo[: -len(".git")]
-    return repo.casefold()
+    return repo
+
+
+def _read(path: Path) -> str:
+    """A file's text, a byte that is not UTF-8 replaced. R allows a Latin-1
+    DESCRIPTION (`Encoding: latin1`) and man page; every address compared
+    here is ASCII, so a replaced byte cannot change a finding, and a
+    non-ASCII byte inside an address leaves a value that fails to match."""
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def read_dcf(path: Path) -> dict[str, str]:
     """Flat DCF fields, joining RFC-822 style continuation lines."""
     fields: dict[str, str] = {}
     key: str | None = None
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in _read(path).splitlines():
         if not line.strip():
             key = None
             continue
@@ -170,7 +209,7 @@ def package_doc_source(root: Path) -> tuple[Path, str] | None:
     usethis's convention, but any file name works for roxygen2), with its
     text as read, a byte that is not UTF-8 replaced."""
     for path in sorted((root / "R").glob("*.[Rr]")):
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = _read(path)
         if PACKAGE_SENTINEL_RE.search(text):
             return path, text
     return None
@@ -209,15 +248,12 @@ def check_repo(root: Path) -> list[str]:
 
     # The package's own repository: BugReports:'s, when URL: names it too;
     # otherwise whatever gitlab.com repository URL: names. Repositories are
-    # compared by _repo_key(); `own` maps each key to the address shown.
-    url_repos = {_repo_key(repo): repo.rstrip("/") for repo in REPO_URL_RE.findall(desc.get("URL", ""))}
+    # compared, and shown, by _repo_key().
+    url_repos = {_repo_key(repo, url_field=True) for repo in REPO_URL_RE.findall(desc.get("URL", ""))}
     match = BUGREPORTS_RE.match(bugreports)
     bug_repo = _repo_key(match.group(1)) if match is not None else None
-    if bug_repo in url_repos:
-        own = {bug_repo: match.group(1)}
-    else:
-        own = url_repos
-    own_label = ", ".join(f"{repo}/-/work_items" for repo in sorted(own.values())) or "none in URL:"
+    own = {bug_repo} if bug_repo in url_repos else url_repos
+    own_label = ", ".join(f"{repo}/-/work_items" for repo in sorted(own)) or "none in URL:"
 
     if not own:
         errors.append(
@@ -234,7 +270,15 @@ def check_repo(root: Path) -> list[str]:
             f"check, and CRAN accepts /-/work_items (Uwe Ligges, 2026-10-23; "
             f"SEOR-sptibjph)."
         )
-    elif match is not None and bug_repo not in url_repos:
+    # With no repository in URL: at all, the finding above already says so.
+    elif match is not None and url_repos and _repo_key(match.group(1), url_field=True) in url_repos - {bug_repo}:
+        errors.append(
+            f"DESCRIPTION BugReports: is '{bugreports}', which names the "
+            f"repository with a .git suffix. Name it as "
+            f"'{_repo_key(match.group(1), url_field=True)}/-/work_items', the "
+            f"canonical address."
+        )
+    elif match is not None and url_repos and bug_repo not in url_repos:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', but URL: names no "
             f"repository '{match.group(1)}'. The tracker must be this "
@@ -243,7 +287,7 @@ def check_repo(root: Path) -> list[str]:
 
     codemeta = root / "codemeta.json"
     if bugreports and codemeta.exists():
-        tracker = ISSUE_TRACKER_RE.search(codemeta.read_text(encoding="utf-8"))
+        tracker = ISSUE_TRACKER_RE.search(_read(codemeta))
         if tracker is None or tracker.group(1).rstrip("/") != bugreports.rstrip("/"):
             found = tracker.group(1) if tracker else "nothing"
             errors.append(
@@ -256,7 +300,7 @@ def check_repo(root: Path) -> list[str]:
     man_rel = f"man/{package}-package.Rd"
     man_path = root / man_rel
     if package and man_path.exists():
-        text = man_path.read_text(encoding="utf-8")
+        text = _read(man_path)
         match = re.search(r"Report bugs at \\url\{([^}]*)\}", text)
         pkg_doc = package_doc_source(root)
         has_seealso = pkg_doc is not None and re.search(
@@ -294,7 +338,7 @@ def check_repo(root: Path) -> list[str]:
                 f"own tracker ({own_label})."
             )
             continue
-        text = path.read_text(encoding="utf-8")
+        text = _read(path)
         if ISSUES_RE.search(text):
             errors.append(
                 f"{name} still links a /-/issues form, which 404s for a "
@@ -304,7 +348,7 @@ def check_repo(root: Path) -> list[str]:
         # never instead of it. With no own tracker known, that is reported
         # once above, not here per file.
         trackers = {_repo_key(repo) for repo in WORK_ITEMS_RE.findall(text)}
-        if own and not trackers & own.keys():
+        if own and not trackers & own:
             errors.append(
                 f"{name} does not name the project's /-/work_items tracker "
                 f"link ({own_label}) anywhere -- expected this package's own "
@@ -319,7 +363,7 @@ def check_repo(root: Path) -> list[str]:
             if path in seen or not path.is_file():
                 continue
             seen.add(path)
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = _read(path)
             if ISSUES_RE.search(text):
                 errors.append(
                     f"{path.relative_to(root)} links a /-/issues form, which "
@@ -338,24 +382,7 @@ def check_repo(root: Path) -> list[str]:
 
 # Cases that pin a known gap still open in check_repo(). A listed case must
 # fail; one that passes fails the self-test, so a fix has to drop its tag.
-XFAIL: frozenset[str] = frozenset(
-    {
-        # SEOR-sgfvtzps, MR !139's second-pass review.
-        "legacy-issues-lookalikes",
-        "work-items-mixed-case-host",
-        "work-items-www-host",
-        "url-mixed-case-host",
-        "url-www-host",
-        "bugreports-mixed-case-host",
-        "bugreports-dotgit",
-        "contributing-dotgit-work-items",
-        "latin1-description",
-        "latin1-man",
-        "latin1-contributing-md",
-        "own-tracker-underivable-once",
-        "own-label-canonical",
-    }
-)
+XFAIL: frozenset[str] = frozenset()
 
 
 def _fixture(
