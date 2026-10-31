@@ -18,8 +18,8 @@
 #     fields = Depends+Imports             12 packages audited, clean
 #     fields = Depends+Imports+Suggests    87 packages audited, reports curl
 #
-# At that measurement `curl` was absent from seor's hard dependency tree. The two flagged
-# advisories -- CVE-2026-18924 (CWE-416 use-after-free, CVSS 9.1) and
+# At that measurement `curl` was absent from seor's hard dependency tree. The
+# two flagged advisories -- CVE-2026-18924 (CWE-416 use-after-free, CVSS 9.1) and
 # CVE-2026-3783 (CWE-522 insufficiently protected credentials, CVSS 6.9) --
 # both name libcurl ranges that include CRAN's current `curl` 8.0.0, so no
 # available version clears them and no local action could make the old scope
