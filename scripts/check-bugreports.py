@@ -3,7 +3,10 @@
 # packages' copies until SEOR-sptibjph reaches them: never re-port from those.
 # seor's copy also carries the SEOR-jjblyiyd hardening (own tracker address,
 # missing files, empty BugReports:, http:// and subgroup links, no seor-only
-# paths, the package block's @seealso); the members' ports predate it.
+# paths, the package block's @seealso) and the SEOR-sgfvtzps one (the legacy
+# /issues path only where it ends, any host case or www. in every pattern,
+# no .git in a tracker link, non-UTF-8 files read); the members' ports
+# predate both.
 """BugReports / tracker-link gate.
 
 WHY THIS EXISTS. CRAN runs two checks over a GitLab `BugReports:` URL and,
@@ -44,15 +47,30 @@ WHAT IT CHECKS.
 1. `DESCRIPTION`'s `BugReports:` is the `/-/work_items` address,
    optionally with a trailing slash, of the gitlab.com repository that
    `DESCRIPTION`'s `URL:` names, and `codemeta.json`'s `"issueTracker"`
-   is the same address.
+   is the same address (the host's case aside). Repositories compare
+   case-insensitively and the host may be spelt `GitLab.com`, but
+   `BugReports:` and `URL:` may not use `www.gitlab.com`: it answers with
+   a 308 permanent redirect, which CRAN's URL check reports as moved. A
+   tracker link in another file may use it. `URL:` may name the repository
+   with a `.git` suffix (a clone address); `BugReports:` and every tracker
+   link may not, as `.../<project>.git/-/work_items` is not the canonical
+   address.
 2. `man/<pkg>-package.Rd`'s "Report bugs at" link, when present, is
    IDENTICAL to `DESCRIPTION`'s `BugReports:` value; when absent, the
    `"_PACKAGE"` file declares the `@seealso` that suppresses it.
 3. Every file that carries the tracker link exists, names this package's own
    `/-/work_items` address (the repository `BugReports:` and `URL:` agree
    on; another project's tracker may appear beside it, never instead), and
-   none of them carries a `/-/issues` link (over `http://` or `https://`,
-   in a subgroup or not):
+   none of them carries a `/-/issues` link. That ban covers `http://` and
+   `https://`, a subgroup project, any host case, `www.gitlab.com`, and the
+   legacy path without `/-/` (`.../<project>/issues`, which redirects to
+   `/-/issues`) wherever its `issues` segment ends (`/new`, `/42/notes`,
+   `/service_desk`, a query, a fragment, a quote or punctuation). A subgroup
+   project named `issues` (`.../group/sub/issues/-/...`) and a folder or
+   file (`.../blob/main/issues.md`) in a `blob/`, `tree/`, `raw/` or
+   `wikis/` path are not that path; a subgroup project named `issues`
+   linked bare (`.../group/sub/issues`) is indistinguishable from it and is
+   flagged:
      - codemeta.json (`"issueTracker"`)
      - .bestpractices.json
      - CONTRIBUTING.md (where to report a bug)
@@ -62,7 +80,11 @@ WHAT IT CHECKS.
    requiring the new one; requiring it would force a link nobody asked for
    into them:
      - README.Rmd, README.md, SECURITY-INSIGHTS.yml, _pkgdown.yml,
-       vignettes/*.Rmd, .github/**
+       vignettes/*.Rmd, .github/**, .gitlab/**
+
+Every file is read as UTF-8 with an undecodable byte replaced, so a Latin-1
+DESCRIPTION (R allows `Encoding: latin1`) or man page is checked, not a
+traceback: every address compared is ASCII.
 
 WHAT IT DOES NOT CHECK, ON PURPOSE.
 
@@ -94,19 +116,38 @@ from pathlib import Path
 # A gitlab.com project path: a namespace, any subgroups, then the project.
 # A GitLab path segment cannot start with "-", so "/-/" ends the path.
 _SEGMENT = r"[\w.][\w.-]*"
-_PROJECT = rf"gitlab\.com/{_SEGMENT}(?:/{_SEGMENT})+"
+_PATH = rf"/{_SEGMENT}(?:/{_SEGMENT})+"
+# Hosts are case-insensitive, so every pattern takes any case; repositories
+# are then compared by _repo_key(). www.gitlab.com answers with a 308
+# permanent redirect to gitlab.com: a link a reader follows may use it, but
+# CRAN's URL check reports a DESCRIPTION address on it as moved, so
+# BugReports: and URL: may not.
+_HOST = r"(?i:https://gitlab\.com)"
+_LINK_HOST = r"(?i:https://(?:www\.)?gitlab\.com)"
+WWW_RE = re.compile(r"https?://www\.gitlab\.com\b", re.IGNORECASE)
 
-# Over http:// too: it redirects to the same 404ing https:// address. Hosts
-# are case-insensitive and www.gitlab.com redirects to gitlab.com; the
-# legacy path without "/-/" redirects to /-/issues.
-ISSUES_RE = re.compile(rf"https?://(?:www\.)?{_PROJECT}/(?:-/)?issues(?![\w-])", re.IGNORECASE)
+# A repository-content path (a file or folder in blob/, tree/ or raw/, a
+# wiki page) is not the project path, so it stops the legacy /issues match.
+_CONTENT = r"(?!(?:blob|tree|raw|wikis)/)"
+_ISSUES_PATH = rf"/{_SEGMENT}(?:/{_CONTENT}{_SEGMENT})+"
+
+# Over http:// too: it redirects to the same 404ing https:// address. The
+# legacy path without "/-/" redirects to /-/issues; it counts wherever the
+# "issues" segment ends (any character but a word character or "-"),
+# except where it is a subgroup project named "issues" (issues/-/...) or a
+# file or folder in the repository's content (blob/main/docs/issues.md).
+ISSUES_RE = re.compile(
+    rf"https?://(?:www\.)?gitlab\.com{_ISSUES_PATH}/"
+    r"(?:-/issues(?![\w-])|issues(?![\w-]|/-/))",
+    re.IGNORECASE,
+)
 # Group 1 is the repository the tracker belongs to.
-WORK_ITEMS_RE = re.compile(rf"(https://{_PROJECT})/-/work_items\b")
+WORK_ITEMS_RE = re.compile(rf"({_LINK_HOST}{_PATH})/-/work_items\b")
 
 # DESCRIPTION's BugReports: value, in full, must match this.
-BUGREPORTS_RE = re.compile(rf"^(https://{_PROJECT})/-/work_items/?$")
+BUGREPORTS_RE = re.compile(rf"^({_HOST}{_PATH})/-/work_items/?$")
 # A gitlab.com repository address in DESCRIPTION's URL: field.
-REPO_URL_RE = re.compile(rf"(https://gitlab\.com/{_SEGMENT}(?:/{_SEGMENT})+?)/?(?=[\s,]|$)")
+REPO_URL_RE = re.compile(rf"({_HOST}/{_SEGMENT}(?:/{_SEGMENT})+?)/?(?=[\s,]|$)")
 ISSUE_TRACKER_RE = re.compile(r'"issueTracker"\s*:\s*"([^"]*)"')
 
 # Files beside DESCRIPTION that carry the tracker link; each must name
@@ -135,20 +176,37 @@ NO_ISSUES_GLOBS = (
 PACKAGE_SENTINEL_RE = re.compile(r"""^\s*["']_PACKAGE["']\s*(?:#.*)?$""", re.MULTILINE)
 
 
-def _repo_key(repo: str) -> str:
-    """A repository address as compared: case-folded, without a trailing
-    "/" or ".git"."""
-    repo = repo.rstrip("/")
-    if repo.lower().endswith(".git"):
+def _repo_key(repo: str, url_field: bool = False) -> str:
+    """A repository address as compared and shown: case-folded, on
+    gitlab.com without www., without a trailing "/". A ".git" suffix goes
+    only from `URL:`'s repository (`url_field`), where a clone address is
+    fine; on a tracker link it is not the canonical address."""
+    repo = repo.rstrip("/").casefold().replace("://www.", "://", 1)
+    if url_field and repo.endswith(".git"):
         repo = repo[: -len(".git")]
-    return repo.casefold()
+    return repo
+
+
+def _address_key(address: str) -> str:
+    """An address as codemeta.json is compared with BugReports:: the scheme
+    and host case-folded, the path exact, without a trailing "/"."""
+    origin, path = re.match(r"((?:[^/]*//)?[^/]*)(.*)", address.rstrip("/")).groups()
+    return origin.casefold() + path
+
+
+def _read(path: Path) -> str:
+    """A file's text, a byte that is not UTF-8 replaced. R allows a Latin-1
+    DESCRIPTION (`Encoding: latin1`) and man page; every address compared
+    here is ASCII, so a replaced byte cannot change a finding, and a
+    non-ASCII byte inside an address leaves a value that fails to match."""
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def read_dcf(path: Path) -> dict[str, str]:
     """Flat DCF fields, joining RFC-822 style continuation lines."""
     fields: dict[str, str] = {}
     key: str | None = None
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in _read(path).splitlines():
         if not line.strip():
             key = None
             continue
@@ -170,7 +228,7 @@ def package_doc_source(root: Path) -> tuple[Path, str] | None:
     usethis's convention, but any file name works for roxygen2), with its
     text as read, a byte that is not UTF-8 replaced."""
     for path in sorted((root / "R").glob("*.[Rr]")):
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = _read(path)
         if PACKAGE_SENTINEL_RE.search(text):
             return path, text
     return None
@@ -209,17 +267,23 @@ def check_repo(root: Path) -> list[str]:
 
     # The package's own repository: BugReports:'s, when URL: names it too;
     # otherwise whatever gitlab.com repository URL: names. Repositories are
-    # compared by _repo_key(); `own` maps each key to the address shown.
-    url_repos = {_repo_key(repo): repo.rstrip("/") for repo in REPO_URL_RE.findall(desc.get("URL", ""))}
+    # compared, and shown, by _repo_key().
+    url_repos = {_repo_key(repo, url_field=True) for repo in REPO_URL_RE.findall(desc.get("URL", ""))}
     match = BUGREPORTS_RE.match(bugreports)
     bug_repo = _repo_key(match.group(1)) if match is not None else None
-    if bug_repo in url_repos:
-        own = {bug_repo: match.group(1)}
-    else:
-        own = url_repos
-    own_label = ", ".join(f"{repo}/-/work_items" for repo in sorted(own.values())) or "none in URL:"
+    own = {bug_repo} if bug_repo in url_repos else url_repos
+    own_label = ", ".join(f"{repo}/-/work_items" for repo in sorted(own)) or "none in URL:"
 
-    if not own:
+    url_www = WWW_RE.search(desc.get("URL", ""))
+    if url_www:
+        errors.append(
+            "DESCRIPTION URL: names a repository on www.gitlab.com, which "
+            "answers with a 308 permanent redirect that CRAN's URL check "
+            "reports as moved. Name it on gitlab.com."
+        )
+    # A www. URL: is reported above; that its repository is not derivable is
+    # the same finding.
+    if not own and not url_www:
         errors.append(
             "DESCRIPTION's URL: names no gitlab.com repository that BugReports: "
             "agrees with, so this package's own tracker can't be derived and no "
@@ -227,14 +291,29 @@ def check_repo(root: Path) -> list[str]:
             "repository to URL:."
         )
 
-    if bugreports and match is None:
+    if bugreports and match is None and WWW_RE.match(bugreports):
+        errors.append(
+            f"DESCRIPTION BugReports: is '{bugreports}', on www.gitlab.com, "
+            f"which answers with a 308 permanent redirect that CRAN's URL "
+            f"check reports as moved. Name it on gitlab.com."
+        )
+    elif bugreports and match is None:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', which is not a "
             f"gitlab.com /-/work_items address. /-/issues 404s for CRAN's URL "
             f"check, and CRAN accepts /-/work_items (Uwe Ligges, 2026-10-23; "
             f"SEOR-sptibjph)."
         )
-    elif match is not None and bug_repo not in url_repos:
+    # BugReports: alone shows a .git suffix, whatever URL: names.
+    elif match is not None and bug_repo.endswith(".git"):
+        errors.append(
+            f"DESCRIPTION BugReports: is '{bugreports}', which names the "
+            f"repository with a .git suffix. Name it as "
+            f"'{_repo_key(match.group(1), url_field=True)}/-/work_items', the "
+            f"canonical address."
+        )
+    # With no repository in URL: at all, a finding above already says so.
+    elif match is not None and url_repos and bug_repo not in url_repos:
         errors.append(
             f"DESCRIPTION BugReports: is '{bugreports}', but URL: names no "
             f"repository '{match.group(1)}'. The tracker must be this "
@@ -243,8 +322,8 @@ def check_repo(root: Path) -> list[str]:
 
     codemeta = root / "codemeta.json"
     if bugreports and codemeta.exists():
-        tracker = ISSUE_TRACKER_RE.search(codemeta.read_text(encoding="utf-8"))
-        if tracker is None or tracker.group(1).rstrip("/") != bugreports.rstrip("/"):
+        tracker = ISSUE_TRACKER_RE.search(_read(codemeta))
+        if tracker is None or _address_key(tracker.group(1)) != _address_key(bugreports):
             found = tracker.group(1) if tracker else "nothing"
             errors.append(
                 f"codemeta.json issueTracker is '{found}', but DESCRIPTION's "
@@ -256,7 +335,7 @@ def check_repo(root: Path) -> list[str]:
     man_rel = f"man/{package}-package.Rd"
     man_path = root / man_rel
     if package and man_path.exists():
-        text = man_path.read_text(encoding="utf-8")
+        text = _read(man_path)
         match = re.search(r"Report bugs at \\url\{([^}]*)\}", text)
         pkg_doc = package_doc_source(root)
         has_seealso = pkg_doc is not None and re.search(
@@ -294,7 +373,7 @@ def check_repo(root: Path) -> list[str]:
                 f"own tracker ({own_label})."
             )
             continue
-        text = path.read_text(encoding="utf-8")
+        text = _read(path)
         if ISSUES_RE.search(text):
             errors.append(
                 f"{name} still links a /-/issues form, which 404s for a "
@@ -304,7 +383,7 @@ def check_repo(root: Path) -> list[str]:
         # never instead of it. With no own tracker known, that is reported
         # once above, not here per file.
         trackers = {_repo_key(repo) for repo in WORK_ITEMS_RE.findall(text)}
-        if own and not trackers & own.keys():
+        if own and not trackers & own:
             errors.append(
                 f"{name} does not name the project's /-/work_items tracker "
                 f"link ({own_label}) anywhere -- expected this package's own "
@@ -319,7 +398,7 @@ def check_repo(root: Path) -> list[str]:
             if path in seen or not path.is_file():
                 continue
             seen.add(path)
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = _read(path)
             if ISSUES_RE.search(text):
                 errors.append(
                     f"{path.relative_to(root)} links a /-/issues form, which "
@@ -350,6 +429,7 @@ def _fixture(
     url: str = "https://gitlab.com/bart-turczynski/fixture",
     package: str = "fixture",
     r_encoding: str = "utf-8",
+    latin1: tuple[str, ...] = (),
 ) -> Path:
     """A throwaway package; `seealso` picks the R/<pkg>-package.R shape.
 
@@ -361,6 +441,8 @@ def _fixture(
     puts a # comment after the sentinel, "package-accented" carries a
     non-ASCII character (write it with `r_encoding` "latin-1" to get a byte
     that is not UTF-8), and "no-sentinel" documents no "_PACKAGE" at all.
+    Each file named in `latin1` (DESCRIPTION, the man page as "man", or a
+    human-facing file) gains a line with a Latin-1 byte that is not UTF-8.
     """
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "DESCRIPTION").write_text(
@@ -396,6 +478,10 @@ def _fixture(
         path = directory / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+    for name in latin1:
+        path = man_dir / f"{package}-package.Rd" if name == "man" else directory / name
+        with path.open("ab") as handle:
+            handle.write("Maintainer-Note: Café Ltd.\n".encode("latin-1"))
     return directory
 
 
@@ -413,7 +499,12 @@ def self_test() -> None:
     def run(tag: str, **kwargs) -> list[str]:
         ran.add(tag)
         with tempfile.TemporaryDirectory() as tmp:
-            return check_repo(_fixture(Path(tmp) / tag, **kwargs))
+            # A crash is a finding too, so one case's traceback cannot hide
+            # every case after it.
+            try:
+                return check_repo(_fixture(Path(tmp) / tag, **kwargs))
+            except Exception as exc:  # noqa: BLE001
+                return [f"check_repo() raised {exc!r}"]
 
     def record(tag: str, ok: bool, detail: str) -> None:
         if tag in XFAIL:
@@ -429,10 +520,12 @@ def self_test() -> None:
         found = run(tag, **kwargs)
         record(tag, not found, f"expected clean, got {found}")
 
-    def expect_flagged(tag: str, needle: str, **kwargs) -> None:
+    def expect_flagged(tag: str, needle: str, only: bool = False, **kwargs) -> None:
+        """`only`: the needle's finding must be the sole one."""
         counts["negative"] += 1
         found = run(tag, **kwargs)
-        record(tag, any(needle in f for f in found), f"expected {needle!r}, got {found}")
+        ok = any(needle in f for f in found) and (len(found) == 1 or not only)
+        record(tag, ok, f"expected {'only ' if only else ''}{needle!r}, got {found}")
 
     human_target = {
         "codemeta.json": f'{{"issueTracker": "{work_items}"}}',
@@ -739,6 +832,210 @@ def self_test() -> None:
         bugreports=work_items,
         man_url=work_items,
         human={**human_target, ".gitlab/issue_templates/Bug.md": f"Search {issues} first."},
+    )
+
+    # NEGATIVE: the legacy path without "/-/" ending the URL, at a sentence's
+    # full stop, or followed by one issue, a query or a fragment.
+    for tag, suffix in (
+        ("end", "issues."),
+        ("trailing-slash", "issues/ today"),
+        ("one-issue", "issues/42"),
+        ("query", "issues?state=opened"),
+        ("fragment", "issues#top"),
+    ):
+        expect_flagged(
+            f"legacy-issues-{tag}",
+            "README.md links a /-/issues form",
+            bugreports=work_items,
+            man_url=work_items,
+            human=with_file("README.md", f"See https://gitlab.com/bart-turczynski/fixture/{suffix}"),
+        )
+
+    # NEGATIVE: the legacy path followed by a character no ASCII delimiter
+    # list foresees: smart quotes, an ellipsis, an HTML entity, a note on an
+    # issue, the service desk.
+    for tag, text in (
+        ("smart-quotes", "See “https://gitlab.com/bart-turczynski/fixture/issues”."),
+        ("ellipsis", "See https://gitlab.com/bart-turczynski/fixture/issues..."),
+        ("html-entity", 'See <a href="https://gitlab.com/bart-turczynski/fixture/issues&amp;x=1">'),
+        ("issue-notes", "See https://gitlab.com/bart-turczynski/fixture/issues/42/notes"),
+        ("service-desk", "See https://gitlab.com/bart-turczynski/fixture/issues/service_desk"),
+    ):
+        expect_flagged(
+            f"legacy-issues-{tag}",
+            "README.md links a /-/issues form",
+            bugreports=work_items,
+            man_url=work_items,
+            human=with_file("README.md", text),
+        )
+
+    # POSITIVE: a folder or file named "issues" in a repository path, under
+    # blob/, tree/, raw/ or wikis/, with or without "/-/", is not the legacy
+    # /issues path.
+    expect_clean(
+        "legacy-issues-repo-paths",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file(
+            "README.md",
+            "\n".join(
+                f"See <https://gitlab.com/bart-turczynski/fixture/{path}>."
+                for path in (
+                    "blob/main/issues",
+                    "tree/main/issues/",
+                    "raw/main/docs/issues",
+                    "wikis/issues",
+                    "-/blob/main/issues",
+                    "-/tree/main/issues/",
+                )
+            ),
+        ),
+    )
+
+    # POSITIVE: a subgroup project named "issues", and a repository file
+    # named issues.md, are not the legacy /issues path.
+    expect_clean(
+        "legacy-issues-lookalikes",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file(
+            "README.md",
+            "Tracker of a sibling: <https://gitlab.com/some-group/sub/issues/-/work_items>. "
+            "Notes: <https://gitlab.com/bart-turczynski/fixture/blob/main/docs/issues.md>.",
+        ),
+    )
+
+    # POSITIVE: a work_items link on a mixed-case or www. host is the same
+    # tracker, as it is for the /-/issues ban.
+    for tag, host in (("mixed-case", "https://GitLab.com"), ("www", "https://www.gitlab.com")):
+        expect_clean(
+            f"work-items-{tag}-host",
+            bugreports=work_items,
+            man_url=work_items,
+            human=with_file(
+                "CONTRIBUTING.md",
+                f"Report bugs at <{host}/bart-turczynski/fixture/-/work_items>.",
+            ),
+        )
+
+    # POSITIVE: URL: names the repository on a mixed-case host.
+    expect_clean(
+        "url-mixed-case-host",
+        bugreports=work_items,
+        man_url=work_items,
+        human=human_target,
+        url="https://GitLab.com/bart-turczynski/fixture",
+    )
+
+    # NEGATIVE: URL: or BugReports: on www.gitlab.com, which answers with a
+    # 308 permanent redirect that CRAN's URL check reports as moved.
+    www = "https://www.gitlab.com/bart-turczynski/fixture"
+    expect_flagged(
+        "url-www-host",
+        "www.gitlab.com",
+        only=True,
+        bugreports=work_items,
+        man_url=work_items,
+        human=human_target,
+        url=www,
+    )
+    expect_flagged(
+        "bugreports-www-host",
+        "www.gitlab.com",
+        only=True,
+        bugreports=f"{www}/-/work_items",
+        man_url=f"{www}/-/work_items",
+        human=with_file("codemeta.json", f'{{"issueTracker": "{www}/-/work_items"}}'),
+    )
+
+    # POSITIVE: BugReports: on a mixed-case host. The man page repeats it
+    # verbatim (roxygen2 copies it); codemeta.json may spell the host in
+    # lower case.
+    upper = "https://GitLab.com/bart-turczynski/fixture/-/work_items"
+    expect_clean(
+        "bugreports-mixed-case-host",
+        bugreports=upper,
+        man_url=upper,
+        human=human_target,
+    )
+
+    # NEGATIVE: codemeta.json differing from BugReports: in the path's case
+    # is another address.
+    expect_flagged(
+        "codemeta-path-case",
+        "codemeta.json issueTracker is",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file(
+            "codemeta.json",
+            '{"issueTracker": "https://gitlab.com/Bart-Turczynski/fixture/-/work_items"}',
+        ),
+    )
+
+    # NEGATIVE: BugReports: with a .git suffix is not the canonical address,
+    # though URL: may carry one.
+    dotgit = f"{org}.git/-/work_items"
+    expect_flagged(
+        "bugreports-dotgit",
+        "a .git suffix",
+        bugreports=dotgit,
+        man_url=dotgit,
+        human=with_file("codemeta.json", f'{{"issueTracker": "{dotgit}"}}'),
+    )
+
+    # NEGATIVE: the same, with no gitlab.com repository in URL: to compare it
+    # against; BugReports: alone shows the suffix.
+    expect_flagged(
+        "bugreports-dotgit-no-gitlab-url",
+        "a .git suffix",
+        bugreports=dotgit,
+        man_url=dotgit,
+        human=with_file("codemeta.json", f'{{"issueTracker": "{dotgit}"}}'),
+        url="https://example.org/fixture",
+    )
+
+    # NEGATIVE: a file naming the tracker only with a .git suffix.
+    expect_flagged(
+        "contributing-dotgit-work-items",
+        "CONTRIBUTING.md does not name the project's /-/work_items",
+        bugreports=work_items,
+        man_url=work_items,
+        human=with_file("CONTRIBUTING.md", f"Report bugs at <{dotgit}>."),
+    )
+
+    # POSITIVE: DESCRIPTION, the man page and a human-facing file with a byte
+    # that is not UTF-8 (R allows `Encoding: latin1`).
+    for name in ("DESCRIPTION", "man", "CONTRIBUTING.md"):
+        expect_clean(
+            f"latin1-{name.lower().replace('.', '-')}",
+            bugreports=work_items,
+            man_url=work_items,
+            human=human_target,
+            latin1=(name,),
+        )
+
+    # NEGATIVE: URL: names no gitlab.com repository; reported once, not
+    # again as a BugReports: mismatch.
+    expect_flagged(
+        "own-tracker-underivable-once",
+        "own tracker can't be derived",
+        only=True,
+        bugreports=work_items,
+        man_url=work_items,
+        human=human_target,
+        url="https://example.org/fixture",
+    )
+
+    # NEGATIVE: the own tracker shown in a finding is the canonical address,
+    # without URL:'s .git suffix or its owner's capitals.
+    expect_flagged(
+        "own-label-canonical",
+        f"CONTRIBUTING.md does not name the project's /-/work_items tracker link ({work_items})",
+        bugreports="",
+        man_url=None,
+        seealso="none",
+        human=with_file("CONTRIBUTING.md", f"Report bugs at <{foreign}>."),
+        url="https://gitlab.com/Bart-Turczynski/fixture.git",
     )
 
     unknown = sorted(XFAIL - ran)
