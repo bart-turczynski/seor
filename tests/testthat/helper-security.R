@@ -44,9 +44,11 @@
 #
 # Every row below names a libcurl range that covers CRAN's current curl 8.1.0
 # (2026-10-14), so no available version clears it. libcurl itself fixes all
-# six by 8.23.0, but the audit matches the R package's version, so a newer
+# six by 8.23.0 (curl.se/docs/CVE-<id>.json, read 2026-10-31: fixed in 8.19.0,
+# 8.22.0 or 8.23.0), but the audit matches the R package's version, so a newer
 # system libcurl would not clear them either; only a new CRAN curl can.
-# robotstxtr facts are read from its CRAN release, v0.3.1.
+# robotstxtr facts are read from its CRAN release, v0.3.1, because the audit
+# resolves CRAN metadata, not the `Remotes:` entry that points at its main.
 
 oss_index_allowlist <- list(
   list(
@@ -104,12 +106,19 @@ oss_index_allowlist <- list(
       "CWE-201: an HTTP proxy answering a CONNECT with 401 instead of 407",
       "makes libcurl send the origin's credentials set through libcurl",
       "(CURLOPT_USERPWD, Negotiate) to the proxy (CVSS 6.5). It needs",
-      "libcurl-level origin credentials. robotstxtr 0.3.1 sets none: its",
-      "fresh per-hop request carries no userinfo (robots_origin() drops it)",
-      "and no auth option. ssrfr sets no credentials and disables proxies",
-      "(proxy = \"\", noproxy = \"*\"); sitemapr's auth is an httr2",
-      "Authorization header, which libcurl keeps off the CONNECT. Re-check",
-      "that no request builder sets userpwd/username/password before renewing."
+      "libcurl-level origin credentials. robotstxtr 0.3.1 sets no auth",
+      "option and its per-hop request carries no userinfo (robots_origin()",
+      "drops it), but it leaves netrc at curl's default, which curl 8.1.0",
+      "turns on when the caller sets options(netrc = <path>); it also honors",
+      "environment proxies. So in 0.3.1 the path needs a caller who sets",
+      "options(netrc) with a matching entry AND routes through a hostile",
+      "proxy. robotstxtr main sets netrc = 0 (62a3a09), shipping in its next",
+      "release. ssrfr sets netrc = 0 and disables proxies (proxy = \"\",",
+      "noproxy = \"*\"); sitemapr's own auth is an httr2 Authorization",
+      "header, which libcurl keeps off the CONNECT, unless a caller sets",
+      "userpwd through its tls list or prepare hook. Re-check the request",
+      "builders and hooks, and drop the netrc caveat once robotstxtr's next",
+      "release is on CRAN, before renewing this row."
     )
   ),
   list(
@@ -121,11 +130,12 @@ oss_index_allowlist <- list(
       "CWE-130: with CURLOPT_CRLF set, curl advertises the raw byte count",
       "in an IMAP APPEND literal but sends the expanded data (CVSS 3.7). It",
       "needs both an IMAP upload and crlf. No package in seor's tree uploads",
-      "or sets crlf. Independently, robotstxtr 0.3.1 builds only http(s)",
+      "or sets crlf itself; only a caller could, through sitemapr's tls list",
+      "or prepare hook. Independently, robotstxtr 0.3.1 builds only http(s)",
       "robots URLs (robots_origin()) and refuses non-http(s) redirect",
       "targets, ssrfr limits protocols to http,https, and sitemapr's SSRF",
-      "guard admits only http(s). Re-check for upload/crlf options before",
-      "renewing this row."
+      "guard admits only http(s) unless the caller sets ssrf_guard = FALSE.",
+      "Re-check for upload/crlf options and hooks before renewing this row."
     )
   ),
   list(
@@ -139,9 +149,10 @@ oss_index_allowlist <- list(
       "CURLOPT_SSH_KEYFUNCTION callback that then accepts it; SFTP and SCP",
       "only (CVSS 6.9). The callback the flaw needs cannot be installed from",
       "R: curl 8.1.0's handle_setopt() rejects ssh_keyfunction as an",
-      "unsupported option type. Independently, no package in seor's tree",
-      "sets an SSH option and each limits requests to http(s). Re-check that",
-      "rejection before renewing this row."
+      "unsupported option type, so not even a caller's hook can set it.",
+      "Independently, no package in seor's tree sets an SSH option, and each",
+      "limits requests to http(s) by default. Re-check that rejection before",
+      "renewing this row."
     )
   )
 )
