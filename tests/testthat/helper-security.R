@@ -3,29 +3,27 @@
 # because more than one test block reads it -- the offline well-formedness
 # check and the network audit itself.
 #
-# WHY A LIST THAT IS EMPTY. The contract this file implements is "every
-# reported advisory has a current, explicit disposition", replacing "the scan
-# reports nothing" (SEOR-fkvlzltx, deciding SEOR-feqgnbwt route (a)). For seor
-# the two contracts coincide *today*: measured 2026-09-11 with live OSS Index
-# credentials, the hard dependency closure is 12 packages and reports zero
-# advisories, so there is nothing to dispose of and the list is empty.
+# The contract this file implements is "every reported advisory has a current,
+# explicit disposition", replacing "the scan reports nothing" (SEOR-fkvlzltx,
+# deciding SEOR-feqgnbwt route (a)). Measured 2026-09-11 with live OSS Index
+# credentials, the hard dependency closure was 12 packages and reported zero
+# advisories, so the list started empty.
 #
-# That clean result is an artifact of who is on CRAN, not of seor being
+# That clean result was an artifact of who is on CRAN, not of seor being
 # unexposed. `oysteR::audit_description()` expands the dependency closure from
-# CRAN metadata, and `sitemapr`, `robotstxtr` and `ssrfr` are not on CRAN -- so
-# their own subtrees are invisible to the audit and are reported as single leaf
-# components (measured: `sitemapr 0.0.0.9000`, zero vulnerabilities).
-# `pagerankr` was one such leaf at that measurement; it reached CRAN on
-# 2026-09-28, so its subtree (`igraph`, `Matrix` and their imports) is now
-# expanded too, and has not been re-audited since. When Phase 4b lands
-# sitemapr on CRAN, seor inherits `httr2 -> curl` and sitemapr's two curl rows
-# become necessary here.
+# CRAN metadata, so a member that is not on CRAN is reported as a single leaf
+# component with its own subtree invisible. robotstxtr reached CRAN on
+# 2026-10-24 (0.3.1), and the audit now expands `robotstxtr -> httr2 -> curl`:
+# seor's T2 of 2026-10-30 reported six advisories against curl 8.1.0, the rows
+# below (SEOR-dtsibbuo). In CRAN's dependency metadata httr2 is the only
+# package in seor's hard tree that imports curl, and robotstxtr the only one
+# that imports httr2, so robotstxtr is the caller each row argues from.
+# sitemapr and ssrfr also drive curl (through httr2 and directly) but are still
+# leaves here; the same six rows, argued for each, are in sitemapr's and
+# ssrfr's own helper-security.R.
 #
-# They are deliberately NOT copied in ahead of that (SEOR-sxvcbuia): rule B
-# below fails a row that is not currently reported, so an anticipatory row is
-# stale on arrival and would fail the gate on the day it is added. The
-# machinery is what is portable; the rows are not. Adding them later is a
-# one-block edit to `oss_index_allowlist`.
+# Rows are added only once reported (SEOR-sxvcbuia): rule B below fails a row
+# that is not currently reported, so an anticipatory row is stale on arrival.
 #
 # Three rules keep the list honest. test-security.R enforces them:
 #
@@ -42,10 +40,111 @@
 #
 # Adding a row is a decision, not a formality. Rule B is what keeps it one.
 #
-# The reference implementation, and the only two rows in this fleet, are in
-# `sitemapr/tests/testthat/helper-security.R`.
+# The reference implementation is `sitemapr/tests/testthat/helper-security.R`.
+#
+# Every row below names a libcurl range that covers CRAN's current curl 8.1.0
+# (2026-10-14), so no available version clears it. libcurl itself fixes all
+# six by 8.23.0, but the audit matches the R package's version, so a newer
+# system libcurl would not clear them either; only a new CRAN curl can.
+# robotstxtr facts are read from its CRAN release, v0.3.1.
 
-oss_index_allowlist <- list()
+oss_index_allowlist <- list(
+  list(
+    id = "CVE-2026-18924",
+    package = "curl",
+    version_seen = "8.1.0",
+    review = as.Date("2026-12-01"),
+    reason = paste(
+      "CWE-416 use-after-free on HTTP/2 server push over a shared",
+      "connection handle (CVSS 9.1). Unreachable from R: the flaw needs a",
+      "push callback, and curl::curl_options() exposes no option matching",
+      "`push` while curl::multi_set() takes only total_con, host_con,",
+      "max_streams, multiplex and pool, so CURLMOPT_PUSHFUNCTION cannot be",
+      "set and server push cannot be enabled by any package in seor's tree.",
+      "Independently, ssrfr pins http_version to HTTP/1.1. Re-check those",
+      "two curl calls before renewing this row."
+    )
+  ),
+  list(
+    id = "CVE-2026-3783",
+    package = "curl",
+    version_seen = "8.1.0",
+    review = as.Date("2026-12-01"),
+    reason = paste(
+      "CWE-522: an OAuth2 bearer token is leaked to a redirect target when",
+      ".netrc carries a matching entry (CVSS 6.9). The leak happens only in",
+      "libcurl's own redirect following. robotstxtr 0.3.1's",
+      "build_fetch_request() (R/fetch-policy.R) sets followlocation = FALSE",
+      "and follows redirects manually, one fresh request per hop, and sends",
+      "no bearer token. ssrfr and sitemapr also set followlocation = 0, and",
+      "ssrfr and robotstxtr's main set netrc = 0 as well. Re-check those",
+      "request builders before renewing this row."
+    )
+  ),
+  list(
+    id = "CVE-2026-86410",
+    package = "curl",
+    version_seen = "8.1.0",
+    review = as.Date("2026-12-01"),
+    reason = paste(
+      "CWE-297: the curl command-line tool sets its SSH host verification",
+      "options only for a direct SFTP or SCP transfer, not for one reached",
+      "by a redirect (CVSS 5.1). curl.se: only the command line tool is",
+      "affected, not libcurl. Every package in seor's tree drives libcurl",
+      "through R curl or httr2 and none runs the curl tool. Re-check with a",
+      "search for system2()/processx calls to curl before renewing this row."
+    )
+  ),
+  list(
+    id = "CVE-2026-86414",
+    package = "curl",
+    version_seen = "8.1.0",
+    review = as.Date("2026-12-01"),
+    reason = paste(
+      "CWE-201: an HTTP proxy answering a CONNECT with 401 instead of 407",
+      "makes libcurl send the origin's credentials set through libcurl",
+      "(CURLOPT_USERPWD, Negotiate) to the proxy (CVSS 6.5). It needs",
+      "libcurl-level origin credentials. robotstxtr 0.3.1 sets none: its",
+      "fresh per-hop request carries no userinfo (robots_origin() drops it)",
+      "and no auth option. ssrfr sets no credentials and disables proxies",
+      "(proxy = \"\", noproxy = \"*\"); sitemapr's auth is an httr2",
+      "Authorization header, which libcurl keeps off the CONNECT. Re-check",
+      "that no request builder sets userpwd/username/password before renewing."
+    )
+  ),
+  list(
+    id = "CVE-2026-87864",
+    package = "curl",
+    version_seen = "8.1.0",
+    review = as.Date("2026-12-01"),
+    reason = paste(
+      "CWE-130: with CURLOPT_CRLF set, curl advertises the raw byte count",
+      "in an IMAP APPEND literal but sends the expanded data (CVSS 3.7). It",
+      "needs both an IMAP upload and crlf. No package in seor's tree uploads",
+      "or sets crlf. Independently, robotstxtr 0.3.1 builds only http(s)",
+      "robots URLs (robots_origin()) and refuses non-http(s) redirect",
+      "targets, ssrfr limits protocols to http,https, and sitemapr's SSRF",
+      "guard admits only http(s). Re-check for upload/crlf options before",
+      "renewing this row."
+    )
+  ),
+  list(
+    id = "CVE-2026-87865",
+    package = "curl",
+    version_seen = "8.1.0",
+    review = as.Date("2026-12-01"),
+    reason = paste(
+      "CWE-295: libcurl built on libssh2, with a hashed known_hosts file,",
+      "can report a host-key mismatch as a missing key to a",
+      "CURLOPT_SSH_KEYFUNCTION callback that then accepts it; SFTP and SCP",
+      "only (CVSS 6.9). The callback the flaw needs cannot be installed from",
+      "R: curl 8.1.0's handle_setopt() rejects ssh_keyfunction as an",
+      "unsupported option type. Independently, no package in seor's tree",
+      "sets an SSH option and each limits requests to http(s). Re-check that",
+      "rejection before renewing this row."
+    )
+  )
+)
 
 # The fields every allow-list row carries, in the order they are documented.
 oss_index_allowlist_fields <- c(
