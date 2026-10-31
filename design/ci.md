@@ -2,7 +2,7 @@
 
 seor runs fleet-ci's tiered CI ([ADR 0012](adr/0012-verification-tiers-replace-per-push-ci.md))
 since the fleet-ci migration (`SEOR-hqiiccma`, 2026-10-30). `.gitlab-ci.yml`
-includes fleet-ci's `templates/r-package.yml`, pinned by commit SHA (v1.2.4),
+includes fleet-ci's `templates/r-package.yml`, pinned by commit SHA (v1.3.0),
 and sets only package variables plus two `x-*` jobs, `x-floor` and `x-fossa`;
 `.fleet-ci.yml` holds the local gate's settings, and `.fleet-ci/` is
 fleet-ci's vendored gate (re-run fleet-ci's `bin/vendor`, never edit it). The
