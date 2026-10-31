@@ -10,11 +10,13 @@ Three hard checks (exit 1 on failure):
 Plus one non-blocking warning: drafts left untouched in `_scratch/`.
 
 Stdlib only, so it runs in R, Python, TypeScript, and extension repos alike
-without adding a CI dependency. Invoke as `python3 scripts/check-design.py`.
+without adding a CI dependency. Invoke as `python3 scripts/check-design.py`,
+or `python3 scripts/check-design.py --self-test` for the offline self-test.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import time
@@ -42,10 +44,11 @@ def git(*args: str) -> str | None:
     # flake8-bandit flags every subprocess call. `shell=False` (the default) is
     # S603's premise, not its answer: with no shell in the picture the risk that
     # remains is argument injection, because git reads any argv element starting
-    # with `-` as an option. Not every argument here is a literal - `upstream`,
+    # with `-` as an option. Not every argument here is a literal - `ref`,
     # `base` and `rel` are all parsed back out of git's own output - so the thing
     # that actually makes this safe is that none of them can lead with `-`: git
-    # refuses to create a ref name that does, `base` is a SHA from merge-base,
+    # refuses to create a ref name that does (and for-each-ref prints full
+    # `refs/...` names), `base` is a SHA from merge-base,
     # and `rel` only ever reaches git embedded as f"{base}:{rel}". Keep that true
     # when adding callers. S607: `git` is resolved from PATH on purpose, so the
     # script runs wherever the checkout does - CI images, Homebrew, Nix, Windows.
@@ -100,15 +103,46 @@ def check_frontmatter(root: Path, errors: list[str]) -> None:
                 )
 
 
+def adr_base() -> str | None:
+    """The commit committed HEAD's ADRs are judged against, or None.
+
+    The merge-base with the tracking branch; failing that (a new branch's
+    first push has no upstream yet), with the remote's default branch:
+    origin/HEAD, then origin/main or origin/master, then any remote's
+    HEAD, main or master, then any remote-tracking ref. None only when no
+    remote-tracking ref shares history with HEAD.
+    """
+    candidates: list[str] = []
+    upstream = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    if upstream:
+        candidates.append(upstream)
+    candidates += [
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/master",
+    ]
+    listed = git("for-each-ref", "--format=%(refname)", "refs/remotes")
+    remote_refs = listed.splitlines() if listed else []
+    for suffix in ("/HEAD", "/main", "/master"):
+        candidates += [ref for ref in remote_refs if ref.endswith(suffix)]
+    candidates += remote_refs
+    for ref in candidates:
+        base = git("merge-base", "HEAD", ref)
+        if base:
+            return base
+    return None
+
+
 def check_adr_immutability(root: Path, errors: list[str]) -> None:
     """An accepted ADR may be superseded, never edited.
 
-    Compares against the merge-base with the tracking branch. A freshly
-    generated project has no remote yet, so the check no-ops rather than
-    failing - there is no history to be immutable against.
+    Compares committed HEAD against adr_base(): the merge-base with the
+    tracking branch, or with the remote's default branch when there is no
+    upstream yet. A freshly generated project has no remote yet, so the
+    check no-ops rather than failing - there is no history to be immutable
+    against.
     """
-    upstream = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-    base = git("merge-base", "HEAD", upstream) if upstream else None
+    base = adr_base()
     if base is None:
         return
 
@@ -172,7 +206,119 @@ def warn_stale_scratch(root: Path) -> list[str]:
     )
 
 
+# --- self-test (ADR immutability against throwaway repos, offline) -----------
+
+ADR_ACCEPTED = "---\nstatus: accepted\n---\n\n# 0001 Decision\n\nWe decide A.\n"
+ADR_EDITED = "---\nstatus: accepted\n---\n\n# 0001 Decision\n\nWe decide B.\n"
+ADR_SUPERSEDED = (
+    "---\nstatus: superseded\nsuperseded-by: 0002\n---\n\n# 0001 Decision\n\nWe decide A.\n"
+)
+ADR_REL = "design/adr/0001-decision.md"
+
+
+def _run(cwd: Path, *args: str) -> None:
+    subprocess.run(  # noqa: S603 - literal git argv on a throwaway repo
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],  # noqa: S607
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def _commit_adr(repo: Path, text: str, message: str) -> None:
+    (repo / ADR_REL).write_text(text, encoding="utf-8")
+    _run(repo, "add", ADR_REL)
+    _run(repo, "commit", "-q", "-m", message)
+
+
+def _adr_errors(repo: Path) -> list[str]:
+    errors: list[str] = []
+    previous = Path.cwd()
+    os.chdir(repo)
+    try:
+        check_adr_immutability(repo, errors)
+    finally:
+        os.chdir(previous)
+    return errors
+
+
+def _fixture(tmp: Path, name: str) -> tuple[Path, Path]:
+    """An origin repo with an accepted ADR on main, and a clone of it."""
+    origin = tmp / f"{name}-origin"
+    origin.mkdir()
+    _run(origin, "init", "-q", "-b", "main")
+    (origin / "design" / "adr").mkdir(parents=True)
+    _commit_adr(origin, ADR_ACCEPTED, "accept ADR 0001")
+    clone = tmp / f"{name}-clone"
+    _run(tmp, "clone", "-q", str(origin), str(clone))
+    return origin, clone
+
+
+def self_test() -> None:
+    import tempfile
+
+    # A hook runs us with GIT_DIR and friends set; the fixtures need their own.
+    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+        os.environ.pop(var, None)
+
+    failures: list[str] = []
+
+    def expect(name: str, errors: list[str], fails: bool) -> None:
+        if bool(errors) != fails:
+            want = "an error" if fails else "no error"
+            failures.append(f"{name}: wanted {want}, got {errors!r}")
+
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str).resolve()
+
+        # Tracking branch set: the edit is caught (the behavior before the fix).
+        _, repo = _fixture(tmp, "tracking")
+        _run(repo, "checkout", "-q", "-b", "edit", "--track", "origin/main")
+        _commit_adr(repo, ADR_EDITED, "edit ADR body")
+        expect("tracking branch edits accepted ADR", _adr_errors(repo), True)
+
+        # A new branch's first push: no upstream yet (SEOR-fnemeutq).
+        _, repo = _fixture(tmp, "no-upstream")
+        _run(repo, "checkout", "-q", "--no-track", "-b", "edit", "origin/main")
+        _commit_adr(repo, ADR_EDITED, "edit ADR body")
+        expect("no-upstream branch edits accepted ADR", _adr_errors(repo), True)
+
+        # No upstream and no origin/HEAD: origin/main still anchors it.
+        _, repo = _fixture(tmp, "no-origin-head")
+        _run(repo, "remote", "set-head", "origin", "-d")
+        _run(repo, "checkout", "-q", "--no-track", "-b", "edit", "origin/main")
+        _commit_adr(repo, ADR_EDITED, "edit ADR body")
+        expect("no-upstream, no origin/HEAD, edits ADR", _adr_errors(repo), True)
+
+        # No upstream, but superseding (a status change) is allowed.
+        _, repo = _fixture(tmp, "supersede")
+        _run(repo, "checkout", "-q", "--no-track", "-b", "edit", "origin/main")
+        _commit_adr(repo, ADR_SUPERSEDED, "supersede ADR 0001")
+        expect("no-upstream branch supersedes ADR", _adr_errors(repo), False)
+
+        # No upstream, ADR untouched.
+        _, repo = _fixture(tmp, "untouched")
+        _run(repo, "checkout", "-q", "--no-track", "-b", "edit", "origin/main")
+        expect("no-upstream branch leaves ADR alone", _adr_errors(repo), False)
+
+        # Fresh project: no remote-tracking ref at all, so nothing to compare.
+        origin, _ = _fixture(tmp, "fresh")
+        _commit_adr(origin, ADR_EDITED, "edit ADR body")
+        expect("fresh project with no remote", _adr_errors(origin), False)
+
+    if failures:
+        print("check-design self-test failed:", file=sys.stderr)
+        for failure in failures:
+            print(f"  - {failure}", file=sys.stderr)
+        raise SystemExit(1)
+    print("check-design self-test: ok")
+
+
 def main() -> int:
+    if sys.argv[1:] == ["--self-test"]:
+        self_test()
+        return 0
     root_str = git("rev-parse", "--show-toplevel")
     root = Path(root_str) if root_str else Path.cwd()
 
