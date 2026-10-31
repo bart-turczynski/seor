@@ -18,17 +18,18 @@
 #     fields = Depends+Imports             12 packages audited, clean
 #     fields = Depends+Imports+Suggests    87 packages audited, reports curl
 #
-# `curl` is absent from seor's hard dependency tree entirely. The two flagged
-# advisories -- CVE-2026-18924 (CWE-416 use-after-free, CVSS 9.1) and
-# CVE-2026-3783 (CWE-522 insufficiently protected credentials, CVSS 6.9) --
+# At that measurement `curl` was absent from seor's hard dependency tree. The
+# two flagged advisories -- CVE-2026-18924 (CWE-416 use-after-free, CVSS 9.1)
+# and CVE-2026-3783 (CWE-522 insufficiently protected credentials, CVSS 6.9) --
 # both name libcurl ranges that include CRAN's current `curl` 8.0.0, so no
 # available version clears them and no local action could make the old scope
 # pass. SEOR-sxvcbuia carries the full measurement.
 #
 # That absence ended on 2026-10-22 (SEOR-qhpzspww): `ssrfr` imports `curl`,
-# and `robotstxtr` reaches it through `httr2`. Both are off CRAN, so this audit
-# still sees them as leaves (helper-security.R); once either is published,
-# expect the curl advisories above to need disposition rows.
+# and `robotstxtr` reaches it through `httr2`. robotstxtr reached CRAN on
+# 2026-10-24 (0.3.1), so the audit now expands `robotstxtr -> httr2 -> curl`
+# and reports six curl advisories; their disposition rows are in
+# helper-security.R (SEOR-dtsibbuo). ssrfr is still a leaf.
 #
 # A package's security posture is what it makes users install, so the audit
 # calls `audit_description()` directly with the narrower `fields`.
