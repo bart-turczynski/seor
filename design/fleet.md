@@ -234,81 +234,86 @@ Under the verification tiers
 `deep-check` schedule runs T2, which includes the audits and, in rurl, seor
 and ssrfr, `x-fossa`; `rurl-devel` runs pagerankr's suite against rurl's
 `main` plus `coverage`; a `dependency-audit` schedule creates no pipeline,
-and the owner deletes it (SEOR-uldurjev). fleet-ci is private
-([ADR 0013](adr/0013-fleet-ci-is-private.md)), so a schedule's owner must be
-able to read it, or the template include does not resolve. No
-schedule re-runs the merge gate, which the pre-push hook already ran. Until a
-package migrates, its schedules run what its CI file gives them, which
-re-ran the main pipeline's jobs on an already-tested commit (the runner
-times below were measured that way).
+and the owner deleted all nine on 2026-10-30 (SEOR-uldurjev). fleet-ci is
+private ([ADR 0013](adr/0013-fleet-ci-is-private.md)), so a schedule's owner
+must be able to read it, or the template include does not resolve. No
+schedule re-runs the merge gate, which the pre-push hook already ran. Before
+the migration, the schedules re-ran the main pipeline's jobs on an
+already-tested commit; every package has migrated, and the runner times below
+are T2 runs.
 
 ### The schedule table
 
 "Cron" is the schedule's own setting, in Europe/Warsaw except where marked.
-"Starts" is when the pipeline actually appears. GitLab.com runs a schedule at
-the first full hour at or after its cron time (`next_run_at`), and the pipeline
-shows up a few minutes later. On 2026-09-28, punycoder's 10:17 and ssrfr's 10:43
-schedules both started at 09:08 UTC. So only the hour separates two schedules;
-the minute does not. "Runner time" is the sum of job durations for one run:
+"Starts" is when the pipeline actually appears: the schedule's `next_run_at`,
+plus a few minutes. In 2026-09 GitLab.com rounded `next_run_at` up to the
+first full hour (on 2026-09-28, punycoder's 10:17 and ssrfr's 10:43 schedules
+both started at 09:08 UTC). In 2026-11 the 22:30 crons started at 22:35, so the
+minute now counts too. "Runner time" is the sum of job durations for one run:
 busy time on the Mac's runners. It is not GitLab compute minutes, which
 self-hosted project runners don't draw on.
 
-| repo       | kind             | jobs it adds to the main pipeline            | cron          | starts    | id      | runner time |
-|------------|------------------|----------------------------------------------|---------------|-----------|---------|-------------|
-| pagerankr  | rurl-devel       | rurl-devel                                   | Mon 05:00 UTC | Mon 07:00 | 4466631 | 11 min      |
-| punycoder  | dependency-audit | osv-audit, security-audit                    | Mon 10:17     | Mon 11:00 | 4427280 | 6 min       |
-| ssrfr      | deep-check       | full-check (3 legs), floor-check, renovate   | Mon 12:00     | Mon 12:00 | 4459714 | 49 min      |
-| punycoder  | deep-check       | full-check (3 legs), floor-check, sanitizers | Mon 21:00     | Mon 21:00 | 4466444 | 26 min      |
-| raddr      | deep-check       | deep-check: release, oldrel, devel, floor    | Tue 21:00     | Tue 21:00 | 4467064 | 17 min      |
-| rurl       | dependency-audit | osv-audit, security-audit                    | Tue 10:17     | Tue 11:00 | 4467472 | 19 min      |
-| robotstxtr | dependency-audit | osv-audit, security-audit                    | Tue 11:17     | Tue 12:00 | 4467473 | 11 min      |
-| sitemapr   | dependency-audit | osv-audit, security-audit                    | Wed 10:17     | Wed 11:00 | 4467474 | 9 min       |
-| pagerankr  | dependency-audit | osv-audit, security-audit                    | Wed 11:17     | Wed 12:00 | 4467475 | 9 min       |
-| pagerankr  | deep-check       | full-check (3 legs), floor-check             | Wed 21:00     | Wed 21:00 | 4467476 | 18 min      |
-| pslr       | dependency-audit | osv-audit, security-audit                    | Thu 10:17     | Thu 11:00 | 4467477 | 13 min      |
-| seor       | dependency-audit | none: creates no pipeline (SEOR-uldurjev)    | Thu 11:17     | none      | 4467483 | 0 min       |
-| seor       | deep-check       | T2, with the audits and x-floor (`ci.md`)    | Thu 21:00     | Thu 21:00 | 4467484 | unmeasured  |
-| robotstxtr | deep-check       | full-check (3 legs), floor-check, sanitizers | Mon 22:00     | Mon 22:00 | 4472810 | 35 min      |
-| sitemapr   | deep-check       | deep-check (3 legs), floor-check             | Tue 22:00     | Tue 22:00 | 4472811 | 31 min      |
-| pslr       | deep-check       | full-check (4 legs), sanitizers              | Wed 22:00     | Wed 22:00 | 4472812 | 29 min      |
-| raddr      | dependency-audit | osv-audit, security-audit                    | Fri 10:17     | Fri 11:00 | 4472813 | 5 min       |
-| ssrfr      | dependency-audit | osv-audit, security-audit                    | Fri 11:17     | Fri 12:00 | 4472814 | 17 min      |
-| rurl       | deep-check       | full-check (3 legs), floor-check             | Fri 21:00     | Fri 21:00 | 4472809 | 37 min      |
+Every deep-check runs the common T2 set: `t2-check-release`, `t2-check-oldrel`,
+`t2-check-devel`, `t2-ascran`, `t2-locale`, `coverage`, `osv-audit`,
+`security-audit` and `citation-version`. The third column lists the jobs it
+runs beyond that set.
 
-All nineteen are active. The eight from rurl's audit to seor's deep check were
-created 2026-09-30. The last six were created through the API on 2026-10-03
-for the fleet standard (SEOR-tahlljtx), whose run that day and the next gave
-every repository its deep-check and dependency-audit jobs.
-Each runner time includes the main-pipeline jobs the schedule also ran when
-measured, not only the jobs in the third column. A `~` marks an estimate. Every row is a
-measurement (method below); ssrfr's and seor's deep checks come from their
-first runs with a green, blocking floor-check (2909933319 and 2909936469,
-2026-10-04). seor's audit jobs take 5 to 6 minutes each, building their
-dependencies from source.
+| repo       | kind       | jobs beyond the common T2 set                            | cron          | starts        | id      | pipeline   | runner time |
+|------------|------------|----------------------------------------------------------|---------------|---------------|---------|------------|-------------|
+| pagerankr  | rurl-devel | x-rurl-devel and `coverage` only, no T2                  | Mon 05:00 UTC | Mon 06:08     | 4466631 | 3072114139 | 4 min       |
+| robotstxtr | deep-check | t2-sanitizers, x-floor, x-macos                          | Mon 21:00     | Mon 21:07     | 4472810 | 3075683946 | 176 min, red |
+| sitemapr   | deep-check | x-floor, x-robotstxtr-head                               | Tue 21:00     | due Tue 21:00 | 4472811 | 3051678334 | 48 min      |
+| pslr       | deep-check | t2-floor, t2-sanitizers, x-sanitizers-gcc, x-check-idn2  | Wed 21:00     | due Wed 21:00 | 4472812 | 3056414348 | 88 min      |
+| seor       | deep-check | x-floor, x-fossa                                         | Thu 21:00     | Thu 21:06     | 4467484 | 3061522199 | 74 min      |
+| rurl       | deep-check | t2-floor, x-check-idn2, x-fossa                          | Fri 21:00     | Fri 21:07     | 4472809 | 3066390204 | 147 min     |
+| raddr      | deep-check | x-floor                                                  | Sat 21:00     | Sat 21:07     | 4467064 | 3068919973 | 61 min      |
+| punycoder  | deep-check | t2-floor, t2-sanitizers                                  | Sat 22:30     | Sat 22:35     | 4466444 | 3069048848 | 180 min     |
+| ssrfr      | deep-check | x-floor, x-renovate, x-fossa                             | Sun 21:00     | due Sun 21:00 | 4459714 | 3078378246 | 49 min      |
+| pagerankr  | deep-check | t2-floor, x-rurl-floor                                   | Sun 22:30     | Sun 22:35     | 4467476 | 3071225620 | 94 min      |
 
-Total: about 6.5 runner-hours a week (about 28 a month) for the nineteen
-rows. The host runs `concurrent = 6`, with `limit = 4` on `seor-local-docker`,
-the runner seven of the nine repositories share (both raised 2026-10-03 to
-clear the fleet-standard queue), so this is a small share of its week; the
+Ten schedules are active (`pipeline_schedules` per project, 2026-11-17): one
+weekly T2 per package, plus pagerankr's `rurl-devel`, the one schedule
+exception in ADR 0012. On 2026-10-30 the owner deleted the nine
+`dependency-audit` schedules and renamed each deep-check schedule "Weekly T2
+(fleet standard)" (SEOR-uldurjev). Seven crons have moved since that day's
+listing. sitemapr, pslr and ssrfr have not yet run at their new time, so their
+"starts" is the `next_run_at` ("due"), and their pipeline ran at the old time;
+ssrfr's ran on 2026-11-17 at 10:33 UTC, off its cron.
+
+robotstxtr has had no green T2 run since it migrated. Of its five schedule
+pipelines in the measurement window below, four failed and one was canceled.
+Its last one, 3075683946, failed too: `x-floor`, `t2-sanitizers` and
+`t2-ascran` failed, and `x-macos`, the audits and `coverage` were skipped. A
+green run will take longer than its row. SEOR-ltilsdlz records why `t2-sanitizers` failed on
+2026-10-31: a UBSan report from the `later` package's header, not
+robotstxtr's code. Its newest green schedule pipeline on `main` (2993973423,
+2026-10-27) predates the tiers, so it cannot stand in.
+
+Total: about 15.3 runner-hours a week (about 66 per 30 days) for the ten rows,
+against about 6.5 a week for the nineteen pre-tier rows of 2026-10-04. Each
+weekly run got heavier, because T2 carries what the per-push pipelines did,
+but nothing runs on a push any more ("CI minutes after the tiers", below). The
+host runs `concurrent = 6`, with `limit = 4` on `seor-local-docker`, the
+runner seven of the nine repositories share (both raised 2026-10-03 to clear
+the fleet-standard queue), so this is a small share of its week; the
 constraint is when it is awake, not capacity.
 
-**The stagger.** One schedule per slot. Audits go in weekday working hours,
-when the Mac is most likely awake. Deep checks go at 21:00 on distinct
-weekdays, as punycoder's and raddr's already did. New schedules start an hour
-apart, longer than any one run takes, so no two scheduled pipelines queue
-against each other on the same host. The rounding once put punycoder's 10:17
-audit and ssrfr's 10:43 deep check in the same Mon 11:00 slot; ssrfr's moved
-to Mon 12:00 on 2026-09-30 (owner approved).
+**The stagger.** One schedule per slot. Deep checks go at 21:00, one a day,
+and the weekend adds two at 22:30: punycoder's on Saturday, after raddr's, and
+pagerankr's on Sunday, after ssrfr's. Before the tiers, the audit schedules ran
+in weekday working hours, when the Mac is most likely awake; the audits now
+run inside T2. The old hour rounding once put punycoder's 10:17 audit and
+ssrfr's 10:43 deep check in the same Mon 11:00 slot; ssrfr's moved to Mon
+12:00 on 2026-09-30 (owner approved).
 
-**How the runner times were measured** (2026-10-04, read-only through the
-GitLab API). For each schedule, take its `last_pipeline`; if that is not green,
-take the newest green schedule pipeline on `main` whose jobs include the
-schedule's own. Sum `duration` over that pipeline's jobs, leaving out manual and
-skipped ones. None of the pipelines used had a retried job. All are from
-2026-10-03 except pagerankr's `rurl-devel` (2026-09-30), whose main-pipeline
-jobs had not changed since. These replace the 2026-09-30 estimates, which were
-medians of each project's last 100 successful jobs. Re-measure a row when its
-repository changes its scheduled jobs, or migrates to the tiers.
+**How the runner times were measured** (2026-11-17, read-only through the
+GitLab API; first done on 2026-10-04 on the pre-tier pipelines, whose rows
+this file's history keeps). For each schedule, take its `last_pipeline`; if
+that is not green, take the newest green schedule pipeline on `main` whose
+jobs include the schedule's own. Sum `duration` over that pipeline's jobs,
+read with `include_retried=false`, leaving out manual and skipped ones. The
+pipelines used ran from 2026-11-10 to 2026-11-17; robotstxtr's is red (above).
+Re-measure a row when its repository changes its scheduled jobs.
 
 **The weekly re-check is T2.** The weekly `deep-check` schedule is the
 re-check of `main` against moved dependencies, and it runs T2, not the merge
@@ -317,3 +322,58 @@ Before the tiers, the owner kept the main pipeline re-running inside every
 schedule for that re-check (2026-09-30); the 2026-10-04 measurements put the
 re-run at about half of the schedules' runner time (2.7 of the seventeen
 measured rows' 5.4 runner-hours).
+
+### CI minutes after the tiers
+
+Re-measured 2026-11-17 for the epic's target of at least 60% fewer CI minutes
+(SEOR-iadkgvqq, SEOR-hojgvmhh). The window is 14 days from t0 = 2026-10-30,
+the day the last package migrations merged and the owner deleted the dead
+schedules (SEOR-uldurjev): `python3 tools/ci-minutes.py --since 2026-10-30
+--until 2026-11-13 --json`, then `--cached --compare
+tools/ci-minutes-baseline.json --per-day`. "Before" is the baseline's 30 days
+(2026-09-29 to 2026-10-29); "after" is the window's job-minutes times 30/14.
+The change is computed from the exact minutes, so it can differ by up to half a
+point from `--compare`'s per-day printout. Commits are first-parent commits on
+`main` (GitLab's commits API, `first_parent=true`), also per 30 days. Hook
+times come from each migration's close comment: the old pre-push hook, then
+the fleet-ci gate's docs tier (T0) and full tier (T1).
+
+| package    | before (min) | after (min) | change | window pipelines by source | commits before → after | old hook | docs tier | full tier |
+|------------|--------------|-------------|--------|----------------------------|------------------------|----------|-----------|-----------|
+| rurl       | 2784.6       | 450.0       | -83.8% | 5 schedule                 | 157 → 17               | 663 s    | 13 s      | ~530 s    |
+| ssrfr      | 1516.0       | 335.8       | -77.9% | 5 schedule, 1 web, 1 push  | 60 → 51                | 410 s    | 2.8 s     | 406 s     |
+| seor       | 1309.4       | 378.2       | -71.1% | 5 schedule                 | 89 → 19                | 120 s    | 2.5 s     | ~65 s     |
+| sitemapr   | 616.5        | 207.4       | -66.4% | 5 schedule                 | 52 → 24                | 204 s    | 43 s      | ~150 s    |
+| punycoder  | 595.8        | 458.6       | -23.0% | 5 schedule                 | 52 → 17                | 146.7 s  | 3.6-9.7 s | 93-101 s  |
+| pagerankr  | 598.6        | 516.4       | -13.7% | 7 schedule                 | 40 → 13                | 156 s    | 7.9 s     | 123-201 s |
+| pslr       | 512.5        | 678.4       | +32.4% | 5 schedule                 | 48 → 13                | 120 s    | 3.6 s     | 175 s     |
+| robotstxtr | 504.4        | 695.6       | +37.9% | 5 schedule                 | 36 → 171               | 140 s    | 4 s       | ~153 s    |
+| raddr      | 278.9        | 142.5       | -48.9% | 5 schedule                 | 72 → 34                | 101 s    | 32 s      | 113-120 s |
+| packages   | 8716.7       | 3862.9      | -55.7% | 47 schedule, 1 web, 1 push | 606 → 360              |          |           |           |
+| fleet-ci   | none yet     | 18.9        | n/a    | 8 push                     |                        |          |           |           |
+| total      | 8716.7       | 3881.8      | -55.5% |                            |                        |          |           |           |
+
+**Verdict: the 60% target is missed.** The total including fleet-ci fell
+55.5%, to 3881.8 minutes per 30 days against a target of at most 3486.7;
+packages alone fell 55.7%. The biggest remaining consumers are `t2-check-devel`
+(359.1 window minutes) and `t2-sanitizers` (358.7, of which robotstxtr's red
+runs are 144.4).
+
+- **Push minutes are gone.** No package pipeline ran on a push to `main`,
+  against 558 pipelines and 5476.6 minutes in the baseline. ssrfr's one push
+  pipeline, on `release/1.0.x`, was skipped (0 minutes), and its web pipeline
+  (43.6 minutes) is a T3 release run, `t3-manual` included. Every other package minute is
+  `schedule`. fleet-ci's 8.8 window minutes are its own self-tests on push to
+  its `main`.
+- **The window is not a quiet fortnight in disguise.** Commits fell in most
+  packages, but under the tiers a commit costs no CI minutes, and robotstxtr's
+  commits rose almost five times over while its minutes stayed all `schedule`.
+- **The window holds extra runs.** Besides the weekly cadence, every package
+  ran three schedule pipelines on 2026-10-30 (12:27 and 15:41 UTC) and
+  2026-10-31 (04:35 UTC), 27 of the 47. The schedule table above gives the
+  steady state instead: 920.9 runner-minutes a week, 3946.7 per 30 days, a
+  54.7% fall. The miss is not an artifact of the extra runs.
+- **Red runs cost minutes.** 342.3 of the packages' 1802.7 window minutes went
+  to failed or canceled jobs, 250.4 of them robotstxtr's (above). In the two
+  packages that rose, the sanitizers and the floor dominate: 197.1 of pslr's
+  316.6 window minutes and 239.9 of robotstxtr's 324.6.
