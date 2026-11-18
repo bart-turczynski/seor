@@ -43,7 +43,7 @@ Suggests:
 Remotes:
     gitlab::bart-turczynski/robotstxtr,
     gitlab::bart-turczynski/sitemapr,
-    gitlab::bart-turczynski/ssrfr
+    gitlab::bart-turczynski/ssrfr@357ea9894a223079da7ce4ccc9690a5d17ed22cf
 Config/testthat/edition: 3
 VignetteBuilder: knitr
 Config/roxygen2/version: 8.1.1
