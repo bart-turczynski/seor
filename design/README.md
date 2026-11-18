@@ -25,6 +25,9 @@ mkdocs/sphinx/docusaurus, handwritten publisher docs in a browser extension.
 - [`fleet-standard.md`](fleet-standard.md) — what every fleet package
   carries: the badge row, CI, schedules, files, `DESCRIPTION` fields and
   identities.
+- [`oss-index-advisories.md`](oss-index-advisories.md) — the shared libcurl
+  facts behind every fleet repository's OSS Index allow-list rows for curl,
+  one section per CVE; the rows cite it by anchor.
 - [`badges.md`](badges.md) — the README badge suite and its one-time setup.
 - [`github-mirror.md`](github-mirror.md) — playbook for the read-only GitHub
   mirror.
