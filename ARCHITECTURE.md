@@ -150,6 +150,19 @@ declared in `Imports:` only, and a member off CRAN is additionally declared in
 is core: `library(seor)` installs and attaches all of them (owner, 2026-10-21;
 `ssrfr` joined on 2026-10-22).
 
+seor follows its members' pins (owner, 2026-11-18, SEOR-speqvpss). When a
+member's `Remotes:` pins a package it takes through `Imports`, `Depends` or
+`LinkingTo`, and seor's `Remotes:` names that package too, seor names the same
+ref, and the change that moves the member's pin moves seor's in the same sweep
+(release checklist, step 13). Two refs for one package make pak stop at
+dependency resolution ("dependency conflict"), and seor's gate with it, whatever
+version either ref carries. Today `robotstxtr` imports `ssrfr` and pins
+`ssrfr@357ea98`, so seor does too. A pin on a `Suggests` dependency is not
+copied: pak does not follow a dependency's `Suggests`, so `sitemapr`'s
+`robotstxtr@v0.3.0` never meets seor's entry. The weekly `x-floor` job installs
+`ssrfr` from r-universe, which builds its default branch, so it checks newer
+`ssrfr` code than the local gate until the pin moves.
+
 | Package      | Role | On CRAN | Declared in       |
 |--------------|------|:-------:|-------------------|
 | `rurl`       | core |   yes   | Imports           |
