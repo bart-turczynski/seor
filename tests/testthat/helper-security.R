@@ -25,7 +25,9 @@
 # Rows are added only once reported (SEOR-sxvcbuia): rule B below fails a row
 # that is not currently reported, so an anticipatory row is stale on arrival.
 #
-# Three rules keep the list honest. test-security.R enforces them:
+# Three rules keep the list honest. test-security.R enforces them. Each matches
+# a row to a reported advisory on the pair (`package`, `id`), never on the id
+# alone, so a row covers its CVE in its own package and nowhere else:
 #
 #   A  UNEXPECTED  an advisory reported and not allow-listed FAILS. This is
 #                  the gate still doing its job.
@@ -270,21 +272,30 @@ oss_index_allowlist_violations <- function(rows) {
   if (length(duplicates) > 0) {
     out <- c(
       out,
-      sprintf("duplicate allow-list id(s): %s", toString(duplicates))
+      sprintf("duplicate allow-list row(s): %s", toString(duplicates))
     )
   }
 
   out
 }
 
+# An advisory is keyed by the pair (package, id), never by id alone: a row
+# argues one package's exposure, so the same CVE reported against a second
+# package (another libcurl binding, say) needs a row of its own
+# (SEOR-hzjslawq). A space appears in neither a package name nor a CVE id.
+oss_index_key <- function(package, id) {
+  paste(package, id)
+}
+
 # The keys that more than one allow-list row carries. A row whose key fields
 # are malformed has no key; the field checks above report it instead.
 oss_index_allowlist_duplicates <- function(rows) {
+  single <- function(x) is.character(x) && length(x) == 1L && !is.na(x)
   keys <- vapply(
     rows,
     function(row) {
-      if (is.character(row$id) && length(row$id) == 1L) {
-        row$id
+      if (single(row$package) && single(row$id)) {
+        oss_index_key(row$package, row$id)
       } else {
         NA_character_
       }
@@ -298,13 +309,18 @@ oss_index_allowlist_duplicates <- function(rows) {
 # they can be exercised against fixtures. `found` is shaped like
 # oss_index_reported(), `rows` like `oss_index_allowlist`. Returns the keys
 # reported and not allow-listed (`unexpected`, rule A) and the keys
-# allow-listed and not reported (`stale`, rule B), each sorted.
+# allow-listed and not reported (`stale`, rule B), each sorted. A reported
+# advisory with a missing package or id matches no row.
 oss_index_rule_findings <- function(found, rows) {
-  allowed <- vapply(rows, function(row) row$id, character(1))
-  reported <- found$id
+  allowed <- oss_index_key(
+    vapply(rows, function(row) row$package, character(1)),
+    vapply(rows, function(row) row$id, character(1))
+  )
+  reported <- oss_index_key(found$package, found$id)
+  known <- !is.na(found$package) & !is.na(found$id)
   list(
-    unexpected = sort(unique(setdiff(reported, allowed))),
-    stale = sort(setdiff(allowed, reported))
+    unexpected = sort(unique(reported[!(known & reported %in% allowed)])),
+    stale = sort(setdiff(allowed, reported[known]))
   )
 }
 
@@ -322,7 +338,7 @@ oss_index_warn_drift <- function(found, rows, today = Sys.Date()) {
         call. = FALSE
       )
     }
-    hit <- found[which(found$id == row$id), ]
+    hit <- found[which(found$package == row$package & found$id == row$id), ]
     if (
       nrow(hit) > 0 &&
         package_version(hit$version[1]) > package_version(row$version_seen)

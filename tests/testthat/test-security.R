@@ -118,7 +118,7 @@ test_that("the allow-list validator rejects rows that are not decisions", {
   )
   expect_match(
     oss_index_allowlist_violations(list(sound, sound)),
-    "duplicate allow-list id",
+    "duplicate allow-list row",
     fixed = TRUE
   )
 })
@@ -150,8 +150,8 @@ test_that("rules A and B report unexpected and stale advisories", {
     id = c("CVE-2026-18924", "CVE-2026-99999")
   )
   findings <- oss_index_rule_findings(found, rows)
-  expect_equal(findings$unexpected, "CVE-2026-99999")
-  expect_equal(findings$stale, "CVE-2026-3783")
+  expect_equal(findings$unexpected, "curl CVE-2026-99999")
+  expect_equal(findings$stale, "curl CVE-2026-3783")
 
   # An audit that reported nothing leaves every row stale.
   none <- data.frame(
@@ -161,7 +161,51 @@ test_that("rules A and B report unexpected and stale advisories", {
   )
   findings <- oss_index_rule_findings(none, rows)
   expect_equal(findings$unexpected, character())
-  expect_equal(findings$stale, c("CVE-2026-18924", "CVE-2026-3783"))
+  expect_equal(
+    findings$stale,
+    c("curl CVE-2026-18924", "curl CVE-2026-3783")
+  )
+})
+
+test_that("a row covers its advisory in its own package only", {
+  rows <- list(oss_index_fixture_row("CVE-2026-18924"))
+  found <- data.frame(
+    package = "otherbinding",
+    version = "1.0.0",
+    id = "CVE-2026-18924"
+  )
+  findings <- oss_index_rule_findings(found, rows)
+  expect_equal(findings$unexpected, "otherbinding CVE-2026-18924")
+  expect_equal(findings$stale, "curl CVE-2026-18924")
+
+  # A reported advisory with no package names nothing a row could cover.
+  found$package <- NA_character_
+  findings <- oss_index_rule_findings(found, rows)
+  expect_equal(findings$unexpected, "NA CVE-2026-18924")
+  expect_equal(findings$stale, "curl CVE-2026-18924")
+})
+
+test_that("one advisory allow-listed for two packages is two decisions", {
+  rows <- list(
+    oss_index_fixture_row("CVE-2026-18924", "curl"),
+    oss_index_fixture_row("CVE-2026-18924", "otherbinding")
+  )
+  found <- data.frame(
+    package = c("curl", "otherbinding"),
+    version = "8.1.0",
+    id = "CVE-2026-18924"
+  )
+  expect_equal(oss_index_allowlist_violations(rows), character())
+  expect_equal(
+    oss_index_rule_findings(found, rows),
+    list(unexpected = character(), stale = character())
+  )
+
+  expect_match(
+    oss_index_allowlist_violations(rows[c(1, 1)]),
+    "duplicate allow-list row(s): curl CVE-2026-18924",
+    fixed = TRUE
+  )
 })
 
 test_that("rule C warns on drift and never fails", {
@@ -182,6 +226,15 @@ test_that("rule C warns on drift and never fails", {
     "is past its 2026-12-01 review date",
     fixed = TRUE
   )
+
+  # Another package reporting the same advisory at a later version is not
+  # drift in this row.
+  other <- data.frame(
+    package = c("otherbinding", "curl"),
+    version = c("9.0.0", "8.1.0"),
+    id = "CVE-2026-18924"
+  )
+  expect_no_warning(oss_index_warn_drift(other, row, before_review))
 })
 
 test_that("hard dependencies report only allow-listed OSS Index advisories", {
