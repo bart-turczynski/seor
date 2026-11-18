@@ -150,6 +150,15 @@ declared in `Imports:` only, and a member off CRAN is additionally declared in
 is core: `library(seor)` installs and attaches all of them (owner, 2026-10-21;
 `ssrfr` joined on 2026-10-22).
 
+seor follows its members' pins (owner, 2026-11-18, SEOR-speqvpss). When a
+member's `Remotes:` pins another member to a ref because CRAN lacks the version
+it requires, seor's `Remotes:` names that same ref, and the change that moves
+the member's pin moves seor's in the same sweep. Otherwise pak sees two sources
+for one package and seor's gate stops at dependency resolution ("dependency
+conflict"). Today `robotstxtr` pins `ssrfr@357ea98`, so seor does too. A pin
+the CRAN version already satisfies (`sitemapr`'s `robotstxtr@v0.3.0`; CRAN has
+0.3.1) resolves beside seor's default-branch entry and is not copied.
+
 | Package      | Role | On CRAN | Declared in       |
 |--------------|------|:-------:|-------------------|
 | `rurl`       | core |   yes   | Imports           |
