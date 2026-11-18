@@ -370,6 +370,9 @@ the owner deletes it (SEOR-uldurjev).
 `security-audit` fails when its OSS Index credentials are missing instead of
 skipping green. Never add an allow-list row ahead of the advisory it answers:
 an anticipatory row fails as stale on the day it lands.
+A curl row cites its CVE's section in
+[`oss-index-advisories.md`](oss-index-advisories.md) for the libcurl facts and
+argues only its own package's callers.
 
 ## FOSSA
 
