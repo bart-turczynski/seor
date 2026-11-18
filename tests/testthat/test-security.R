@@ -123,6 +123,67 @@ test_that("the allow-list validator rejects rows that are not decisions", {
   )
 })
 
+test_that("the fixture row is itself well formed", {
+  expect_equal(
+    oss_index_allowlist_violations(list(oss_index_fixture_row("CVE-2026-1"))),
+    character()
+  )
+})
+
+test_that("rules A and B pass the allow-listed curl advisories", {
+  ids <- vapply(oss_index_allowlist, function(row) row$id, character(1))
+  found <- data.frame(package = "curl", version = "8.1.0", id = ids)
+  expect_equal(
+    oss_index_rule_findings(found, oss_index_allowlist),
+    list(unexpected = character(), stale = character())
+  )
+})
+
+test_that("rules A and B report unexpected and stale advisories", {
+  rows <- list(
+    oss_index_fixture_row("CVE-2026-18924"),
+    oss_index_fixture_row("CVE-2026-3783")
+  )
+  found <- data.frame(
+    package = "curl",
+    version = "8.1.0",
+    id = c("CVE-2026-18924", "CVE-2026-99999")
+  )
+  findings <- oss_index_rule_findings(found, rows)
+  expect_equal(findings$unexpected, "CVE-2026-99999")
+  expect_equal(findings$stale, "CVE-2026-3783")
+
+  # An audit that reported nothing leaves every row stale.
+  none <- data.frame(
+    package = character(),
+    version = character(),
+    id = character()
+  )
+  findings <- oss_index_rule_findings(none, rows)
+  expect_equal(findings$unexpected, character())
+  expect_equal(findings$stale, c("CVE-2026-18924", "CVE-2026-3783"))
+})
+
+test_that("rule C warns on drift and never fails", {
+  row <- list(oss_index_fixture_row("CVE-2026-18924"))
+  before_review <- as.Date("2026-11-30")
+  at <- function(version) {
+    data.frame(package = "curl", version = version, id = "CVE-2026-18924")
+  }
+
+  expect_no_warning(oss_index_warn_drift(at("8.1.0"), row, before_review))
+  expect_warning(
+    oss_index_warn_drift(at("8.2.0"), row, before_review),
+    "was written against curl 8.1.0; the audit now reports 8.2.0",
+    fixed = TRUE
+  )
+  expect_warning(
+    oss_index_warn_drift(at("8.1.0"), row, as.Date("2026-12-02")),
+    "is past its 2026-12-01 review date",
+    fixed = TRUE
+  )
+})
+
 test_that("hard dependencies report only allow-listed OSS Index advisories", {
   # The dedicated, credentialed audit job. A precondition it cannot meet is a
   # failure there, never a skip -- see the header.
@@ -170,7 +231,7 @@ test_that("hard dependencies report only allow-listed OSS Index advisories", {
     verbose = FALSE
   )
   found <- oss_index_reported(audit)
-  allowed <- vapply(oss_index_allowlist, function(row) row$id, character(1))
+  findings <- oss_index_rule_findings(found, oss_index_allowlist)
 
   # An audit that resolved nothing is not a clean audit. Without this an empty
   # result satisfies rules A and B vacuously, which is the same green-on-
@@ -178,42 +239,12 @@ test_that("hard dependencies report only allow-listed OSS Index advisories", {
   expect_gt(nrow(audit), 0)
 
   # Rule A -- an advisory reported and not allow-listed.
-  expect_equal(sort(setdiff(found$id, allowed)), character())
+  expect_equal(findings$unexpected, character())
 
   # Rule B -- an allow-listed advisory no longer reported. The list may not
   # over-permit, so a row that has outlived its justification fails here.
-  expect_equal(sort(setdiff(allowed, found$id)), character())
+  expect_equal(findings$stale, character())
 
   # Rule C -- drift warns, never fails. See helper-security.R.
-  for (row in oss_index_allowlist) {
-    if (Sys.Date() > row$review) {
-      warning(
-        sprintf(
-          "OSS Index allow-list row %s is past its %s review date.",
-          row$id,
-          format(row$review)
-        ),
-        call. = FALSE
-      )
-    }
-    hit <- found[found$id == row$id, ]
-    if (
-      nrow(hit) > 0 &&
-        package_version(hit$version[1]) > package_version(row$version_seen)
-    ) {
-      warning(
-        sprintf(
-          paste(
-            "OSS Index allow-list row %s was written against %s %s;",
-            "the audit now reports %s. Re-read the advisory."
-          ),
-          row$id,
-          row$package,
-          row$version_seen,
-          hit$version[1]
-        ),
-        call. = FALSE
-      )
-    }
-  }
+  oss_index_warn_drift(found, oss_index_allowlist)
 })
