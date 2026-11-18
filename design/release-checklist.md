@@ -138,7 +138,9 @@ commit means a new run.
 13. **agent** Downstream, through a seor cascade issue (`fleet.md`): drop this
     package's `Remotes:` entries in the other fleet packages (seor's
     `DESCRIPTION` and its `ARCHITECTURE.md` CRAN table; sitemapr's pin on
-    robotstxtr), and raise any floor that waited on this release.
+    robotstxtr), and raise any floor that waited on this release. A member
+    pin that moves or goes moves seor's matching pin in the same sweep
+    (`ARCHITECTURE.md`, "Membership and CRAN status").
 14. **Archive the release on Zenodo and record its version DOI.** Zenodo
     deposits on a GitHub Release on the read-only mirror, not on the tag.
     Skip this and `CITATION.cff` keeps naming the previous version's DOI, or

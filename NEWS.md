@@ -1,5 +1,6 @@
 # seor (development version)
 
+* Installing seor from GitLab with pak no longer stops on a dependency conflict over `ssrfr` (SEOR-speqvpss).
 * `library(seor)` now installs and attaches `robotstxtr` and `ssrfr`, so installing seor needs libcurl >= 7.73.0; `seor_packages()` lists them and ignores `include_optional` (SEOR-qhpzspww).
 * `citation("seor")` carries the Zenodo concept DOI, `10.5281/zenodo.23136687` (SEOR-dvbdsvuq).
 
